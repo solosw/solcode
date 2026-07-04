@@ -1,0 +1,49 @@
+{
+  "provider": "anthropic",
+  "model": "opus",
+  "max_turns": 20,
+  "stream": true,
+  "providers": [
+    {
+      "name": "anthropic",
+      "type": "anthropic",
+      "api_key_env": "ANTHROPIC_API_KEY",
+      "base_url_env": "ANTHROPIC_BASE_URL",
+      "models": [
+        {
+          "name": "opus",
+          "id": "claude-opus-4-8",
+          "display_name": "Claude Opus 4.8",
+          "provider": "anthropic",
+          "default": true,
+          "max_context_tokens": 1000000,
+          "max_tokens": 64000,
+          "thinking": true,
+          "thinking_text": true,
+          "effort": "high"
+        },
+        {
+          "name": "sonnet",
+          "id": "claude-sonnet-4-6",
+          "display_name": "Claude Sonnet 4.6",
+          "provider": "anthropic",
+          "max_context_tokens": 1000000,
+          "max_tokens": 64000,
+          "thinking": true,
+          "thinking_text": false,
+          "effort": "medium"
+        },
+        {
+          "name": "haiku",
+          "id": "claude-haiku-4-5",
+          "display_name": "Claude Haiku 4.5",
+          "provider": "anthropic",
+          "max_context_tokens": 200000,
+          "max_tokens": 4096,
+          "thinking": false,
+          "effort": "low"
+        }
+      ]
+    }
+  ]
+}

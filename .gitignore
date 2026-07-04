@@ -1,0 +1,34 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+codeplus
+codeplus-agent
+
+# Test binary
+*.test
+
+# Output of go build
+/bin/
+/dist/
+
+# Go workspace
+go.work
+go.work.sum
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Agent runtime state (project-scoped, under ~/.agentcode/<project>/)
+# These are generated at runtime, not committed
+.agentcode/
