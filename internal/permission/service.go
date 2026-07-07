@@ -115,7 +115,7 @@ func (s *Service) Check(t tool.Tool, input json.RawMessage) Decision {
 	}
 
 	switch mode {
-	case ModeBypass, ModeYolo:
+	case ModeBypass:
 		return Decision{Allowed: true}
 	case ModePlan:
 		if t.IsReadOnly(input) {
@@ -123,7 +123,17 @@ func (s *Service) Check(t tool.Tool, input json.RawMessage) Decision {
 		}
 		return Decision{Allowed: false, Reason: "plan mode only allows read-only tools"}
 	case ModeAcceptEdits:
-		return Decision{Allowed: true}
+		if isAcceptEditsTool(t) {
+			return Decision{Allowed: true}
+		}
+		if askFn != nil && t.IsDestructive(input) {
+			description := buildPermissionDescription(t, input)
+			if askFn(t.Name(), description) {
+				return Decision{Allowed: true}
+			}
+			return Decision{Allowed: false, Reason: fmt.Sprintf("user denied tool: %s", t.Name())}
+		}
+		return defaultDecision(t, input)
 	case ModeAuto, ModeDefault:
 		if t.IsDestructive(input) {
 			if askFn != nil {
@@ -182,4 +192,16 @@ func buildPermissionDescription(t tool.Tool, input json.RawMessage) string {
 		return fmt.Sprintf("%s wants to run and is marked destructive.", t.Name())
 	}
 	return fmt.Sprintf("%s wants to run and is marked destructive.\n\nInput:\n%s", t.Name(), inputText)
+}
+
+func isAcceptEditsTool(t tool.Tool) bool {
+	if t == nil {
+		return false
+	}
+	switch t.Name() {
+	case tool.EditToolName, tool.WriteToolName, tool.PatchToolName, tool.TodoWriteToolName:
+		return true
+	default:
+		return false
+	}
 }

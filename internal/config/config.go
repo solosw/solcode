@@ -32,6 +32,24 @@ func DefaultRuntimeSettingsPath() string {
 	return filepath.Join(UserConfigDir(), settingsLocalName)
 }
 
+func ProjectConfigDir(workDir string) string {
+	workDir = strings.TrimSpace(workDir)
+	if workDir == "" {
+		return ""
+	}
+	return filepath.Join(workDir, configDirName)
+}
+
+func DefaultSkillDirs(workDir string) []string {
+	paths := []string{filepath.Join(UserConfigDir(), "skills")}
+	legacyPaths := []string{filepath.Join(UserConfigDir(), "my-skill")}
+	if projectDir := ProjectConfigDir(workDir); projectDir != "" {
+		paths = append(paths, filepath.Join(projectDir, "skills"))
+		legacyPaths = append(legacyPaths, filepath.Join(projectDir, "my-skill"))
+	}
+	return uniqueNonEmpty(append(paths, legacyPaths...))
+}
+
 func projectSubDir(workDir string) string {
 	if workDir == "" {
 		return ""
@@ -115,16 +133,27 @@ type SessionConfig struct {
 }
 
 type MemoryConfig struct {
-	Enabled                bool   `json:"enabled,omitempty"`
-	Dir                    string `json:"dir,omitempty"`
-	MaxRecentTurns         int    `json:"max_recent_turns,omitempty"`
-	SummaryThresholdTokens int    `json:"summary_threshold_tokens,omitempty"`
-	RetrievalLimit         int    `json:"retrieval_limit,omitempty"`
+	Enabled                  bool    `json:"enabled,omitempty"`
+	Dir                      string  `json:"dir,omitempty"`
+	MaxRecentTurns           int     `json:"max_recent_turns,omitempty"`
+	SummaryThresholdTokens   int     `json:"summary_threshold_tokens,omitempty"`
+	CompactionTriggerPercent int     `json:"compaction_trigger_percent,omitempty"`
+	CompactionTargetPercent  int     `json:"compaction_target_percent,omitempty"`
+	RetrievalLimit           int     `json:"retrieval_limit,omitempty"`
+	RetrievalM2Limit         int     `json:"retrieval_m2_limit,omitempty"`
+	RetrievalM3Limit         int     `json:"retrieval_m3_limit,omitempty"`
+	RetrievalM4Limit         int     `json:"retrieval_m4_limit,omitempty"`
+	RetrievalM5Limit         int     `json:"retrieval_m5_limit,omitempty"`
+	TierM1TTLHours           int     `json:"tier_m1_ttl_hours,omitempty"`
+	TierM2TTLHours           int     `json:"tier_m2_ttl_hours,omitempty"`
+	PromotionAccessThreshold int     `json:"promotion_access_threshold,omitempty"`
+	PromotionConfidence      float64 `json:"promotion_confidence,omitempty"`
 }
 
 type MCPServerConfig struct {
 	Name      string            `json:"name,omitempty"`
 	Transport string            `json:"transport,omitempty"`
+	Type      string            `json:"type,omitempty"`
 	Command   string            `json:"command,omitempty"`
 	Args      []string          `json:"args,omitempty"`
 	Env       map[string]string `json:"env,omitempty"`
@@ -158,6 +187,7 @@ type ModelConfig struct {
 	Default          bool                       `json:"default,omitempty"`
 	MaxContextTokens int64                      `json:"max_context_tokens,omitempty"`
 	MaxTokens        *int64                     `json:"max_tokens,omitempty"`
+	MaxTurns         *int                       `json:"max_turns,omitempty"`
 	Thinking         *bool                      `json:"thinking,omitempty"`
 	ThinkingText     *bool                      `json:"thinking_text,omitempty"`
 	Effort           string                     `json:"effort,omitempty"`
@@ -167,17 +197,18 @@ type ModelConfig struct {
 func Default() Config {
 	wd, _ := os.Getwd()
 	return Config{
-		APIKey:         os.Getenv("ANTHROPIC_API_KEY"),
-		BaseURL:        os.Getenv("ANTHROPIC_BASE_URL"),
-		Model:          anthropic.DefaultModel,
-		MaxTokens:      16_000,
-		WorkDir:        wd,
-		MaxTurns:       10,
-		Stream:         true,
-		Thinking:       true,
-		ThinkingText:   false,
-		Effort:         "high",
-		PermissionMode: permission.ModeAuto,
+		APIKey:           os.Getenv("ANTHROPIC_API_KEY"),
+		BaseURL:          os.Getenv("ANTHROPIC_BASE_URL"),
+		Model:            anthropic.DefaultModel,
+		MaxContextTokens: 200_000,
+		MaxTokens:        64_000,
+		WorkDir:          wd,
+		MaxTurns:         0,
+		Stream:           true,
+		Thinking:         true,
+		ThinkingText:     false,
+		Effort:           "high",
+		PermissionMode:   permission.ModeAuto,
 		Permissions: permission.Config{
 			Mode: permission.ModeAuto,
 		},
@@ -187,10 +218,20 @@ func Default() Config {
 			DefaultSession: "main",
 		},
 		Memory: MemoryConfig{
-			Enabled:                true,
-			MaxRecentTurns:         20,
-			SummaryThresholdTokens: 60_000,
-			RetrievalLimit:         8,
+			Enabled:                  true,
+			MaxRecentTurns:           20,
+			SummaryThresholdTokens:   60_000,
+			CompactionTriggerPercent: 85,
+			CompactionTargetPercent:  50,
+			RetrievalLimit:           8,
+			RetrievalM2Limit:         4,
+			RetrievalM3Limit:         3,
+			RetrievalM4Limit:         3,
+			RetrievalM5Limit:         2,
+			TierM1TTLHours:           12,
+			TierM2TTLHours:           72,
+			PromotionAccessThreshold: 3,
+			PromotionConfidence:      0.75,
 		},
 	}
 }
@@ -207,6 +248,9 @@ func Load(path string) (Config, error) {
 		return cfg, nil
 	}
 
+	if err := initializeDefaultSettingsFile(cfg.WorkDir); err != nil {
+		return cfg, err
+	}
 	for _, candidate := range discoverDefaultPaths() {
 		if err := loadOptionalFile(&cfg, candidate); err != nil {
 			return cfg, err
@@ -217,6 +261,52 @@ func Load(path string) (Config, error) {
 		return cfg, err
 	}
 	return cfg, nil
+}
+
+func initializeDefaultSettingsFile(workDir string) error {
+	for _, candidate := range discoverDefaultPaths() {
+		if _, err := os.Stat(candidate); err == nil {
+			return nil
+		}
+	}
+	path := filepath.Join(UserConfigDir(), settingsFileName)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create config directory %q: %w", filepath.Dir(path), err)
+	}
+	payload := defaultSettingsPayload(workDir)
+	encoded, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode default settings %q: %w", path, err)
+	}
+	encoded = append(encoded, '\n')
+	if err := os.WriteFile(path, encoded, 0o644); err != nil {
+		return fmt.Errorf("write default settings %q: %w", path, err)
+	}
+	return nil
+}
+
+func defaultSettingsPayload(workDir string) map[string]any {
+	maxTokens := int64(64_000)
+	maxTurns := 0
+	return map[string]any{
+		"provider": "anthropic",
+		"providers": []ProviderConfig{{
+			Name:      "anthropic",
+			Type:      "anthropic",
+			APIKeyEnv: "ANTHROPIC_API_KEY",
+			Models: []ModelConfig{{
+				Name:             "default",
+				ID:               anthropic.DefaultModel,
+				DisplayName:      anthropic.DefaultModel,
+				Default:          true,
+				MaxContextTokens: 200_000,
+				MaxTokens:        &maxTokens,
+				MaxTurns:         &maxTurns,
+				Effort:           "high",
+			}},
+		}},
+		"work_dir": workDir,
+	}
 }
 
 func (cfg *Config) Normalize() error {
@@ -232,14 +322,14 @@ func (cfg *Config) Normalize() error {
 	cfg.Permissions.Allow = cleanStringSlice(cfg.Permissions.Allow)
 	cfg.Permissions.AllowBash = cleanStringSlice(cfg.Permissions.AllowBash)
 
-	cfg.Skills.Paths = cleanAndExpandPaths(cfg.Skills.Paths)
+	cfg.Skills.Paths = defaultSkillPaths(cfg.WorkDir, cleanAndExpandPaths(cfg.Skills.Paths))
 	cfg.Skills.Enabled = cleanStringSlice(cfg.Skills.Enabled)
 	cfg.Skills.Disabled = cleanStringSlice(cfg.Skills.Disabled)
 
 	if len(cfg.MCPServers) > 0 {
 		cfg.MCP.Servers = cloneMCPServers(cfg.MCPServers)
 	}
-	cfg.MCP.Servers = normalizeMCPServers(cfg.MCP.Servers)
+	cfg.MCP.Servers = defaultMCPServers(cfg.WorkDir, normalizeMCPServers(cfg.MCP.Servers))
 	cfg.MCPServers = cloneMCPServers(cfg.MCP.Servers)
 
 	cfg.normalizeSessionMemory()
@@ -287,9 +377,16 @@ func (cfg *Config) Normalize() error {
 	cfg.APIKey = prov.APIKey
 	cfg.BaseURL = prov.BaseURL
 	cfg.Model = mdl.ID
-	cfg.MaxContextTokens = mdl.MaxContextTokens
+	if mdl.MaxContextTokens > 0 {
+		cfg.MaxContextTokens = mdl.MaxContextTokens
+	} else if cfg.MaxContextTokens <= 0 {
+		cfg.MaxContextTokens = 200_000
+	}
 	if mdl.MaxTokens != nil {
 		cfg.MaxTokens = *mdl.MaxTokens
+	}
+	if mdl.MaxTurns != nil {
+		cfg.MaxTurns = *mdl.MaxTurns
 	}
 	if mdl.Thinking != nil {
 		cfg.Thinking = *mdl.Thinking
@@ -300,11 +397,17 @@ func (cfg *Config) Normalize() error {
 	if mdl.Effort != "" {
 		cfg.Effort = mdl.Effort
 	}
-	if cfg.MaxTokens <= 0 {
-		cfg.MaxTokens = 16_000
+	if strings.TrimSpace(cfg.Effort) == "" {
+		cfg.Effort = "high"
 	}
-	if cfg.MaxTurns <= 0 {
-		cfg.MaxTurns = 10
+	if cfg.MaxContextTokens <= 0 {
+		cfg.MaxContextTokens = 20_000
+	}
+	if cfg.MaxTokens <= 0 {
+		cfg.MaxTokens = 64_000
+	}
+	if cfg.MaxTurns < 0 {
+		cfg.MaxTurns = 0
 	}
 	return nil
 }
@@ -494,11 +597,17 @@ func applyEnvLegacy(cfg *Config) {
 	if cfg.Model == "" {
 		cfg.Model = anthropic.DefaultModel
 	}
-	if cfg.MaxTokens <= 0 {
-		cfg.MaxTokens = 16_000
+	if cfg.MaxContextTokens <= 0 {
+		cfg.MaxContextTokens = 200_000
 	}
-	if cfg.MaxTurns <= 0 {
-		cfg.MaxTurns = 10
+	if cfg.MaxTokens <= 0 {
+		cfg.MaxTokens = 64_000
+	}
+	if cfg.MaxTurns < 0 {
+		cfg.MaxTurns = 0
+	}
+	if strings.TrimSpace(cfg.Effort) == "" {
+		cfg.Effort = "high"
 	}
 }
 
@@ -528,8 +637,50 @@ func (cfg *Config) normalizeSessionMemory() {
 	if cfg.Memory.SummaryThresholdTokens <= 0 {
 		cfg.Memory.SummaryThresholdTokens = 60_000
 	}
+	if cfg.Memory.CompactionTriggerPercent <= 0 {
+		cfg.Memory.CompactionTriggerPercent = 85
+	}
+	if cfg.Memory.CompactionTargetPercent <= 0 {
+		cfg.Memory.CompactionTargetPercent = 50
+	}
+	if cfg.Memory.CompactionTriggerPercent > 100 {
+		cfg.Memory.CompactionTriggerPercent = 100
+	}
+	if cfg.Memory.CompactionTargetPercent > 100 {
+		cfg.Memory.CompactionTargetPercent = 100
+	}
+	if cfg.Memory.CompactionTargetPercent >= cfg.Memory.CompactionTriggerPercent {
+		cfg.Memory.CompactionTargetPercent = cfg.Memory.CompactionTriggerPercent - 10
+		if cfg.Memory.CompactionTargetPercent < 1 {
+			cfg.Memory.CompactionTargetPercent = 1
+		}
+	}
 	if cfg.Memory.RetrievalLimit <= 0 {
 		cfg.Memory.RetrievalLimit = 8
+	}
+	if cfg.Memory.RetrievalM2Limit <= 0 {
+		cfg.Memory.RetrievalM2Limit = 4
+	}
+	if cfg.Memory.RetrievalM3Limit <= 0 {
+		cfg.Memory.RetrievalM3Limit = 3
+	}
+	if cfg.Memory.RetrievalM4Limit <= 0 {
+		cfg.Memory.RetrievalM4Limit = 3
+	}
+	if cfg.Memory.RetrievalM5Limit <= 0 {
+		cfg.Memory.RetrievalM5Limit = 2
+	}
+	if cfg.Memory.TierM1TTLHours <= 0 {
+		cfg.Memory.TierM1TTLHours = 12
+	}
+	if cfg.Memory.TierM2TTLHours <= 0 {
+		cfg.Memory.TierM2TTLHours = 72
+	}
+	if cfg.Memory.PromotionAccessThreshold <= 0 {
+		cfg.Memory.PromotionAccessThreshold = 3
+	}
+	if cfg.Memory.PromotionConfidence <= 0 {
+		cfg.Memory.PromotionConfidence = 0.75
 	}
 }
 
@@ -862,6 +1013,9 @@ func normalizeMCPServers(servers []MCPServerConfig) []MCPServerConfig {
 		}
 		server.Transport = strings.TrimSpace(server.Transport)
 		if server.Transport == "" {
+			server.Transport = strings.TrimSpace(server.Type)
+		}
+		if server.Transport == "" {
 			server.Transport = "stdio"
 		}
 		server.Command = expandPath(server.Command)
@@ -875,6 +1029,78 @@ func normalizeMCPServers(servers []MCPServerConfig) []MCPServerConfig {
 		return out[i].Name < out[j].Name
 	})
 	return out
+}
+
+func defaultSkillPaths(workDir string, configured []string) []string {
+	return uniqueNonEmpty(append(DefaultSkillDirs(workDir), configured...))
+}
+
+func defaultMCPServers(workDir string, configured []MCPServerConfig) []MCPServerConfig {
+	merged := map[string]MCPServerConfig{}
+	for _, server := range configured {
+		merged[server.Name] = server
+	}
+	for _, path := range defaultMCPConfigPaths(workDir) {
+		servers, err := loadMCPServersFromFile(path)
+		if err != nil {
+			continue
+		}
+		for _, server := range servers {
+			if _, exists := merged[server.Name]; exists {
+				continue
+			}
+			merged[server.Name] = server
+		}
+	}
+	if len(merged) == 0 {
+		return nil
+	}
+	out := make([]MCPServerConfig, 0, len(merged))
+	for _, server := range merged {
+		out = append(out, server)
+	}
+	return normalizeMCPServers(out)
+}
+
+func defaultMCPConfigPaths(workDir string) []string {
+	paths := []string{
+		filepath.Join(UserConfigDir(), settingsFileName),
+		filepath.Join(UserConfigDir(), settingsLocalName),
+	}
+	if projectDir := ProjectConfigDir(workDir); projectDir != "" {
+		paths = append(paths,
+			filepath.Join(projectDir, settingsFileName),
+			filepath.Join(projectDir, settingsLocalName),
+		)
+	}
+	return uniqueNonEmpty(paths)
+}
+
+func loadMCPServersFromFile(path string) ([]MCPServerConfig, error) {
+	data, err := os.ReadFile(filepath.Clean(path))
+	if err != nil {
+		return nil, err
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, err
+	}
+	if value, ok := raw["mcp"]; ok {
+		var cfg MCPConfig
+		if err := applyMCPJSON(&cfg, value); err != nil {
+			return nil, err
+		}
+		if len(cfg.Servers) > 0 {
+			return normalizeMCPServers(cfg.Servers), nil
+		}
+	}
+	if value, ok := raw["mcp_servers"]; ok {
+		return parseMCPServers(value)
+	}
+	if value, ok := raw["mcpServers"]; ok {
+		return parseMCPServers(value)
+	}
+	return nil, nil
 }
 
 func cloneMCPServers(servers []MCPServerConfig) []MCPServerConfig {

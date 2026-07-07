@@ -15,6 +15,7 @@ type UseContext struct {
 	WorkDir   string
 	AgentID   string
 	TodoPath  string
+	AskUser   func(ctx context.Context, params AskUserParams) (map[string]string, error)
 }
 
 // ContentBlock represents a content block in Anthropic's message format.

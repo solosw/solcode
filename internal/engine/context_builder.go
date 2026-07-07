@@ -5,11 +5,13 @@ import (
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
 	cpanthropic "github.com/solosw/codeplus-agent/internal/anthropic"
+	"github.com/solosw/codeplus-agent/internal/tokenest"
 	"github.com/solosw/codeplus-agent/internal/tool"
 )
 
 type ContextBuilder struct {
 	SystemPrompt string
+	SkillNames   []string
 }
 
 type ContextItem struct {
@@ -83,15 +85,16 @@ type BuildRequest struct {
 
 func (b ContextBuilder) systemPrompt(workDir string) string {
 	parts := []string{}
-	if b.SystemPrompt != "" {
-		parts = append(parts, b.SystemPrompt)
-	} else {
-		parts = append(parts, defaultSystemPrompt())
+	if text := strings.TrimSpace(b.SystemPrompt); text != "" {
+		parts = append(parts, text)
 	}
+	parts = append(parts, defaultSystemPrompt())
+	parts = append(parts, toolUsagePrompt())
+	parts = append(parts, skillsPrompt(b.SkillNames))
 	if workDir != "" {
 		parts = append(parts, "Working directory: "+workDir)
 	}
-	return strings.Join(parts, "\n\n")
+	return strings.Join(nonEmptyParts(parts), "\n\n")
 }
 
 func formatMemoryContext(items []ContextItem) string {
@@ -112,6 +115,39 @@ func formatMemoryContext(items []ContextItem) string {
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+func toolUsagePrompt() string {
+	return strings.Join([]string{
+		"Tool usage:",
+		"- Use the available tools when they are the most direct way to gather information, inspect code, make changes, or verify behavior.",
+		"- Match the tool input schema exactly and prefer the smallest tool call that completes the task.",
+		"- When a reusable workflow matches the task, use the Skill tool before continuing with other tools.",
+	}, "\n")
+}
+
+func skillsPrompt(skillNames []string) string {
+	base := []string{
+		"Skills:",
+		"- Skills are reusable markdown workflows loaded from the configured skills directories.",
+		"- When the user's request matches one of these workflows, call the Skill tool with the skill name and pass any extra user detail in args.",
+	}
+	if len(skillNames) == 0 {
+		base = append(base, "- No skills are currently loaded.")
+		return strings.Join(base, "\n")
+	}
+	base = append(base, "- Available skills: "+strings.Join(skillNames, ", "))
+	return strings.Join(base, "\n")
+}
+
+func nonEmptyParts(parts []string) []string {
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if strings.TrimSpace(part) != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }
 
 func defaultSystemPrompt() string {
@@ -142,4 +178,14 @@ func convertTools(tools []tool.Tool) []sdk.ToolUnionParam {
 		out = append(out, cpanthropic.ToolToSDK(t))
 	}
 	return out
+}
+
+func (b ContextBuilder) EstimateContextTokens(req BuildRequest) int64 {
+	system := strings.TrimSpace(b.systemPrompt(req.WorkDir))
+	messages := b.withContextMessages(req.Messages, req.SessionSummary, req.MemoryContext)
+	approx := tokenest.Request(system, messages, convertTools(req.Tools))
+	if approx < 0 {
+		return 0
+	}
+	return int64(approx)
 }

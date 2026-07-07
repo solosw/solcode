@@ -8,7 +8,7 @@ import (
 )
 
 func TestContextBuilderSystemPromptIsStable(t *testing.T) {
-	builder := engine.ContextBuilder{SystemPrompt: "system"}
+	builder := engine.ContextBuilder{SystemPrompt: "user system", SkillNames: []string{"review", "verify"}}
 	req := builder.Build(engine.BuildRequest{
 		WorkDir:        "C:/work",
 		SessionSummary: "User is building session memory.",
@@ -16,8 +16,15 @@ func TestContextBuilderSystemPromptIsStable(t *testing.T) {
 			{Title: "Project", Content: "Use persistent main session."},
 		},
 	})
-	// System prompt must stay stable (only system + workdir) so the cache prefix survives.
-	for _, want := range []string{"system", "Working directory: C:/work"} {
+	for _, want := range []string{
+		"user system",
+		"You are codeplus-agent, an interactive CLI-based coding agent that helps with software engineering tasks.",
+		"Tool usage:",
+		"Skills:",
+		"Skills are reusable markdown workflows loaded from the configured skills directories.",
+		"Available skills: review, verify",
+		"Working directory: C:/work",
+	} {
 		if !strings.Contains(req.System, want) {
 			t.Fatalf("expected system prompt to contain %q, got %q", want, req.System)
 		}
@@ -27,7 +34,13 @@ func TestContextBuilderSystemPromptIsStable(t *testing.T) {
 			t.Fatalf("system prompt must NOT contain dynamic context %q (breaks cache), got %q", mustNot, req.System)
 		}
 	}
-	// Dynamic context goes into the messages stream instead.
+	idxUser := strings.Index(req.System, "user system")
+	idxDefault := strings.Index(req.System, "You are codeplus-agent")
+	idxTools := strings.Index(req.System, "Tool usage:")
+	idxSkills := strings.Index(req.System, "Skills:")
+	if !(idxUser >= 0 && idxDefault > idxUser && idxTools > idxDefault && idxSkills > idxTools) {
+		t.Fatalf("unexpected system prompt order: %q", req.System)
+	}
 	if len(req.Messages) < 2 {
 		t.Fatalf("expected context messages to be prepended, got %d messages", len(req.Messages))
 	}

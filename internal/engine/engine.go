@@ -10,6 +10,7 @@ import (
 	cpanthropic "github.com/solosw/codeplus-agent/internal/anthropic"
 	"github.com/solosw/codeplus-agent/internal/hook"
 	"github.com/solosw/codeplus-agent/internal/permission"
+	"github.com/solosw/codeplus-agent/internal/tokenest"
 	"github.com/solosw/codeplus-agent/internal/tool"
 )
 
@@ -27,6 +28,7 @@ type ModelResponse struct {
 }
 
 type Usage struct {
+	EstimatedContextTokens   int64
 	InputTokens              int64
 	OutputTokens             int64
 	CacheCreationInputTokens int64
@@ -44,6 +46,7 @@ type Config struct {
 	MaxContextTokens int64
 	MaxTokens        int64
 	SystemPrompt     string
+	SkillNames       []string
 	MaxTurns         int
 	Stream           bool
 	Thinking         bool
@@ -55,6 +58,7 @@ type Config struct {
 	OnToolStart      func(name string, input json.RawMessage)
 	OnToolDone       func(name string, output string, isError bool)
 	OnUsage          func(Usage)
+	OnAskUser        func(ctx context.Context, params tool.AskUserParams) (map[string]string, error)
 }
 
 type Engine struct {
@@ -142,7 +146,10 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 
 	tools := e.selectedTools(cfg.AllowedTools)
 	executor := NewToolExecutorWithPermissions(e.config.Tools, e.config.Hooks, e.config.Permissions)
-	builder := ContextBuilder{SystemPrompt: e.config.SystemPrompt}
+	builder := ContextBuilder{
+		SystemPrompt: e.config.SystemPrompt,
+		SkillNames:   e.config.SkillNames,
+	}
 
 	var finalText string
 	for turn := 0; turn < turnLimit; turn++ {
@@ -169,8 +176,22 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 		if err != nil {
 			return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: err.Error()}, Messages: messages}
 		}
+		estimatedContextTokens := builder.EstimateContextTokens(BuildRequest{
+			Model:          e.config.ModelName,
+			MaxTokens:      e.config.MaxTokens,
+			WorkDir:        cfg.WorkDir,
+			Messages:       messages[:len(messages)-1],
+			Tools:          tools,
+			Thinking:       e.config.Thinking,
+			ThinkingText:   e.config.ThinkingText,
+			Effort:         e.config.Effort,
+			Stream:         e.config.Stream,
+			SessionSummary: runReq.SessionSummary,
+			MemoryContext:  runReq.MemoryContext,
+		}) + int64(tokenest.Text(prompt))
 		if e.config.OnUsage != nil {
 			e.config.OnUsage(Usage{
+				EstimatedContextTokens:   estimatedContextTokens,
 				InputTokens:              message.Usage.InputTokens,
 				OutputTokens:             message.Usage.OutputTokens,
 				CacheCreationInputTokens: message.Usage.CacheCreationInputTokens,
@@ -209,6 +230,7 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 					WorkDir:   cfg.WorkDir,
 					AgentID:   string(cfg.ID),
 					TodoPath:  e.config.TodoPath,
+					AskUser:   e.config.OnAskUser,
 				},
 			})
 			if err := ctx.Err(); err != nil {

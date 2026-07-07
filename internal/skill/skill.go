@@ -8,6 +8,8 @@ import (
 	"strings"
 )
 
+const skillFileName = "SKILL.md"
+
 type Definition struct {
 	Name        string
 	Description string
@@ -68,8 +70,30 @@ func loadFromDir(registry *Registry, dir string) {
 	if err != nil {
 		return
 	}
+	if skillPath, ok := skillFileFromEntries(dir, entries); ok {
+		name := filepath.Base(filepath.Clean(dir))
+		registry.Add(Definition{
+			Name:        name,
+			Description: fmt.Sprintf("Skill directory %s", name),
+			Path:        skillPath,
+			Source:      dir,
+		})
+		return
+	}
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".md") {
+		if entry.IsDir() {
+			subdir := filepath.Join(dir, entry.Name())
+			if skillPath, ok := skillFileInDir(subdir); ok {
+				registry.Add(Definition{
+					Name:        entry.Name(),
+					Description: fmt.Sprintf("Skill directory %s", entry.Name()),
+					Path:        skillPath,
+					Source:      subdir,
+				})
+			}
+			continue
+		}
+		if !strings.HasSuffix(strings.ToLower(entry.Name()), ".md") {
 			continue
 		}
 		name := strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name()))
@@ -86,4 +110,24 @@ func normalizeName(name string) string {
 	name = strings.TrimSpace(name)
 	name = strings.TrimPrefix(name, "/")
 	return strings.ToLower(name)
+}
+
+func skillFileInDir(dir string) (string, bool) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", false
+	}
+	return skillFileFromEntries(dir, entries)
+}
+
+func skillFileFromEntries(dir string, entries []os.DirEntry) (string, bool) {
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		if strings.EqualFold(entry.Name(), skillFileName) {
+			return filepath.Join(dir, entry.Name()), true
+		}
+	}
+	return "", false
 }

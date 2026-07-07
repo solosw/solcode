@@ -26,14 +26,12 @@ func TestAppNewRegistersSkillAndMCPTools(t *testing.T) {
 	cfg := config.Default()
 	cfg.WorkDir = workDir
 	cfg.Skills.Paths = []string{skillsDir}
-	cfg.MCP.Servers = []config.MCPServerConfig{
-		{
-			Name:      "filesystem",
-			Transport: "stdio",
-			Command:   "npx",
-			Args:      []string{"-y", "@modelcontextprotocol/server-filesystem", "."},
-		},
-	}
+	cfg.MCP.Servers = []config.MCPServerConfig{{
+		Name:      "filesystem",
+		Transport: "stdio",
+		Command:   "npx",
+		Args:      []string{"-y", "@modelcontextprotocol/server-filesystem", "."},
+	}}
 
 	fake := &fakeMCPClient{tools: []fakeToolDef{{name: "read_file", description: "Read file", schema: map[string]any{"type": "object"}, result: "content"}}}
 	application, err := app.New(cfg, app.WithMCPClientFactory(func(server config.MCPServerConfig) internalmcp.Client {

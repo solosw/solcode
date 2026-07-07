@@ -6,22 +6,27 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/solosw/codeplus-agent/internal/anthropic"
 	"github.com/solosw/codeplus-agent/internal/config"
 	"github.com/solosw/codeplus-agent/internal/permission"
 )
 
 func TestLoadEmptyConfigDefaults(t *testing.T) {
-	t.Setenv("ANTHROPIC_API_KEY", "")
-	t.Setenv("ANTHROPIC_BASE_URL", "")
-	cfg, err := config.Load("")
-	if err != nil {
-		t.Fatalf("Load() = %v", err)
+	cfg := config.Default()
+	if err := cfg.Normalize(); err != nil {
+		t.Fatalf("Normalize() = %v", err)
 	}
-	if cfg.Model != "claude-opus-4-8" {
-		t.Fatalf("expected default model claude-opus-4-8, got %q", cfg.Model)
+	if cfg.Model != anthropic.DefaultModel {
+		t.Fatalf("expected default model %s, got %q", anthropic.DefaultModel, cfg.Model)
 	}
-	if cfg.MaxTokens != 16_000 {
-		t.Fatalf("expected default MaxTokens 16000, got %d", cfg.MaxTokens)
+	if cfg.MaxContextTokens != 200_000 {
+		t.Fatalf("expected default MaxContextTokens 200000, got %d", cfg.MaxContextTokens)
+	}
+	if cfg.MaxTokens != 64_000 {
+		t.Fatalf("expected default MaxTokens 64000, got %d", cfg.MaxTokens)
+	}
+	if cfg.MaxTurns != 0 {
+		t.Fatalf("expected default MaxTurns 0 (unlimited), got %d", cfg.MaxTurns)
 	}
 	if !cfg.Thinking {
 		t.Fatalf("expected Thinking = true by default")
@@ -31,6 +36,85 @@ func TestLoadEmptyConfigDefaults(t *testing.T) {
 	}
 	if cfg.PermissionMode != permission.ModeAuto {
 		t.Fatalf("expected default permission mode auto, got %q", cfg.PermissionMode)
+	}
+}
+
+func TestLoadCreatesDefaultSettingsOnFirstStart(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	project := filepath.Join(t.TempDir(), "project")
+	mustMkdirAll(t, home)
+	mustMkdirAll(t, project)
+	oldHome := os.Getenv("HOME")
+	oldUserProfile := os.Getenv("USERPROFILE")
+	oldPwd, _ := os.Getwd()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	if err := os.Chdir(project); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer func() {
+		_ = os.Chdir(oldPwd)
+		_ = os.Setenv("HOME", oldHome)
+		_ = os.Setenv("USERPROFILE", oldUserProfile)
+	}()
+
+	settingsPath := filepath.Join(config.UserConfigDir(), "settings.json")
+	if _, err := os.Stat(settingsPath); !os.IsNotExist(err) {
+		t.Fatalf("expected no settings.json before first load, got err=%v", err)
+	}
+	cfg, err := config.Load("")
+	if err != nil {
+		t.Fatalf("Load() = %v", err)
+	}
+	if _, err := os.Stat(settingsPath); err != nil {
+		t.Fatalf("expected initialized settings.json, got err=%v", err)
+	}
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("read settings.json: %v", err)
+	}
+	text := string(data)
+	for _, want := range []string{"\"providers\"", anthropic.DefaultModel, "\"max_context_tokens\": 200000", "\"max_tokens\": 64000", "\"max_turns\": 0", "\"effort\": \"high\""} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected %q in initialized settings.json: %s", want, text)
+		}
+	}
+	if cfg.Model != anthropic.DefaultModel {
+		t.Fatalf("expected initialized config model %s, got %q", anthropic.DefaultModel, cfg.Model)
+	}
+}
+
+func TestProviderModelMissingLimitsUseDefaults(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	writeFile(t, path, `{
+		"provider": "anthropic",
+		"providers": [
+			{
+				"name": "anthropic",
+				"type": "anthropic",
+				"api_key": "sk-test",
+				"models": [
+					{"name":"default","id":"`+anthropic.DefaultModel+`","default":true}
+				]
+			}
+		]
+	}`)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load(%q) = %v", path, err)
+	}
+	if cfg.MaxContextTokens != 200_000 {
+		t.Fatalf("expected default MaxContextTokens 200000, got %d", cfg.MaxContextTokens)
+	}
+	if cfg.MaxTokens != 64_000 {
+		t.Fatalf("expected default MaxTokens 64000, got %d", cfg.MaxTokens)
+	}
+	if cfg.MaxTurns != 0 {
+		t.Fatalf("expected default MaxTurns 0, got %d", cfg.MaxTurns)
+	}
+	if cfg.Effort != "high" {
+		t.Fatalf("expected default effort high, got %q", cfg.Effort)
 	}
 }
 
@@ -67,6 +151,20 @@ func TestLoadLegacyFlatJSON(t *testing.T) {
 	}
 	if cfg.MaxTurns != 5 {
 		t.Fatalf("MaxTurns = %d", cfg.MaxTurns)
+	}
+	wantSkillDirs := []string{
+		filepath.Join(config.UserConfigDir(), "skills"),
+		filepath.Join(config.ProjectConfigDir(cfg.WorkDir), "skills"),
+		filepath.Join(config.UserConfigDir(), "my-skill"),
+		filepath.Join(config.ProjectConfigDir(cfg.WorkDir), "my-skill"),
+	}
+	if len(cfg.Skills.Paths) != len(wantSkillDirs) {
+		t.Fatalf("Skills.Paths = %#v", cfg.Skills.Paths)
+	}
+	for i, want := range wantSkillDirs {
+		if cfg.Skills.Paths[i] != want {
+			t.Fatalf("Skills.Paths[%d] = %q, want %q", i, cfg.Skills.Paths[i], want)
+		}
 	}
 }
 
@@ -149,8 +247,20 @@ func TestLoadAgentcodeLayeredConfig(t *testing.T) {
 	if len(cfg.Permissions.AllowBash) != 1 || cfg.Permissions.AllowBash[0] != "git status" {
 		t.Fatalf("Permissions.AllowBash = %#v", cfg.Permissions.AllowBash)
 	}
-	if len(cfg.Skills.Paths) != 2 {
+	wantPaths := []string{
+		filepath.Join(config.UserConfigDir(), "skills"),
+		filepath.Join(config.ProjectConfigDir(cfg.WorkDir), "skills"),
+		filepath.Join(config.UserConfigDir(), "my-skill"),
+		filepath.Join(config.ProjectConfigDir(cfg.WorkDir), "my-skill"),
+		"./skills",
+	}
+	if len(cfg.Skills.Paths) != len(wantPaths) {
 		t.Fatalf("Skills.Paths = %#v", cfg.Skills.Paths)
+	}
+	for i, want := range wantPaths {
+		if cfg.Skills.Paths[i] != want {
+			t.Fatalf("Skills.Paths[%d] = %q, want %q", i, cfg.Skills.Paths[i], want)
+		}
 	}
 	if len(cfg.Skills.Enabled) != 1 || cfg.Skills.Enabled[0] != "verify" {
 		t.Fatalf("Skills.Enabled = %#v", cfg.Skills.Enabled)
@@ -158,7 +268,7 @@ func TestLoadAgentcodeLayeredConfig(t *testing.T) {
 	if len(cfg.Skills.Disabled) != 1 || cfg.Skills.Disabled[0] != "debug" {
 		t.Fatalf("Skills.Disabled = %#v", cfg.Skills.Disabled)
 	}
-	if len(cfg.MCP.Servers) != 1 || cfg.MCP.Servers[0].Name != "memory" {
+	if len(cfg.MCP.Servers) != 2 || cfg.MCP.Servers[0].Name != "filesystem" || cfg.MCP.Servers[1].Name != "memory" {
 		t.Fatalf("MCP.Servers = %#v", cfg.MCP.Servers)
 	}
 	if len(cfg.Hooks.Events) != 1 || len(cfg.Hooks.Events["PreToolUse"]) != 1 {
@@ -300,6 +410,53 @@ func TestSessionAndMemoryDirsDefaultUnderUserDir(t *testing.T) {
 	}
 	if cfg.Memory.Dir != config.DefaultMemoryDir(cfg.WorkDir) {
 		t.Fatalf("expected memory dir %q, got %q", config.DefaultMemoryDir(cfg.WorkDir), cfg.Memory.Dir)
+	}
+}
+
+func TestMemoryConfigCompactionDefaults(t *testing.T) {
+	cfg := config.Default()
+	if cfg.Memory.CompactionTriggerPercent != 85 {
+		t.Fatalf("expected default trigger 85, got %d", cfg.Memory.CompactionTriggerPercent)
+	}
+	if cfg.Memory.CompactionTargetPercent != 50 {
+		t.Fatalf("expected default target 50, got %d", cfg.Memory.CompactionTargetPercent)
+	}
+	if cfg.Memory.TierM1TTLHours != 12 {
+		t.Fatalf("expected default M1 TTL 12, got %d", cfg.Memory.TierM1TTLHours)
+	}
+	if cfg.Memory.TierM2TTLHours != 72 {
+		t.Fatalf("expected default M2 TTL 72, got %d", cfg.Memory.TierM2TTLHours)
+	}
+	if cfg.Memory.PromotionAccessThreshold != 3 {
+		t.Fatalf("expected default promotion access threshold 3, got %d", cfg.Memory.PromotionAccessThreshold)
+	}
+	if cfg.Memory.PromotionConfidence != 0.75 {
+		t.Fatalf("expected default promotion confidence 0.75, got %v", cfg.Memory.PromotionConfidence)
+	}
+	if cfg.Memory.RetrievalM2Limit != 4 || cfg.Memory.RetrievalM3Limit != 3 || cfg.Memory.RetrievalM4Limit != 3 || cfg.Memory.RetrievalM5Limit != 2 {
+		t.Fatalf("unexpected retrieval tier defaults: %#v", cfg.Memory)
+	}
+	cfg.Memory.CompactionTargetPercent = 95
+	cfg.Memory.CompactionTriggerPercent = 85
+	cfg.Memory.TierM1TTLHours = 0
+	cfg.Memory.TierM2TTLHours = 0
+	cfg.Memory.PromotionAccessThreshold = 0
+	cfg.Memory.PromotionConfidence = 0
+	cfg.Memory.RetrievalM2Limit = 0
+	cfg.Memory.RetrievalM3Limit = 0
+	cfg.Memory.RetrievalM4Limit = 0
+	cfg.Memory.RetrievalM5Limit = 0
+	if err := cfg.Normalize(); err != nil {
+		t.Fatalf("Normalize() = %v", err)
+	}
+	if cfg.Memory.CompactionTargetPercent >= cfg.Memory.CompactionTriggerPercent {
+		t.Fatalf("expected target < trigger, got target=%d trigger=%d", cfg.Memory.CompactionTargetPercent, cfg.Memory.CompactionTriggerPercent)
+	}
+	if cfg.Memory.TierM1TTLHours != 12 || cfg.Memory.TierM2TTLHours != 72 || cfg.Memory.PromotionAccessThreshold != 3 || cfg.Memory.PromotionConfidence != 0.75 {
+		t.Fatalf("memory normalize defaults not restored: %#v", cfg.Memory)
+	}
+	if cfg.Memory.RetrievalM2Limit != 4 || cfg.Memory.RetrievalM3Limit != 3 || cfg.Memory.RetrievalM4Limit != 3 || cfg.Memory.RetrievalM5Limit != 2 {
+		t.Fatalf("retrieval tier defaults not restored: %#v", cfg.Memory)
 	}
 }
 
@@ -526,13 +683,15 @@ func TestConfigListModelsAndWithModel(t *testing.T) {
 	path := filepath.Join(dir, "config.json")
 	writeFile(t, path, `{
 		"model": "sonnet",
+		"max_turns": 10,
+		"effort": "low",
 		"providers": [
 			{
 				"name": "anthropic",
 				"type": "anthropic",
 				"models": [
-					{"name":"sonnet","id":"claude-sonnet-4-6","display_name":"Sonnet","max_tokens":16000},
-					{"name":"opus","id":"claude-opus-4-8","default":true,"max_tokens":64000}
+					{"name":"sonnet","id":"claude-sonnet-4-6","display_name":"Sonnet","max_context_tokens":200000,"max_tokens":16000},
+					{"name":"opus","id":"claude-opus-4-8","default":true,"max_context_tokens":1000000,"max_tokens":64000,"max_turns":22,"thinking":true,"effort":"high"}
 				]
 			}
 		]
@@ -554,7 +713,7 @@ func TestConfigListModelsAndWithModel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WithModel(opus) = %v", err)
 	}
-	if next.Model != "claude-opus-4-8" || next.MaxTokens != 64_000 {
+	if next.Model != "claude-opus-4-8" || next.MaxContextTokens != 1_000_000 || next.MaxTokens != 64_000 || next.MaxTurns != 22 || !next.Thinking || next.Effort != "high" {
 		t.Fatalf("next config = %#v", next)
 	}
 }

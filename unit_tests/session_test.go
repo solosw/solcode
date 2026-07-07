@@ -7,6 +7,7 @@ import (
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
 	"github.com/solosw/codeplus-agent/internal/session"
+	"github.com/solosw/codeplus-agent/internal/tokenest"
 )
 
 func TestSessionFileStoreRoundTrip(t *testing.T) {
@@ -34,12 +35,6 @@ func TestSessionFileStoreRoundTrip(t *testing.T) {
 	}
 }
 
-type fakeSummaryWriter struct{}
-
-func (fakeSummaryWriter) Summarize(ctx context.Context, previous string, newContent string) (string, error) {
-	return strings.TrimSpace(previous + "\n" + newContent), nil
-}
-
 func TestSessionCompactKeepsRecentTurnsAndUpdatesSummary(t *testing.T) {
 	ctx := context.Background()
 	messages := []sdk.MessageParam{}
@@ -49,7 +44,7 @@ func TestSessionCompactKeepsRecentTurnsAndUpdatesSummary(t *testing.T) {
 			sdk.NewAssistantMessage(sdk.NewTextBlock("assistant turn")),
 		)
 	}
-	result, err := session.Compact(ctx, "previous", messages, fakeSummaryWriter{}, session.CompactOptions{
+	result, err := session.Compact(ctx, "previous", messages, nil, session.CompactOptions{
 		MaxRecentTurns:         2,
 		SummaryThresholdTokens: 1,
 	})
@@ -59,14 +54,134 @@ func TestSessionCompactKeepsRecentTurnsAndUpdatesSummary(t *testing.T) {
 	if !result.Changed {
 		t.Fatal("expected compaction to change session")
 	}
-	if !strings.Contains(result.Summary, "previous") || !strings.Contains(result.Summary, "user turn") {
-		t.Fatalf("summary did not include expected content: %q", result.Summary)
+	if strings.TrimSpace(result.Summary) != "" {
+		t.Fatalf("expected summary to be folded into compressed session, got %q", result.Summary)
 	}
-	if len(result.Messages) >= len(messages) {
-		t.Fatalf("expected fewer retained messages, before=%d after=%d", len(messages), len(result.Messages))
+	if len(result.Messages) >= len(messages)+1 {
+		t.Fatalf("expected compacted session to stay bounded, before=%d after=%d", len(messages), len(result.Messages))
+	}
+	if !strings.Contains(result.OriginalTranscript, "previous") || !strings.Contains(result.OriginalTranscript, "user turn") {
+		t.Fatalf("expected original transcript to include prior summary and user turn, got %q", result.OriginalTranscript)
+	}
+	if strings.TrimSpace(result.CompactedTranscript) == "" {
+		t.Fatal("expected compacted transcript to be populated")
 	}
 	if got := session.ApproxTokensFromMessages(messages); got <= 0 {
 		t.Fatalf("expected approximate token count, got %d", got)
+	}
+	if got, want := session.ApproxTokensFromMessages(messages), tokenest.Messages(messages); got != want {
+		t.Fatalf("session.ApproxTokensFromMessages() = %d, tokenest.Messages() = %d", got, want)
+	}
+}
+
+func TestSessionCompactTargetTokensShrinksRetained(t *testing.T) {
+	ctx := context.Background()
+	messages := []sdk.MessageParam{}
+	for i := 0; i < 10; i++ {
+		messages = append(messages,
+			sdk.NewUserMessage(sdk.NewTextBlock("user turn with some text")),
+			sdk.NewAssistantMessage(sdk.NewTextBlock("assistant turn with some text")),
+		)
+	}
+	// With TargetTokens=1 we should keep the absolute minimum tail.
+	result, err := session.Compact(ctx, "previous", messages, nil, session.CompactOptions{
+		MaxRecentTurns:         20,
+		SummaryThresholdTokens: 1,
+		TargetTokens:           1,
+	})
+	if err != nil {
+		t.Fatalf("compact: %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("expected compaction to change session")
+	}
+	if len(result.Messages) >= len(messages) {
+		t.Fatalf("expected fewer retained messages with target tokens, before=%d after=%d", len(messages), len(result.Messages))
+	}
+}
+
+func TestSessionCompactUsesEstimatedContextTokens(t *testing.T) {
+	ctx := context.Background()
+	messages := []sdk.MessageParam{
+		sdk.NewUserMessage(sdk.NewTextBlock("older user turn")),
+		sdk.NewAssistantMessage(sdk.NewTextBlock("older assistant turn")),
+		sdk.NewUserMessage(sdk.NewTextBlock("recent user turn")),
+		sdk.NewAssistantMessage(sdk.NewTextBlock("recent assistant turn")),
+	}
+	if session.ApproxTokensFromMessages(messages) >= 1000 {
+		t.Fatal("test setup expected message-only estimate to stay below threshold")
+	}
+	result, err := session.Compact(ctx, "previous", messages, nil, session.CompactOptions{
+		MaxRecentTurns:         1,
+		SummaryThresholdTokens: 1000,
+		EstimatedTokens:        1000,
+	})
+	if err != nil {
+		t.Fatalf("compact: %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("expected estimated context tokens to trigger compaction")
+	}
+}
+
+func TestSessionCompactPreservesStructuredToolIDs(t *testing.T) {
+	ctx := context.Background()
+	messages := []sdk.MessageParam{
+		sdk.NewAssistantMessage(sdk.NewToolUseBlock("toolu_keep", map[string]any{"command": "go test ./..."}, "Bash")),
+		sdk.NewUserMessage(sdk.NewToolResultBlock("toolu_keep", strings.Repeat("large tool output ", 200), true)),
+	}
+	result, err := session.Compact(ctx, "previous context", messages, nil, session.CompactOptions{
+		MaxRecentTurns:         20,
+		SummaryThresholdTokens: 1,
+		TargetTokens:           1000,
+	})
+	if err != nil {
+		t.Fatalf("compact: %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("expected compaction to change session")
+	}
+	if len(result.Messages) != 3 {
+		t.Fatalf("expected previous context plus both tool messages to remain, got %d", len(result.Messages))
+	}
+	toolUse := result.Messages[1].Content[0].OfToolUse
+	if toolUse == nil {
+		t.Fatalf("expected first block to remain tool_use, got %#v", result.Messages[0].Content[0])
+	}
+	if toolUse.ID != "toolu_keep" || toolUse.Name != "Bash" {
+		t.Fatalf("tool_use identity changed: id=%q name=%q", toolUse.ID, toolUse.Name)
+	}
+	toolResult := result.Messages[2].Content[0].OfToolResult
+	if toolResult == nil {
+		t.Fatalf("expected third block to remain tool_result, got %#v", result.Messages[2].Content[0])
+	}
+	if toolResult.ToolUseID != "toolu_keep" {
+		t.Fatalf("tool_result id changed: %q", toolResult.ToolUseID)
+	}
+	if !toolResult.IsError.Valid() || !toolResult.IsError.Value {
+		t.Fatalf("expected tool_result is_error=true to be preserved, got valid=%v value=%v", toolResult.IsError.Valid(), toolResult.IsError.Value)
+	}
+	if len(toolResult.Content) == 0 || toolResult.Content[0].OfText == nil || strings.TrimSpace(toolResult.Content[0].OfText.Text) == "" {
+		t.Fatalf("expected compressed tool_result text content to remain, got %#v", toolResult.Content)
+	}
+}
+
+func TestSessionMetadataCrossSessionMemoryPersists(t *testing.T) {
+	ctx := context.Background()
+	store := session.NewFileStore(t.TempDir())
+	cross := true
+	s := session.NewSession("main", t.TempDir(), "model")
+	s.Metadata.CrossSessionMemory = &cross
+	s.Append(sdk.NewUserMessage(sdk.NewTextBlock("hello")))
+	if err := store.Save(ctx, s); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	loaded, err := store.Load(ctx, "main")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if loaded.Metadata.CrossSessionMemory == nil || !*loaded.Metadata.CrossSessionMemory {
+		t.Fatalf("expected cross_session_memory to persist as true, got %v", loaded.Metadata.CrossSessionMemory)
 	}
 }
 

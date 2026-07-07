@@ -1,6 +1,7 @@
 package unit_tests
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -170,11 +171,106 @@ func TestTUIModelThemeToggle(t *testing.T) {
 
 func TestTUIModelUsageStatusRenders(t *testing.T) {
 	model := newTUI(t)
-	updated, _ := model.Update(tui.TokenUsageMsg{InputTokens: 1200, CacheCreationInputTokens: 200, CacheReadInputTokens: 800, OutputTokens: 250, MaxContextTokens: 1000000})
+	model.SetContextLimitFn(func() int64 { return 1000000 })
+	model.SetContextBaseFn(func() int64 { return 1900 })
+	updated, _ := model.Update(tui.TokenUsageMsg{EstimatedContextTokens: 1900, InputTokens: 1200, CacheCreationInputTokens: 200, CacheReadInputTokens: 800, OutputTokens: 250, MaxContextTokens: 1000000})
 	model = updated.(tui.Model)
 	view := model.View()
-	if !strings.Contains(view, "ctx 2.2k/1M") || !strings.Contains(view, "cache 800/200") || !strings.Contains(view, "out 250") {
+	if !strings.Contains(view, "/1M") || !strings.Contains(view, "ctx 2.") || !strings.Contains(view, "cache 800/200") || !strings.Contains(view, "out 250") {
 		t.Fatalf("expected usage status in view: %s", view)
+	}
+}
+
+func TestTUIModelUsageStatusAlwaysVisible(t *testing.T) {
+	model := newTUI(t)
+	model.SetContextLimitFn(func() int64 { return 1000000 })
+	model.SetContextBaseFn(func() int64 { return 1500 })
+	view := model.View()
+	if !strings.Contains(view, "/1M") || !strings.Contains(view, "ctx 1.") {
+		t.Fatalf("expected always-visible context usage in view: %s", view)
+	}
+}
+
+func TestTUIModelUsageStatusTracksLocalInput(t *testing.T) {
+	model := newTUI(t)
+	model.SetContextLimitFn(func() int64 { return 1000000 })
+	model.SetContextBaseFn(func() int64 { return 1500 })
+	before := model.View()
+	model, _ = setInputValue(model, "extra local prompt text")
+	after := model.View()
+	if before == after {
+		t.Fatalf("expected local input to affect view before=%q after=%q", before, after)
+	}
+	if !strings.Contains(after, "ctx ") {
+		t.Fatalf("expected context usage after local input: %s", after)
+	}
+}
+
+func TestTUIModelSlashEffortDoesNotSubmit(t *testing.T) {
+	submitted := false
+	model := tui.New(func(prompt string) (tea.Cmd, func()) {
+		submitted = true
+		return func() tea.Msg { return tui.StreamDoneMsg{} }, nil
+	})
+	model.SetDialogCallbacks(func(kind tui.DialogKind) []tui.DialogItem {
+		if kind != tui.DialogEffort {
+			return nil
+		}
+		return []tui.DialogItem{{Label: "low", Value: "low"}, {Label: "medium", Value: "medium"}, {Label: "high", Value: "high"}, {Label: "xhigh", Value: "xhigh"}, {Label: "max", Value: "max"}}
+	}, nil)
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	model = updated.(tui.Model)
+	model, _ = setInputValue(model, "/effort")
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(tui.Model)
+	view := model.View()
+	if submitted {
+		t.Fatal("expected /effort to be handled locally without submit")
+	}
+	if !strings.Contains(view, "Select Effort") {
+		t.Fatalf("expected effort dialog in view: %s", view)
+	}
+}
+
+func TestTUIModelSlashCompactAutocomplete(t *testing.T) {
+	model := newTUI(t)
+	model, _ = setInputValue(model, "/com")
+	view := model.View()
+	if !strings.Contains(view, "/compact") {
+		t.Fatalf("expected /compact autocomplete in view: %s", view)
+	}
+}
+
+func TestTUIModelAskUserDialogResponds(t *testing.T) {
+	model := newTUI(t)
+	responseCh := make(chan map[string]string, 1)
+	updated, _ := model.Update(tui.AskUserRequestMsg{
+		Questions: []tui.AskUserQuestion{{
+			Question: "Choose mode?",
+			Header:   "Mode",
+			Options:  []tui.AskUserOption{{Label: "Fast", Description: "quick"}, {Label: "Safe", Description: "careful"}},
+		}},
+		ResponseCh: responseCh,
+	})
+	model = updated.(tui.Model)
+	view := model.View()
+	if !strings.Contains(view, "Choose mode?") || !strings.Contains(view, "Fast") || !strings.Contains(view, "Safe") {
+		t.Fatalf("expected AskUser dialog in view: %s", view)
+	}
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = updated.(tui.Model)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(tui.Model)
+	select {
+	case answers := <-responseCh:
+		if answers["Choose mode?"] != "Safe" {
+			t.Fatalf("expected selected answer Safe, got %#v", answers)
+		}
+	default:
+		t.Fatal("expected AskUser answer on channel")
+	}
+	if strings.Contains(model.View(), "Choose mode?") {
+		t.Fatalf("expected AskUser dialog cleared: %s", model.View())
 	}
 }
 
@@ -226,6 +322,27 @@ func TestTUIModelSlashClearClearsTranscript(t *testing.T) {
 	}
 }
 
+func TestTUIModelSlashSkillSubmitsSkillPrompt(t *testing.T) {
+	submitted := ""
+	model := tui.New(func(prompt string) (tea.Cmd, func()) {
+		submitted = prompt
+		return func() tea.Msg { return tui.StreamDoneMsg{} }, nil
+	})
+	model.SetSkillNamesFn(func() []string { return []string{"review"} })
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	model = updated.(tui.Model)
+	model, _ = setInputValue(model, "/review auth changes")
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(tui.Model)
+	view := model.View()
+	if submitted != "Use the Skill tool with skill \"review\" and args \"auth changes\"." {
+		t.Fatalf("unexpected submitted prompt: %q", submitted)
+	}
+	if !strings.Contains(view, "/review auth changes") {
+		t.Fatalf("expected original slash command to remain visible in transcript: %s", view)
+	}
+}
+
 func TestTUIModelCtrlCCancelsActiveStream(t *testing.T) {
 	canceled := false
 	model := tui.New(func(prompt string) (tea.Cmd, func()) {
@@ -256,6 +373,87 @@ func TestTUIModelUserMessageMarker(t *testing.T) {
 	// simulate a user submit by appending via a custom submit that records
 	// we just check assistant marker presence; user marker tested via renderMessages indirectly
 	_ = model.View()
+}
+
+func TestTUIModelNewSessionShowsConfirmDialog(t *testing.T) {
+	handlerCalled := false
+	crossValue := false
+	model := tui.New(nil)
+	model.SetNewSessionHandler(func(name string, crossSessionMemory bool) tui.SelectResult {
+		handlerCalled = true
+		crossValue = crossSessionMemory
+		return tui.SelectResult{Message: fmt.Sprintf("created %s cross=%v", name, crossSessionMemory)}
+	})
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	model = updated.(tui.Model)
+	model, _ = setInputValue(model, "/new-session work")
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(tui.Model)
+	view := model.View()
+	if !strings.Contains(view, "cross-session memory") {
+		t.Fatalf("expected confirm dialog for cross-session memory: %s", view)
+	}
+	// Press 'y' to enable cross-session memory
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	model = updated.(tui.Model)
+	if !handlerCalled {
+		t.Fatal("expected new session handler to be called")
+	}
+	if !crossValue {
+		t.Fatal("expected cross-session memory to be true after pressing y")
+	}
+	view = model.View()
+	if !strings.Contains(view, "created work cross=true") {
+		t.Fatalf("expected result message in view: %s", view)
+	}
+}
+
+func TestTUIModelNewSessionDenyCrossSessionMemory(t *testing.T) {
+	handlerCalled := false
+	crossValue := true
+	model := tui.New(nil)
+	model.SetNewSessionHandler(func(name string, crossSessionMemory bool) tui.SelectResult {
+		handlerCalled = true
+		crossValue = crossSessionMemory
+		return tui.SelectResult{Message: "created"}
+	})
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	model = updated.(tui.Model)
+	model, _ = setInputValue(model, "/new-session test")
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(tui.Model)
+	// Press 'n' to deny cross-session memory
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	model = updated.(tui.Model)
+	if !handlerCalled {
+		t.Fatal("expected new session handler to be called")
+	}
+	if crossValue {
+		t.Fatal("expected cross-session memory to be false after pressing n")
+	}
+}
+
+func TestTUIModelNewSessionWithoutNameAutoGenerates(t *testing.T) {
+	calledName := ""
+	model := tui.New(nil)
+	model.SetNewSessionHandler(func(name string, crossSessionMemory bool) tui.SelectResult {
+		calledName = name
+		return tui.SelectResult{Message: "created"}
+	})
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	model = updated.(tui.Model)
+	model, _ = setInputValue(model, "/new-session")
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(tui.Model)
+	view := model.View()
+	if !strings.Contains(view, "cross-session memory") {
+		t.Fatalf("expected confirm dialog when no name supplied: %s", view)
+	}
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	model = updated.(tui.Model)
+	if !strings.HasPrefix(calledName, "session-") {
+		t.Fatalf("expected auto-generated session name, got %q", calledName)
+	}
 }
 
 func setInputValue(model tui.Model, value string) (tui.Model, tea.Cmd) {

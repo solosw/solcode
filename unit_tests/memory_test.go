@@ -93,3 +93,22 @@ func TestMemoryFileStoreUsesJSONFiles(t *testing.T) {
 		t.Fatalf("expected memory file %s", path)
 	}
 }
+
+func TestMemoryItemSourceSessionIDPersists(t *testing.T) {
+	ctx := context.Background()
+	store := memory.NewFileStore(t.TempDir())
+	_, _, err := store.Remember(ctx, "shared cross-session fact", "session-A")
+	if err != nil {
+		t.Fatalf("remember: %v", err)
+	}
+	items, err := store.List(ctx)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(items))
+	}
+	if items[0].SourceSessionID != "session-A" {
+		t.Fatalf("expected SourceSessionID session-A, got %q", items[0].SourceSessionID)
+	}
+}

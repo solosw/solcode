@@ -14,10 +14,10 @@ type AskUserParams struct {
 
 // Question represents a single question with multiple choice options.
 type Question struct {
-	Question   string            `json:"question"`
-	Header    string            `json:"header,omitempty"`
-	Options   []QuestionOption  `json:"options"`
-	MultiSelect bool            `json:"multi_select,omitempty"`
+	Question    string           `json:"question"`
+	Header      string           `json:"header,omitempty"`
+	Options     []QuestionOption `json:"options"`
+	MultiSelect bool             `json:"multi_select,omitempty"`
 }
 
 // QuestionOption is a selectable choice for a question.
@@ -29,8 +29,8 @@ type QuestionOption struct {
 
 // AskUserOutput is the structured output of an AskUser tool invocation.
 type AskUserOutput struct {
-	Questions []Question          `json:"questions"`
-	Answers  map[string]string   `json:"answers"`
+	Questions []Question        `json:"questions"`
+	Answers   map[string]string `json:"answers"`
 }
 
 // askUserTool allows the model to ask the user questions and gather responses.
@@ -38,13 +38,13 @@ type askUserTool struct {
 	BaseTool
 	// answers is a channel to receive user answers in interactive mode.
 	// In non-interactive mode, returns a placeholder.
-	answersCh chan map[string]string
+	answersCh   chan map[string]string
 	timeoutSecs int
 }
 
 const (
 	AskUserToolName = "AskUser"
-	AskUserTimeout = 300 // 5 minutes
+	AskUserTimeout  = 300 // 5 minutes
 )
 
 // NewAskUserTool creates a new AskUser tool.
@@ -52,7 +52,7 @@ const (
 func NewAskUserTool() Tool {
 	return &askUserTool{
 		timeoutSecs: AskUserTimeout,
-		answersCh:  make(chan map[string]string),
+		answersCh:   make(chan map[string]string),
 	}
 }
 
@@ -61,7 +61,7 @@ func (t *askUserTool) SetAnswersChannel(ch chan map[string]string) {
 	t.answersCh = ch
 }
 
-func (t *askUserTool) Name() string    { return AskUserToolName }
+func (t *askUserTool) Name() string      { return AskUserToolName }
 func (t *askUserTool) Aliases() []string { return []string{"AskUserQuestion"} }
 
 func (t *askUserTool) Description() string {
@@ -100,7 +100,7 @@ func (t *askUserTool) InputSchema() map[string]any {
 								"type": "object",
 								"properties": map[string]any{
 									"label":       map[string]string{"type": "string", "description": "Short display text (1-5 words)"},
-									"description":  map[string]string{"type": "string", "description": "What choosing this option means"},
+									"description": map[string]string{"type": "string", "description": "What choosing this option means"},
 									"preview":     map[string]string{"type": "string", "description": "Optional code/mockup preview shown side-by-side"},
 								},
 								"required": []string{"label", "description"},
@@ -153,7 +153,16 @@ func (t *askUserTool) Invoke(ctx context.Context, uctx *UseContext, input json.R
 		}
 	}
 
-	// Try to get answers from the channel (TUI interactive mode)
+	// In interactive mode, ask the TUI and wait for answers.
+	if uctx != nil && uctx.AskUser != nil {
+		answers, err := uctx.AskUser(ctx, params)
+		if err != nil {
+			return ErrorResult("AskUser failed: " + err.Error()), nil
+		}
+		return buildStructuredResult(params.Questions, answers), nil
+	}
+
+	// Try to get answers from the channel (legacy interactive mode)
 	select {
 	case answers := <-t.answersCh:
 		return buildStructuredResult(params.Questions, answers), nil

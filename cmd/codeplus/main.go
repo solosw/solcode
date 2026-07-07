@@ -18,6 +18,8 @@ import (
 	"github.com/solosw/codeplus-agent/internal/engine"
 	"github.com/solosw/codeplus-agent/internal/permission"
 	"github.com/solosw/codeplus-agent/internal/session"
+	"github.com/solosw/codeplus-agent/internal/skill"
+	"github.com/solosw/codeplus-agent/internal/tool"
 	"github.com/solosw/codeplus-agent/internal/tui"
 )
 
@@ -123,6 +125,7 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 	onUsage := func(usage engine.Usage) {
 		if program != nil {
 			program.Send(tui.TokenUsageMsg{
+				EstimatedContextTokens:   usage.EstimatedContextTokens,
 				InputTokens:              usage.InputTokens,
 				OutputTokens:             usage.OutputTokens,
 				CacheCreationInputTokens: usage.CacheCreationInputTokens,
@@ -131,11 +134,34 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 			})
 		}
 	}
+	onStatus := func(status string) {
+		if program != nil {
+			program.Send(tui.StatusTextMsg{Text: status})
+		}
+	}
+	onAskUser := func(ctx context.Context, params tool.AskUserParams) (map[string]string, error) {
+		if program == nil {
+			return nil, fmt.Errorf("AskUser is not available outside interactive TUI")
+		}
+		responseCh := make(chan map[string]string, 1)
+		program.Send(tui.AskUserRequestMsg{
+			Questions:  askUserQuestionsToTUI(params.Questions),
+			ResponseCh: responseCh,
+		})
+		select {
+		case answers := <-responseCh:
+			return answers, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 
 	application, err := app.New(cfg,
 		app.WithStreamCallbacks(onTextDelta, onThinkingDelta),
 		app.WithToolCallbacks(onToolStart, onToolDone),
 		app.WithUsageCallback(onUsage),
+		app.WithStatusCallback(onStatus),
+		app.WithAskUserCallback(onAskUser),
 	)
 	if err != nil {
 		return fmt.Errorf("create app: %w", err)
@@ -185,11 +211,11 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		cmd := func() tea.Msg {
 			defer cancel()
-			sessionID := cfg.Session.DefaultSession
-			if sessionID == "" {
-				sessionID = "main"
+			currentSessionID := cfg.Session.DefaultSession
+			if currentSessionID == "" {
+				currentSessionID = "main"
 			}
-			result, err := application.RunPromptWithSession(ctx, sessionID, prompt, cfg.WorkDir, maxTurns)
+			result, err := application.RunPromptWithSession(ctx, currentSessionID, prompt, cfg.WorkDir, maxTurns)
 			if errors.Is(ctx.Err(), context.Canceled) {
 				return tui.StreamCanceledMsg{Reason: "Canceled"}
 			}
@@ -204,6 +230,11 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 					return tui.StreamCanceledMsg{Reason: "Canceled"}
 				}
 				return tui.StreamErrorMsg{Err: fmt.Errorf("%s", result.Error)}
+			}
+			if application.Sessions != nil && program != nil {
+				if s, loadErr := application.Sessions.LoadOrCreate(context.Background(), sessionID(currentSessionID), cfg.WorkDir, cfg.Model); loadErr == nil && s != nil {
+					program.Send(tui.ReplaceMessagesMsg{Messages: chatMessagesFromSession(s)})
+				}
 			}
 			if result.Output != "" && !cfg.Stream {
 				program.Send(tui.StreamTextMsg{Text: result.Output})
@@ -224,17 +255,51 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 		}
 	}
 	model.SetModelNameFn(func() string { return cfg.Model })
+	model.SetContextBaseFn(func() int64 {
+		builder := engine.ContextBuilder{SystemPrompt: cfg.SystemPrompt, SkillNames: appSkillNames(application)}
+		return builder.EstimateContextTokens(engine.BuildRequest{WorkDir: cfg.WorkDir, Tools: application.Tools.All()})
+	})
+	model.SetContextLimitFn(func() int64 { return cfg.MaxContextTokens })
 	model.SetSlashCommandHandler(func(command, args string) string {
 		switch command {
 		case "sessions":
 			return handleSessionsCommand(&cfg, application)
-		case "new-session":
-			return handleNewSessionCommand(&cfg, application, args, persistencePath)
 		default:
 			return fmt.Sprintf("Unknown command: /%s. Try /help.", command)
 		}
 	})
-	modeNames := []string{"auto", "accept_edits", "bypass", "yolo", "plan"}
+	model.SetSlashCommandAsyncHandler(func(command, args string) tea.Cmd {
+		switch command {
+		case "compact":
+			return func() tea.Msg {
+				currentSessionID := cfg.Session.DefaultSession
+				if currentSessionID == "" {
+					currentSessionID = "main"
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), timeout)
+				defer cancel()
+				s, changed, err := application.CompactSession(ctx, currentSessionID, cfg.WorkDir)
+				if err != nil {
+					return tui.CommandResultMsg{Text: fmt.Sprintf("Compact failed: %v", err)}
+				}
+				if s != nil && program != nil {
+					program.Send(tui.ReplaceMessagesMsg{Messages: chatMessagesFromSession(s)})
+				}
+				if !changed {
+					return tui.CommandResultMsg{Text: "Compact skipped: current session is below the compaction threshold or has no older segment to compress."}
+				}
+				return tui.CommandResultMsg{Text: "Compacted current session."}
+			}
+		default:
+			return func() tea.Msg {
+				return tui.CommandResultMsg{Text: fmt.Sprintf("Unknown command: /%s. Try /help.", command)}
+			}
+		}
+	})
+	model.SetNewSessionHandler(func(name string, crossSessionMemory bool) tui.SelectResult {
+		return handleNewSessionCommand(&cfg, application, name, persistencePath, crossSessionMemory)
+	})
+	modeNames := []string{"auto", "accept_edits", "bypass", "plan"}
 	model.SetModeSwitchFn(modeNames, func(mode string) {
 		permissionMode := permission.Mode(mode)
 		application.Permissions.SetMode(permissionMode)
@@ -280,8 +345,23 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 				})
 			}
 			return providers
+		case tui.DialogEffort:
+			efforts := []string{"low", "medium", "high", "xhigh", "max"}
+			items := make([]tui.DialogItem, 0, len(efforts))
+			for _, effort := range efforts {
+				items = append(items, tui.DialogItem{
+					Label:   effort,
+					Current: cfg.Effort == effort,
+					Value:   effort,
+				})
+			}
+			return items
 		case tui.DialogSessions:
 			return sessionDialogItems(&cfg, application)
+		case tui.DialogSkills:
+			return skillDialogItems(&cfg, application)
+		case tui.DialogMCP:
+			return mcpDialogItems(&cfg)
 		}
 		return nil
 	}, func(kind tui.DialogKind, value string) tui.SelectResult {
@@ -290,14 +370,50 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 			return tui.SelectResult{Message: handleModelSwitch(&cfg, application, value, persistencePath)}
 		case tui.DialogProvider:
 			return tui.SelectResult{Message: handleProviderSwitch(&cfg, application, value, persistencePath)}
+		case tui.DialogEffort:
+			return tui.SelectResult{Message: handleEffortSwitch(&cfg, application, value, persistencePath)}
 		case tui.DialogSessions:
 			return handleSessionSwitch(&cfg, application, value, persistencePath)
+		case tui.DialogSkills:
+			return handleSkillToggleSelection(&cfg, application, value, persistencePath)
+		case tui.DialogMCP:
+			return handleMCPToggleSelection(&cfg, application, value, persistencePath)
 		}
 		return tui.SelectResult{Message: fmt.Sprintf("Selected: %s", value)}
+	})
+	model.SetSkillNamesFn(func() []string {
+		names := make([]string, 0)
+		if application.SkillRegistry != nil {
+			for _, def := range application.SkillRegistry.All() {
+				names = append(names, def.Name)
+			}
+		}
+		return names
 	})
 	program = tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	_, err = program.Run()
 	return err
+}
+
+func askUserQuestionsToTUI(questions []tool.Question) []tui.AskUserQuestion {
+	out := make([]tui.AskUserQuestion, 0, len(questions))
+	for _, q := range questions {
+		options := make([]tui.AskUserOption, 0, len(q.Options))
+		for _, opt := range q.Options {
+			options = append(options, tui.AskUserOption{
+				Label:       opt.Label,
+				Description: opt.Description,
+				Preview:     opt.Preview,
+			})
+		}
+		out = append(out, tui.AskUserQuestion{
+			Question:    q.Question,
+			Header:      q.Header,
+			Options:     options,
+			MultiSelect: q.MultiSelect,
+		})
+	}
+	return out
 }
 
 func handleModelSwitch(cfg *config.Config, application *app.App, modelValue, persistencePath string) string {
@@ -328,6 +444,26 @@ func handleProviderSwitch(cfg *config.Config, application *app.App, providerName
 	message := fmt.Sprintf("Switched provider to %s. Model is now %s.", next.Provider, next.Model)
 	if err := config.SaveLocalOverrides(persistencePath, map[string]any{"provider": providerName}); err != nil {
 		message += fmt.Sprintf("\nWarning: could not persist provider selection: %v", err)
+	}
+	return message
+}
+
+func handleEffortSwitch(cfg *config.Config, application *app.App, effort, persistencePath string) string {
+	effort = strings.ToLower(strings.TrimSpace(effort))
+	switch effort {
+	case "low", "medium", "high", "xhigh", "max":
+	default:
+		return fmt.Sprintf("Could not switch effort to %q: invalid effort", effort)
+	}
+	next := *cfg
+	next.Effort = effort
+	if err := application.SwitchModel(next); err != nil {
+		return fmt.Sprintf("Could not switch effort to %q: %v", effort, err)
+	}
+	*cfg = next
+	message := fmt.Sprintf("Switched effort to %s.", effort)
+	if err := config.SaveLocalOverrides(persistencePath, map[string]any{"effort": effort}); err != nil {
+		message += fmt.Sprintf("\nWarning: could not persist effort selection: %v", err)
 	}
 	return message
 }
@@ -366,6 +502,55 @@ func sessionDialogItems(cfg *config.Config, application *app.App) []tui.DialogIt
 	return items
 }
 
+func skillDialogItems(cfg *config.Config, application *app.App) []tui.DialogItem {
+	registry := skill.LoadFromDirs(cfg.Skills.Paths...)
+	defs := registry.All()
+	items := make([]tui.DialogItem, 0, len(defs))
+	for _, def := range defs {
+		enabled := application != nil && application.SkillRegistry != nil
+		if enabled {
+			_, enabled = application.SkillRegistry.Find(def.Name)
+		}
+		status := "disabled"
+		if enabled {
+			status = "enabled"
+		}
+		subtitle := fmt.Sprintf("%s · %s", status, def.Source)
+		items = append(items, tui.DialogItem{
+			Label:    def.Name,
+			Subtitle: subtitle,
+			Current:  enabled,
+			Value:    def.Name,
+		})
+	}
+	return items
+}
+
+func mcpDialogItems(cfg *config.Config) []tui.DialogItem {
+	items := make([]tui.DialogItem, 0, len(cfg.MCP.Servers))
+	for _, server := range cfg.MCP.Servers {
+		status := "enabled"
+		if server.Disabled {
+			status = "disabled"
+		}
+		detail := server.URL
+		if detail == "" {
+			detail = server.Command
+		}
+		subtitle := fmt.Sprintf("%s · %s", status, server.Transport)
+		if strings.TrimSpace(detail) != "" {
+			subtitle += " · " + detail
+		}
+		items = append(items, tui.DialogItem{
+			Label:    server.Name,
+			Subtitle: subtitle,
+			Current:  !server.Disabled,
+			Value:    server.Name,
+		})
+	}
+	return items
+}
+
 func handleSessionSwitch(cfg *config.Config, application *app.App, sessionName, persistencePath string) tui.SelectResult {
 	sessionName = strings.TrimSpace(sessionName)
 	if sessionName == "" {
@@ -387,6 +572,94 @@ func handleSessionSwitch(cfg *config.Config, application *app.App, sessionName, 
 		Messages:        messages,
 		ReplaceMessages: true,
 	}
+}
+
+func handleSkillToggleSelection(cfg *config.Config, application *app.App, skillName, persistencePath string) tui.SelectResult {
+	skillName = strings.TrimSpace(skillName)
+	if skillName == "" {
+		return tui.SelectResult{Message: "Skill name is required."}
+	}
+	if application == nil {
+		return tui.SelectResult{Message: "Application is not available."}
+	}
+	next := *cfg
+	currentlyEnabled := false
+	if application != nil && application.SkillRegistry != nil {
+		_, currentlyEnabled = application.SkillRegistry.Find(skillName)
+	}
+	if currentlyEnabled {
+		next.Skills.Disabled = appendUnique(next.Skills.Disabled, skillName)
+		next.Skills.Enabled = removeString(next.Skills.Enabled, skillName)
+	} else {
+		registry := skill.LoadFromDirs(next.Skills.Paths...)
+		if _, ok := registry.Find(skillName); !ok {
+			return tui.SelectResult{Message: fmt.Sprintf("Skill %q is not available in configured skill directories.", skillName)}
+		}
+		next.Skills.Disabled = removeString(next.Skills.Disabled, skillName)
+		if len(next.Skills.Enabled) > 0 {
+			next.Skills.Enabled = appendUnique(next.Skills.Enabled, skillName)
+		}
+	}
+	if err := next.Normalize(); err != nil {
+		return tui.SelectResult{Message: fmt.Sprintf("Could not update skill %q: %v", skillName, err)}
+	}
+	if err := application.ReloadFeatures(next, nil); err != nil {
+		return tui.SelectResult{Message: fmt.Sprintf("Could not reload skills after updating %q: %v", skillName, err)}
+	}
+	*cfg = next
+	message := fmt.Sprintf("Disabled skill %s.", skillName)
+	if !currentlyEnabled {
+		message = fmt.Sprintf("Enabled skill %s.", skillName)
+	}
+	if err := config.SaveLocalOverrides(persistencePath, map[string]any{"skills": map[string]any{"enabled": next.Skills.Enabled, "disabled": next.Skills.Disabled}}); err != nil {
+		message += fmt.Sprintf("\nWarning: could not persist skill toggle: %v", err)
+	}
+	return tui.SelectResult{Message: message}
+}
+
+func handleMCPToggleSelection(cfg *config.Config, application *app.App, serverName, persistencePath string) tui.SelectResult {
+	serverName = strings.TrimSpace(serverName)
+	if serverName == "" {
+		return tui.SelectResult{Message: "MCP server name is required."}
+	}
+	if application == nil {
+		return tui.SelectResult{Message: "Application is not available."}
+	}
+	next := *cfg
+	servers := configCloneMCPServers(next.MCP.Servers)
+	index := -1
+	for i := range servers {
+		if servers[i].Name == serverName {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		return tui.SelectResult{Message: fmt.Sprintf("MCP server %q not found.", serverName)}
+	}
+	servers[index].Disabled = !servers[index].Disabled
+	if !servers[index].Disabled {
+		if err := application.CheckMCPServer(servers[index], nil); err != nil {
+			return tui.SelectResult{Message: fmt.Sprintf("Could not enable MCP server %q: %v", serverName, err)}
+		}
+	}
+	next.MCP.Servers = servers
+	next.MCPServers = configCloneMCPServers(servers)
+	if err := next.Normalize(); err != nil {
+		return tui.SelectResult{Message: fmt.Sprintf("Could not update MCP server %q: %v", serverName, err)}
+	}
+	if err := application.ReloadFeatures(next, nil); err != nil {
+		return tui.SelectResult{Message: fmt.Sprintf("Could not reload MCP after updating %q: %v", serverName, err)}
+	}
+	*cfg = next
+	message := fmt.Sprintf("Enabled MCP server %s.", serverName)
+	if servers[index].Disabled {
+		message = fmt.Sprintf("Disabled MCP server %s.", serverName)
+	}
+	if err := config.SaveLocalOverrides(persistencePath, map[string]any{"mcp": map[string]any{"servers": next.MCP.Servers}}); err != nil {
+		message += fmt.Sprintf("\nWarning: could not persist MCP toggle: %v", err)
+	}
+	return tui.SelectResult{Message: message}
 }
 
 func chatMessagesFromSession(s *session.Session) []tui.ChatMessage {
@@ -481,9 +754,9 @@ func handleSessionsCommand(cfg *config.Config, application *app.App) string {
 	return strings.Join(lines, "\n")
 }
 
-func handleNewSessionCommand(cfg *config.Config, application *app.App, args, persistencePath string) string {
+func handleNewSessionCommand(cfg *config.Config, application *app.App, args, persistencePath string, crossSessionMemory bool) tui.SelectResult {
 	if application == nil || application.Sessions == nil {
-		return "Sessions are not enabled."
+		return tui.SelectResult{Message: "Sessions are not enabled."}
 	}
 	name := strings.TrimSpace(args)
 	if name == "" {
@@ -491,19 +764,31 @@ func handleNewSessionCommand(cfg *config.Config, application *app.App, args, per
 	}
 	name = sanitizeSessionName(name)
 	if name == "" {
-		return "Session name is required."
+		return tui.SelectResult{Message: "Session name is required."}
 	}
 	s, err := application.Sessions.LoadOrCreate(context.Background(), sessionID(name), cfg.WorkDir, cfg.Model)
 	if err != nil {
-		return fmt.Sprintf("Could not create session %q: %v", name, err)
+		return tui.SelectResult{Message: fmt.Sprintf("Could not create session %q: %v", name, err)}
 	}
 	s.Metadata.Title = name
+	s.Metadata.CrossSessionMemory = &crossSessionMemory
 	if err := application.Sessions.Save(context.Background(), s); err != nil {
-		return fmt.Sprintf("Could not save session %q: %v", name, err)
+		return tui.SelectResult{Message: fmt.Sprintf("Could not save session %q: %v", name, err)}
 	}
 	cfg.Session.DefaultSession = name
 	application.Config.Session.DefaultSession = name
-	return persistDefaultSessionMessage(fmt.Sprintf("Started new session: %s", name), persistencePath, name)
+	messages := []tui.ChatMessage{{Role: "system", Content: fmt.Sprintf("Started new session: %s", name), TimeStamp: time.Now()}}
+	if len(s.Messages) == 0 {
+		messages = append(messages, tui.ChatMessage{Role: "system", Content: "New session created.", TimeStamp: time.Now()})
+	} else {
+		messages = append(messages, chatMessagesFromSession(s)...)
+	}
+	message := persistDefaultSessionMessage(fmt.Sprintf("Started new session: %s (cross-session memory: %v)", name, crossSessionMemory), persistencePath, name)
+	return tui.SelectResult{
+		Message:         message,
+		Messages:        messages,
+		ReplaceMessages: true,
+	}
 }
 
 func persistDefaultSessionMessage(message, persistencePath, sessionName string) string {
@@ -529,6 +814,67 @@ func sanitizeSessionName(value string) string {
 		}
 	}
 	return b.String()
+}
+
+func appendUnique(values []string, value string) []string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return values
+	}
+	for _, existing := range values {
+		if existing == value {
+			return values
+		}
+	}
+	return append(values, value)
+}
+
+func removeString(values []string, target string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value != target {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func appSkillNames(application *app.App) []string {
+	if application == nil || application.SkillRegistry == nil {
+		return nil
+	}
+	defs := application.SkillRegistry.All()
+	out := make([]string, 0, len(defs))
+	for _, def := range defs {
+		out = append(out, def.Name)
+	}
+	return out
+}
+
+func configCloneMCPServers(servers []config.MCPServerConfig) []config.MCPServerConfig {
+	if len(servers) == 0 {
+		return nil
+	}
+	out := make([]config.MCPServerConfig, len(servers))
+	copy(out, servers)
+	for i := range out {
+		out[i].Args = append([]string(nil), out[i].Args...)
+		if len(out[i].Headers) > 0 {
+			headers := make(map[string]string, len(out[i].Headers))
+			for k, v := range out[i].Headers {
+				headers[k] = v
+			}
+			out[i].Headers = headers
+		}
+		if len(out[i].Env) > 0 {
+			env := make(map[string]string, len(out[i].Env))
+			for k, v := range out[i].Env {
+				env[k] = v
+			}
+			out[i].Env = env
+		}
+	}
+	return out
 }
 
 func sessionID(value string) session.SessionID {

@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/solosw/codeplus-agent/internal/tokenest"
 )
 
 type SubmitFunc func(prompt string) (tea.Cmd, func())
@@ -19,8 +20,12 @@ type StreamThinkingMsg struct{ Text string }
 type StreamDoneMsg struct{}
 type StreamCanceledMsg struct{ Reason string }
 type StreamErrorMsg struct{ Err error }
+type StatusTextMsg struct{ Text string }
+type CommandResultMsg struct{ Text string }
+type ReplaceMessagesMsg struct{ Messages []ChatMessage }
 
 type TokenUsageMsg struct {
+	EstimatedContextTokens   int64
 	InputTokens              int64
 	OutputTokens             int64
 	CacheCreationInputTokens int64
@@ -54,6 +59,24 @@ type PermissionRequestMsg struct {
 	ResponseCh  chan<- bool
 }
 
+type AskUserOption struct {
+	Label       string
+	Description string
+	Preview     string
+}
+
+type AskUserQuestion struct {
+	Question    string
+	Header      string
+	Options     []AskUserOption
+	MultiSelect bool
+}
+
+type AskUserRequestMsg struct {
+	Questions  []AskUserQuestion
+	ResponseCh chan<- map[string]string
+}
+
 type ChatMessage struct {
 	Role      string
 	Content   string
@@ -69,13 +92,30 @@ type pendingPermission struct {
 	responseCh  chan<- bool
 }
 
+type pendingConfirm struct {
+	question string
+	resolve  func(bool) SelectResult
+}
+
+type pendingAskUser struct {
+	questions  []AskUserQuestion
+	index      int
+	selected   int
+	checked    map[int]map[int]bool
+	answers    map[string]string
+	responseCh chan<- map[string]string
+}
+
 type DialogKind int
 
 const (
 	DialogNone DialogKind = iota
 	DialogModel
 	DialogProvider
+	DialogEffort
 	DialogSessions
+	DialogSkills
+	DialogMCP
 )
 
 type DialogItem struct {
@@ -139,6 +179,7 @@ type AgentActivity struct {
 }
 
 type TokenUsage struct {
+	EstimatedContextTokens   int64
 	InputTokens              int64
 	OutputTokens             int64
 	CacheCreationInputTokens int64
@@ -163,6 +204,8 @@ type Model struct {
 	tokenUsage      TokenUsage
 
 	pending      *pendingPermission
+	pendingConf  *pendingConfirm
+	pendingAsk   *pendingAskUser
 	dialog       *DialogState
 	autocomplete *AutocompleteState
 
@@ -186,12 +229,17 @@ type Model struct {
 	selectAllMode bool
 
 	// Permission mode
-	permissionMode string
-	modeNames      []string
-	modeSwitchFn   func(mode string)
-	slashHandler   SlashCommandHandler
-	itemsFunc      ModelItemsFunc
-	selectFunc     SelectFunc
+	permissionMode    string
+	modeNames         []string
+	modeSwitchFn      func(mode string)
+	slashHandler      SlashCommandHandler
+	slashAsyncHandler SlashCommandAsyncHandler
+	newSessionHandler NewSessionHandler
+	itemsFunc         ModelItemsFunc
+	selectFunc        SelectFunc
+	skillNamesFn      func() []string
+	contextBaseFn     func() int64
+	contextLimitFn    func() int64
 }
 
 type spinnerTickMsg time.Time
@@ -240,6 +288,14 @@ func (m *Model) SetSlashCommandHandler(handler SlashCommandHandler) {
 	m.slashHandler = handler
 }
 
+func (m *Model) SetSlashCommandAsyncHandler(handler SlashCommandAsyncHandler) {
+	m.slashAsyncHandler = handler
+}
+
+func (m *Model) SetNewSessionHandler(handler NewSessionHandler) {
+	m.newSessionHandler = handler
+}
+
 func (m *Model) SetDialogCallbacks(itemsFn ModelItemsFunc, selectFn SelectFunc) {
 	m.itemsFunc = itemsFn
 	m.selectFunc = selectFn
@@ -249,8 +305,20 @@ func (m *Model) SetModelName(name string) {
 	m.modelName = name
 }
 
+func (m *Model) SetSkillNamesFn(fn func() []string) {
+	m.skillNamesFn = fn
+}
+
 func (m *Model) SetModelNameFn(fn func() string) {
 	m.modelNameFn = fn
+}
+
+func (m *Model) SetContextBaseFn(fn func() int64) {
+	m.contextBaseFn = fn
+}
+
+func (m *Model) SetContextLimitFn(fn func() int64) {
+	m.contextLimitFn = fn
 }
 
 func (m *Model) ReplaceMessages(messages []ChatMessage) {
@@ -347,6 +415,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.selectAllMode {
 			return m.handleSelectAllKey(msg.String())
 		}
+		if m.pendingConf != nil {
+			return m.handleConfirmKey(msg.String())
+		}
+		if m.pendingAsk != nil {
+			return m.handleAskUserKey(msg.String())
+		}
 		if m.dialog != nil && m.dialog.Active != DialogNone {
 			return m.handleDialogKey(msg.String())
 		}
@@ -408,8 +482,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				m.saveToHistory(prompt)
 				m.input.Reset()
-				if m.handleSlashCommand(prompt) {
-					return m, nil
+				if handled, cmd := m.handleSlashCommand(prompt); handled {
+					return m, cmd
+				}
+				submitPrompt := prompt
+				if skillPrompt, ok := m.slashSkillPrompt(prompt); ok {
+					submitPrompt = skillPrompt
 				}
 				m.messages = append(m.messages, ChatMessage{Role: "user", Content: prompt, TimeStamp: time.Now()})
 				m.streaming = true
@@ -422,7 +500,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.submit == nil {
 					return m, func() tea.Msg { return StreamErrorMsg{Err: fmt.Errorf("submit function is not configured")} }
 				}
-				cmd, cancel := m.submit(prompt)
+				cmd, cancel := m.submit(submitPrompt)
 				m.cancelCurrent = cancel
 				return m, tea.Batch(cmd, m.nextSpinnerTick())
 			}
@@ -460,8 +538,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.refreshViewport()
 		return m, nil
+	case StatusTextMsg:
+		text := strings.TrimSpace(msg.Text)
+		if text == "" {
+			m.status = "Ready"
+		} else {
+			m.status = text
+		}
+		m.refreshViewport()
+		return m, nil
+	case CommandResultMsg:
+		m.spinnerActive = false
+		m.loadingStart = time.Time{}
+		m.status = "Ready"
+		m.appendCommandResult(msg.Text)
+		m.refreshViewport()
+		return m, nil
+	case ReplaceMessagesMsg:
+		m.messages = append([]ChatMessage(nil), msg.Messages...)
+		m.refreshViewport()
+		return m, nil
 	case TokenUsageMsg:
 		m.tokenUsage = TokenUsage{
+			EstimatedContextTokens:   msg.EstimatedContextTokens,
 			InputTokens:              msg.InputTokens,
 			OutputTokens:             msg.OutputTokens,
 			CacheCreationInputTokens: msg.CacheCreationInputTokens,
@@ -498,6 +597,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.resize()
 		m.refreshViewport()
 		return m, nil
+	case AskUserRequestMsg:
+		m.pendingAsk = &pendingAskUser{
+			questions:  append([]AskUserQuestion(nil), msg.Questions...),
+			checked:    map[int]map[int]bool{},
+			answers:    map[string]string{},
+			responseCh: msg.ResponseCh,
+		}
+		m.status = "Input required"
+		m.resize()
+		m.refreshViewport()
+		return m, nil
 	case AgentStatusMsg:
 		m.updateAgentActivity(msg)
 		m.resize()
@@ -505,7 +615,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	if m.pending != nil || (m.dialog != nil && m.dialog.Active != DialogNone) || m.autocomplete != nil || m.selectAllMode {
+	if m.pendingConf != nil || m.pendingAsk != nil || m.pending != nil || (m.dialog != nil && m.dialog.Active != DialogNone) || m.autocomplete != nil || m.selectAllMode {
 		return m, nil
 	}
 	var cmds []tea.Cmd
@@ -650,7 +760,7 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 // Permission mode cycling
 func (m *Model) cyclePermissionMode() {
 	if len(m.modeNames) == 0 {
-		m.modeNames = []string{"auto", "accept_edits", "bypass", "yolo", "plan"}
+		m.modeNames = []string{"auto", "accept_edits", "bypass", "plan"}
 	}
 	if m.modeSwitchFn == nil {
 		return
@@ -688,6 +798,18 @@ func (m Model) handleCtrlC() (tea.Model, tea.Cmd) {
 		m.canceling = true
 		m.status = "Canceling…"
 		m.activeToolName = ""
+		m.refreshViewport()
+		return m, nil
+	}
+	if m.pendingConf != nil {
+		m.pendingConf = nil
+		m.status = "Ready"
+		m.refreshViewport()
+		return m, nil
+	}
+	if m.pendingAsk != nil {
+		m.resolveAskUser(nil)
+		m.status = "Ready"
 		m.refreshViewport()
 		return m, nil
 	}
@@ -800,7 +922,10 @@ func (m *Model) updateAutocomplete() tea.Cmd {
 		return nil
 	}
 	prefix := strings.TrimPrefix(value, "/")
-	commands := []string{"help", "clear", "model", "provider", "sessions", "new-session"}
+	commands := []string{"help", "clear", "model", "provider", "effort", "sessions", "compact", "new-session", "skills", "mcp"}
+	if m.skillNamesFn != nil {
+		commands = append(commands, m.skillNamesFn()...)
+	}
 	var matches []string
 	for _, cmd := range commands {
 		if strings.HasPrefix(cmd, prefix) && cmd != prefix {
@@ -866,6 +991,123 @@ func (m *Model) resolvePermission(allowed bool) {
 	m.pending = nil
 	select {
 	case responseCh <- allowed:
+	default:
+	}
+}
+
+func (m *Model) handleConfirmKey(key string) (tea.Model, tea.Cmd) {
+	pc := m.pendingConf
+	m.pendingConf = nil
+	switch strings.ToLower(key) {
+	case "y", "enter":
+		m.status = "Ready"
+		if pc != nil && pc.resolve != nil {
+			m.applySelectResult(pc.resolve(true))
+		}
+		m.resize()
+		m.refreshViewport()
+		return *m, nil
+	case "n", "esc", "ctrl+c":
+		m.status = "Ready"
+		if pc != nil && pc.resolve != nil {
+			m.applySelectResult(pc.resolve(false))
+		}
+		m.resize()
+		m.refreshViewport()
+		return *m, nil
+	}
+	m.pendingConf = pc
+	return *m, nil
+}
+
+func (m *Model) ShowConfirm(question string, resolve func(bool) SelectResult) {
+	m.pendingConf = &pendingConfirm{question: question, resolve: resolve}
+	m.status = "Confirm"
+	m.resize()
+	m.refreshViewport()
+}
+
+func (m Model) handleAskUserKey(key string) (tea.Model, tea.Cmd) {
+	task := m.pendingAsk
+	if task == nil || len(task.questions) == 0 {
+		return m, nil
+	}
+	q := task.questions[task.index]
+	switch strings.ToLower(key) {
+	case "up", "k":
+		if task.selected > 0 {
+			task.selected--
+		}
+	case "down", "j":
+		if task.selected < len(q.Options)-1 {
+			task.selected++
+		}
+	case " ", "spacebar":
+		if q.MultiSelect && len(q.Options) > 0 {
+			if task.checked[task.index] == nil {
+				task.checked[task.index] = map[int]bool{}
+			}
+			task.checked[task.index][task.selected] = !task.checked[task.index][task.selected]
+		}
+	case "enter":
+		m.acceptAskUserAnswer()
+	case "esc", "ctrl+c":
+		m.resolveAskUser(nil)
+		m.status = "Ready"
+	}
+	m.resize()
+	m.refreshViewport()
+	return m, nil
+}
+
+func (m *Model) acceptAskUserAnswer() {
+	task := m.pendingAsk
+	if task == nil || task.index >= len(task.questions) {
+		return
+	}
+	q := task.questions[task.index]
+	answer := ""
+	if q.MultiSelect {
+		labels := []string{}
+		for i, opt := range q.Options {
+			if task.checked[task.index] != nil && task.checked[task.index][i] {
+				labels = append(labels, opt.Label)
+			}
+		}
+		answer = strings.Join(labels, ", ")
+	}
+	if answer == "" && len(q.Options) > 0 {
+		idx := min(max(task.selected, 0), len(q.Options)-1)
+		answer = q.Options[idx].Label
+	}
+	if task.answers == nil {
+		task.answers = map[string]string{}
+	}
+	task.answers[q.Question] = answer
+	if task.index+1 >= len(task.questions) {
+		m.resolveAskUser(task.answers)
+		m.status = "Ready"
+		return
+	}
+	task.index++
+	task.selected = 0
+	m.status = "Input required"
+}
+
+func (m *Model) resolveAskUser(answers map[string]string) {
+	if m.pendingAsk == nil {
+		return
+	}
+	responseCh := m.pendingAsk.responseCh
+	m.pendingAsk = nil
+	if responseCh == nil {
+		return
+	}
+	if answers == nil {
+		answers = map[string]string{}
+	}
+	select {
+	case responseCh <- answers:
 	default:
 	}
 }
@@ -985,6 +1227,12 @@ func (m Model) View() string {
 		parts = append(parts, m.renderAutocomplete())
 	}
 	parts = append(parts, m.renderStatusBar(), m.renderInput())
+	if m.pendingConf != nil {
+		parts = append(parts, m.renderConfirmDialog())
+	}
+	if m.pendingAsk != nil {
+		parts = append(parts, m.renderAskUserDialog())
+	}
 	if m.dialog != nil && m.dialog.Active != DialogNone {
 		parts = append(parts, m.renderDialog())
 	}
@@ -1050,24 +1298,16 @@ func (m Model) renderStatusBar() string {
 
 func (m Model) renderUsageStatus() string {
 	usage := m.tokenUsage
-	if usage.InputTokens == 0 && usage.OutputTokens == 0 && usage.CacheCreationInputTokens == 0 && usage.CacheReadInputTokens == 0 {
-		return ""
-	}
+	used := m.localEstimatedContextTokens()
+	limit := m.currentContextLimit()
+	parts := []string{fmt.Sprintf("ctx %s/%s", compactTokens(used), renderContextLimit(limit))}
 	cacheWrite := usage.CacheCreationInputTokens
 	cacheRead := usage.CacheReadInputTokens
-	contextTokens := usage.InputTokens + cacheWrite + cacheRead
-	parts := []string{}
-	if usage.MaxContextTokens > 0 {
-		parts = append(parts, fmt.Sprintf("ctx %s/%s", compactTokens(contextTokens), compactTokens(usage.MaxContextTokens)))
-	}
 	if cacheRead > 0 || cacheWrite > 0 {
 		parts = append(parts, fmt.Sprintf("cache %s/%s", compactTokens(cacheRead), compactTokens(cacheWrite)))
 	}
 	if usage.OutputTokens > 0 {
 		parts = append(parts, fmt.Sprintf("out %s", compactTokens(usage.OutputTokens)))
-	}
-	if len(parts) == 0 {
-		parts = append(parts, fmt.Sprintf("in %s", compactTokens(usage.InputTokens)))
 	}
 	return strings.Join(parts, " · ")
 }
@@ -1086,6 +1326,64 @@ func compactTokens(value int64) string {
 		return fmt.Sprintf("%.1fk", float64(value)/1_000)
 	}
 	return fmt.Sprintf("%d", value)
+}
+
+func renderContextLimit(value int64) string {
+	if value <= 0 {
+		return "?"
+	}
+	return compactTokens(value)
+}
+
+func (m Model) currentContextLimit() int64 {
+	if m.contextLimitFn != nil {
+		if value := m.contextLimitFn(); value > 0 {
+			return value
+		}
+	}
+	if m.tokenUsage.MaxContextTokens > 0 {
+		return m.tokenUsage.MaxContextTokens
+	}
+	return 0
+}
+
+func (m Model) localEstimatedContextTokens() int64 {
+	base := int64(0)
+	if m.contextBaseFn != nil {
+		base = m.contextBaseFn()
+	}
+	var b strings.Builder
+	for _, msg := range m.messages {
+		content := strings.TrimSpace(msg.Content)
+		if content == "" {
+			continue
+		}
+		role := strings.TrimSpace(msg.Role)
+		switch role {
+		case "tool":
+			role = "assistant"
+			if strings.TrimSpace(msg.ToolName) != "" {
+				content = "[tool use: " + strings.TrimSpace(msg.ToolName) + "]\n" + content
+			}
+		case "tool-done":
+			role = "user"
+			content = "[tool result]\n" + content
+		case "error", "system", "agent":
+			role = "assistant"
+		}
+		if role != "" {
+			b.WriteString(role)
+			b.WriteString(": ")
+		}
+		b.WriteString(content)
+		b.WriteString("\n")
+	}
+	input := strings.TrimSpace(m.input.Value())
+	if input != "" {
+		b.WriteString("user: ")
+		b.WriteString(input)
+	}
+	return base + int64(tokenest.Text(b.String()))
 }
 
 func (m Model) renderAutocomplete() string {
@@ -1144,8 +1442,17 @@ func (m *Model) ShowDialog(kind DialogKind) {
 	if kind == DialogProvider {
 		title = "Select Provider"
 	}
+	if kind == DialogEffort {
+		title = "Select Effort"
+	}
 	if kind == DialogSessions {
 		title = "Select Session"
+	}
+	if kind == DialogSkills {
+		title = "Toggle Skill"
+	}
+	if kind == DialogMCP {
+		title = "Toggle MCP Server"
 	}
 	m.dialog = &DialogState{
 		Active:   kind,
@@ -1163,6 +1470,61 @@ func (m Model) renderPermissionDialog() string {
 	desc := truncate(strings.TrimSpace(m.pending.description), 600)
 	hint := t.PermHint.Render("[y] Allow   [n] Deny")
 	body := strings.Join([]string{title, "", "Tool: " + tool, desc, "", hint}, "\n")
+	return t.PermBorder.Width(max(1, m.width-2)).Render(body)
+}
+
+func (m Model) renderConfirmDialog() string {
+	t := m.theme
+	title := t.PermTitle.Render("Confirm")
+	question := truncate(strings.TrimSpace(m.pendingConf.question), 600)
+	hint := t.PermHint.Render("[y] Yes   [n] No")
+	body := strings.Join([]string{title, "", question, "", hint}, "\n")
+	return t.PermBorder.Width(max(1, m.width-2)).Render(body)
+}
+
+func (m Model) renderAskUserDialog() string {
+	t := m.theme
+	ask := m.pendingAsk
+	if ask == nil || len(ask.questions) == 0 {
+		return ""
+	}
+	q := ask.questions[ask.index]
+	titleText := "Question"
+	if strings.TrimSpace(q.Header) != "" {
+		titleText = q.Header
+	}
+	if len(ask.questions) > 1 {
+		titleText = fmt.Sprintf("%s %d/%d", titleText, ask.index+1, len(ask.questions))
+	}
+	title := t.PermTitle.Render(titleText)
+	lines := []string{title, "", truncate(strings.TrimSpace(q.Question), 600), ""}
+	for i, opt := range q.Options {
+		marker := "  "
+		if i == ask.selected {
+			marker = t.ClaudeStyle.Render("❯ ")
+		}
+		check := ""
+		if q.MultiSelect {
+			check = "[ ] "
+			if ask.checked[ask.index] != nil && ask.checked[ask.index][i] {
+				check = "[x] "
+			}
+		}
+		line := marker + check + opt.Label
+		if strings.TrimSpace(opt.Description) != "" {
+			line += " — " + t.Dim.Render(opt.Description)
+		}
+		lines = append(lines, line)
+		if strings.TrimSpace(opt.Preview) != "" {
+			lines = append(lines, "    "+t.Dim.Render(truncate(oneLine(opt.Preview), max(20, m.width-8))))
+		}
+	}
+	hint := "[↑/↓] Navigate  [Enter] Select  [Esc] Cancel"
+	if q.MultiSelect {
+		hint = "[↑/↓] Navigate  [Space] Toggle  [Enter] Submit  [Esc] Cancel"
+	}
+	lines = append(lines, "", t.PermHint.Render(hint))
+	body := strings.Join(lines, "\n")
 	return t.PermBorder.Width(max(1, m.width-2)).Render(body)
 }
 

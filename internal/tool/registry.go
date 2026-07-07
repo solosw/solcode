@@ -24,6 +24,13 @@ func (r *Registry) Register(tools ...Tool) {
 	r.tools = append(r.tools, tools...)
 }
 
+// ReplaceAll replaces the registry contents with the given tools.
+func (r *Registry) ReplaceAll(tools []Tool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.tools = append([]Tool(nil), tools...)
+}
+
 // All returns every registered tool sorted by name (stable ordering
 // important for prompt cache stability).
 func (r *Registry) All() []Tool {

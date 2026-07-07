@@ -13,12 +13,13 @@ import (
 type SessionID string
 
 type Metadata struct {
-	ID        SessionID `json:"id"`
-	Title     string    `json:"title,omitempty"`
-	WorkDir   string    `json:"work_dir,omitempty"`
-	Model     string    `json:"model,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID                 SessionID `json:"id"`
+	Title              string    `json:"title,omitempty"`
+	WorkDir            string    `json:"work_dir,omitempty"`
+	Model              string    `json:"model,omitempty"`
+	CrossSessionMemory *bool     `json:"cross_session_memory,omitempty"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
 }
 
 type Session struct {

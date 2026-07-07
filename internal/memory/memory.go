@@ -18,6 +18,10 @@ import (
 
 type Tier string
 
+type Kind string
+
+type Scope string
+
 const (
 	TierSensory    Tier = "M1"
 	TierWorking    Tier = "M2"
@@ -26,17 +30,41 @@ const (
 	TierProcedural Tier = "M5"
 )
 
+const (
+	KindFact       Kind = "fact"
+	KindPreference Kind = "preference"
+	KindConstraint Kind = "constraint"
+	KindTask       Kind = "task"
+	KindWorkflow   Kind = "workflow"
+)
+
+const (
+	ScopeSession Scope = "session"
+	ScopeProject Scope = "project"
+	ScopeGlobal  Scope = "global"
+)
+
 type Item struct {
-	ID              string    `json:"id"`
-	Tier            Tier      `json:"tier"`
-	Text            string    `json:"text"`
-	Tags            []string  `json:"tags,omitempty"`
-	Importance      float64   `json:"importance"`
-	AccessCount     int       `json:"access_count"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
-	LastAccessedAt  time.Time `json:"last_accessed_at"`
-	SourceSessionID string    `json:"source_session_id,omitempty"`
+	ID                 string    `json:"id"`
+	Tier               Tier      `json:"tier"`
+	Kind               Kind      `json:"kind,omitempty"`
+	Scope              Scope     `json:"scope,omitempty"`
+	Text               string    `json:"text"`
+	Tags               []string  `json:"tags,omitempty"`
+	Importance         float64   `json:"importance"`
+	Confidence         float64   `json:"confidence,omitempty"`
+	RetentionScore     float64   `json:"retention_score,omitempty"`
+	AccessCount        int       `json:"access_count"`
+	PromotionCount     int       `json:"promotion_count,omitempty"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
+	LastAccessedAt     time.Time `json:"last_accessed_at"`
+	LastReinforcedAt   time.Time `json:"last_reinforced_at,omitempty"`
+	SourceSessionID    string    `json:"source_session_id,omitempty"`
+	DerivedFromSummary bool      `json:"derived_from_summary,omitempty"`
+	JudgeReason        string    `json:"judge_reason,omitempty"`
+	JudgeModel         string    `json:"judge_model,omitempty"`
+	JudgeVersion       string    `json:"judge_version,omitempty"`
 }
 
 type Retriever interface {
@@ -66,15 +94,20 @@ func NewItem(text string, tier Tier, sourceSessionID string) Item {
 		tier = TierLongTerm
 	}
 	return Item{
-		ID:              stableID(text),
-		Tier:            tier,
-		Text:            text,
-		Importance:      0.7,
-		AccessCount:     1,
-		CreatedAt:       now,
-		UpdatedAt:       now,
-		LastAccessedAt:  now,
-		SourceSessionID: sourceSessionID,
+		ID:               stableID(text),
+		Tier:             tier,
+		Kind:             KindFact,
+		Scope:            ScopeProject,
+		Text:             text,
+		Importance:       0.7,
+		Confidence:       0.7,
+		RetentionScore:   0.7,
+		AccessCount:      1,
+		CreatedAt:        now,
+		UpdatedAt:        now,
+		LastAccessedAt:   now,
+		LastReinforcedAt: now,
+		SourceSessionID:  sourceSessionID,
 	}
 }
 
@@ -137,6 +170,18 @@ func (s *FileStore) Save(ctx context.Context, item Item) (Item, error) {
 	if item.Importance <= 0 {
 		item.Importance = 0.7
 	}
+	if item.Confidence <= 0 {
+		item.Confidence = 0.7
+	}
+	if item.RetentionScore <= 0 {
+		item.RetentionScore = item.Importance
+	}
+	if item.Kind == "" {
+		item.Kind = KindFact
+	}
+	if item.Scope == "" {
+		item.Scope = ScopeProject
+	}
 	if item.AccessCount <= 0 {
 		item.AccessCount = 1
 	}
@@ -146,6 +191,9 @@ func (s *FileStore) Save(ctx context.Context, item Item) (Item, error) {
 	item.UpdatedAt = now
 	if item.LastAccessedAt.IsZero() {
 		item.LastAccessedAt = now
+	}
+	if item.LastReinforcedAt.IsZero() {
+		item.LastReinforcedAt = item.LastAccessedAt
 	}
 	if err := os.MkdirAll(s.dir, 0o755); err != nil {
 		return Item{}, fmt.Errorf("create memories dir: %w", err)
@@ -178,9 +226,14 @@ func (s *FileStore) Remember(ctx context.Context, text string, sourceSessionID s
 			continue
 		}
 		item.AccessCount++
-		item.LastAccessedAt = time.Now()
+		now := time.Now()
+		item.LastAccessedAt = now
+		item.LastReinforcedAt = now
 		if item.Importance < 0.95 {
 			item.Importance += 0.05
+		}
+		if item.RetentionScore < 0.95 {
+			item.RetentionScore += 0.05
 		}
 		updated, err := s.Save(ctx, item)
 		return updated, false, err
@@ -191,8 +244,10 @@ func (s *FileStore) Remember(ctx context.Context, text string, sourceSessionID s
 }
 
 func (s *FileStore) Touch(ctx context.Context, item Item) error {
+	now := time.Now()
 	item.AccessCount++
-	item.LastAccessedAt = time.Now()
+	item.LastAccessedAt = now
+	item.LastReinforcedAt = now
 	_, err := s.Save(ctx, item)
 	return err
 }
