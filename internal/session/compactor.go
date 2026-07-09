@@ -32,6 +32,7 @@ type CompactResult struct {
 }
 
 func Compact(ctx context.Context, summary string, messages []sdk.MessageParam, _ SummaryWriter, opts CompactOptions) (CompactResult, error) {
+	messages = StripEphemeralContextMessages(messages)
 	result := CompactResult{Summary: summary, Messages: append([]sdk.MessageParam(nil), messages...)}
 	if err := ctx.Err(); err != nil {
 		return result, err
@@ -59,7 +60,7 @@ func Compact(ctx context.Context, summary string, messages []sdk.MessageParam, _
 	}
 	target := opts.TargetTokens
 	if target <= 0 {
-		target = threshold / 2
+		target = threshold * 15 / 100
 		if target < 1 {
 			target = 1
 		}
@@ -128,10 +129,10 @@ func compactCutIndex(messages []sdk.MessageParam, keepTurns int) int {
 	}
 	userCount := 0
 	for i := len(messages) - 1; i >= 0; i-- {
-		if string(messages[i].Role) == "user" {
+		if messageStartsUserTurn(messages[i]) {
 			userCount++
 			if userCount >= keepTurns {
-				return i
+				return normalizeCutIndex(messages, i)
 			}
 		}
 	}
@@ -143,11 +144,57 @@ func previousTurnBoundary(messages []sdk.MessageParam, start int) int {
 		return 0
 	}
 	for i := start - 1; i >= 0; i-- {
-		if string(messages[i].Role) == "user" {
-			return i
+		if messageStartsUserTurn(messages[i]) {
+			return normalizeCutIndex(messages, i)
 		}
 	}
 	return 0
+}
+
+func messageStartsUserTurn(message sdk.MessageParam) bool {
+	if string(message.Role) != "user" {
+		return false
+	}
+	for _, block := range message.Content {
+		if block.OfToolResult != nil {
+			return false
+		}
+		if block.OfToolUse != nil {
+			return false
+		}
+	}
+	return true
+}
+
+func normalizeCutIndex(messages []sdk.MessageParam, idx int) int {
+	if idx <= 0 || idx >= len(messages) {
+		return idx
+	}
+	for idx > 0 {
+		prev := messages[idx-1]
+		hasAssistantToolUse := false
+		for _, block := range prev.Content {
+			if block.OfToolUse != nil {
+				hasAssistantToolUse = true
+				break
+			}
+		}
+		if !hasAssistantToolUse {
+			break
+		}
+		hasUserToolResult := true
+		for _, block := range messages[idx].Content {
+			if block.OfToolResult == nil {
+				hasUserToolResult = false
+				break
+			}
+		}
+		if !hasUserToolResult {
+			break
+		}
+		idx--
+	}
+	return idx
 }
 
 func targetCutIndex(messages []sdk.MessageParam, targetTokens int) int {
@@ -172,25 +219,55 @@ func targetCutIndex(messages []sdk.MessageParam, targetTokens int) int {
 	return boundary
 }
 
-func compactionMessages(summary string, messages []sdk.MessageParam) []sdk.MessageParam {
-	working := append([]sdk.MessageParam(nil), messages...)
-	summary = strings.TrimSpace(summary)
-	if summary == "" {
-		return working
+func compactionMessages(_ string, messages []sdk.MessageParam) []sdk.MessageParam {
+	return StripEphemeralContextMessages(messages)
+}
+
+// StripEphemeralContextMessages removes transient context messages that are
+// injected into model requests but must never become persisted conversation
+// history. This also cleans older sessions that accidentally saved them.
+func StripEphemeralContextMessages(messages []sdk.MessageParam) []sdk.MessageParam {
+	out := make([]sdk.MessageParam, 0, len(messages))
+	for _, message := range messages {
+		if isEphemeralContextMessage(message) {
+			continue
+		}
+		out = append(out, message)
 	}
-	legacySummary := sdk.NewUserMessage(sdk.NewTextBlock("Previously compacted session context:\n" + summary))
-	return append([]sdk.MessageParam{legacySummary}, working...)
+	return out
+}
+
+func isEphemeralContextMessage(message sdk.MessageParam) bool {
+	if string(message.Role) != "user" || len(message.Content) == 0 {
+		return false
+	}
+	text := strings.TrimSpace(messageText(message))
+	lower := strings.ToLower(text)
+	return strings.HasPrefix(lower, "session summary:\n") ||
+		strings.HasPrefix(lower, "retrieved memory:\n") ||
+		strings.HasPrefix(lower, "previously compacted session context:\n") ||
+		(strings.Contains(lower, "\nretrieved memory:\n") && strings.Contains(lower, "session summary:"))
 }
 
 func compressMessagesWithHeadroom(messages []sdk.MessageParam, tokenBudget int) ([]sdk.MessageParam, error) {
 	blockBudget := perContentBlockBudget(messages, tokenBudget)
 	compressed := make([]sdk.MessageParam, 0, len(messages))
+	toolNamesByID := map[string]string{}
 	for _, message := range messages {
 		blocks := make([]sdk.ContentBlockParamUnion, 0, len(message.Content))
 		for _, block := range message.Content {
-			compressedBlock, err := compressContentBlockWithHeadroom(block, blockBudget, string(message.Role))
+			if block.OfToolUse != nil {
+				toolNamesByID[block.OfToolUse.ID] = block.OfToolUse.Name
+			}
+			compressedBlock, keepBlock, err := compressContentBlockWithHeadroom(block, blockBudget, string(message.Role), toolNamesByID)
 			if err != nil {
 				return nil, err
+			}
+			if !keepBlock {
+				continue
+			}
+			if compressedBlock.OfToolUse != nil {
+				toolNamesByID[compressedBlock.OfToolUse.ID] = compressedBlock.OfToolUse.Name
 			}
 			blocks = append(blocks, compressedBlock)
 		}
@@ -199,7 +276,52 @@ func compressMessagesWithHeadroom(messages []sdk.MessageParam, tokenBudget int) 
 		}
 		compressed = append(compressed, sdk.MessageParam{Role: message.Role, Content: blocks})
 	}
-	return compressed, nil
+	return dropUnmatchedToolBlocks(compressed), nil
+}
+
+func dropUnmatchedToolBlocks(messages []sdk.MessageParam) []sdk.MessageParam {
+	seenToolUses := map[string]bool{}
+	seenToolResults := map[string]bool{}
+	for _, message := range messages {
+		for _, block := range message.Content {
+			if block.OfToolUse != nil {
+				id := strings.TrimSpace(block.OfToolUse.ID)
+				if id != "" {
+					seenToolUses[id] = true
+				}
+			}
+			if block.OfToolResult != nil {
+				id := strings.TrimSpace(block.OfToolResult.ToolUseID)
+				if id != "" {
+					seenToolResults[id] = true
+				}
+			}
+		}
+	}
+	cleaned := make([]sdk.MessageParam, 0, len(messages))
+	for _, message := range messages {
+		blocks := make([]sdk.ContentBlockParamUnion, 0, len(message.Content))
+		for _, block := range message.Content {
+			if block.OfToolUse != nil {
+				id := strings.TrimSpace(block.OfToolUse.ID)
+				if id == "" || !seenToolResults[id] {
+					continue
+				}
+			}
+			if block.OfToolResult != nil {
+				id := strings.TrimSpace(block.OfToolResult.ToolUseID)
+				if id == "" || !seenToolUses[id] {
+					continue
+				}
+			}
+			blocks = append(blocks, block)
+		}
+		if len(blocks) == 0 {
+			continue
+		}
+		cleaned = append(cleaned, sdk.MessageParam{Role: message.Role, Content: blocks})
+	}
+	return cleaned
 }
 
 func perContentBlockBudget(messages []sdk.MessageParam, tokenBudget int) int {
@@ -224,19 +346,38 @@ func perContentBlockBudget(messages []sdk.MessageParam, tokenBudget int) int {
 	return budget
 }
 
-func compressContentBlockWithHeadroom(block sdk.ContentBlockParamUnion, tokenBudget int, role string) (sdk.ContentBlockParamUnion, error) {
+func compressContentBlockWithHeadroom(block sdk.ContentBlockParamUnion, tokenBudget int, role string, toolNamesByID map[string]string) (sdk.ContentBlockParamUnion, bool, error) {
 	if block.OfText != nil {
 		textBlock := *block.OfText
 		compressed, err := compressTextWithHeadroom(textBlock.Text, tokenBudget, role)
 		if err != nil {
-			return block, err
+			return block, true, err
 		}
 		textBlock.Text = compressed
 		block.OfText = &textBlock
-		return block, nil
+		return block, true, nil
+	}
+	if block.OfToolUse != nil {
+		toolUse := *block.OfToolUse
+		if shouldPreserveToolUse(toolUse.Name) {
+			return block, true, nil
+		}
+		if shouldDropTool(toolUse.Name) {
+			return sdk.ContentBlockParamUnion{}, false, nil
+		}
+		toolUse.Input = map[string]any{"summary": "tool call preserved as summarized metadata", "name": toolUse.Name, "tool_id": toolUse.ID}
+		block.OfToolUse = &toolUse
+		return block, true, nil
 	}
 	if block.OfToolResult != nil {
 		toolResult := *block.OfToolResult
+		toolName := inferToolName(toolResult.ToolUseID, toolNamesByID)
+		if shouldPreserveToolResult(toolName) {
+			return block, true, nil
+		}
+		if shouldDropTool(toolName) {
+			return sdk.ContentBlockParamUnion{}, false, nil
+		}
 		content := make([]sdk.ToolResultBlockParamContentUnion, 0, len(toolResult.Content))
 		for _, item := range toolResult.Content {
 			if item.OfText == nil {
@@ -246,17 +387,20 @@ func compressContentBlockWithHeadroom(block sdk.ContentBlockParamUnion, tokenBud
 			textBlock := *item.OfText
 			compressed, err := compressTextWithHeadroom(textBlock.Text, tokenBudget, "tool")
 			if err != nil {
-				return block, err
+				return block, true, err
 			}
 			textBlock.Text = compressed
 			item.OfText = &textBlock
 			content = append(content, item)
 		}
+		if len(content) == 0 {
+			content = []sdk.ToolResultBlockParamContentUnion{{OfText: &sdk.TextBlockParam{Text: "tool result preserved as summarized metadata for tool_id=" + toolResult.ToolUseID}}}
+		}
 		toolResult.Content = content
 		block.OfToolResult = &toolResult
-		return block, nil
+		return block, true, nil
 	}
-	return block, nil
+	return block, true, nil
 }
 
 func compressTextWithHeadroom(text string, tokenBudget int, role string) (string, error) {
@@ -277,6 +421,32 @@ func compressTextWithHeadroom(text string, tokenBudget int, role string) (string
 		return text, nil
 	}
 	return strings.TrimSpace(result.Messages[0].Content), nil
+}
+
+func shouldDropTool(name string) bool {
+	switch strings.TrimSpace(name) {
+	case "Bash":
+		return true
+	default:
+		return false
+	}
+}
+
+func shouldPreserveToolUse(name string) bool {
+	switch strings.TrimSpace(name) {
+	case "Edit", "Write", "Patch", "Diff":
+		return true
+	default:
+		return false
+	}
+}
+
+func shouldPreserveToolResult(name string) bool {
+	return shouldPreserveToolUse(name)
+}
+
+func inferToolName(toolUseID string, toolNamesByID map[string]string) string {
+	return strings.TrimSpace(toolNamesByID[toolUseID])
 }
 
 func headroomRole(role string) string {

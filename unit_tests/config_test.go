@@ -397,6 +397,30 @@ func TestMultiModelSelectsExplicitModel(t *testing.T) {
 	}
 }
 
+func TestFastModelDefaultsFromFastModelConfig(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	writeFile(t, path, `{
+		"model": "sonnet",
+		"providers": [{
+			"name": "anthropic",
+			"type": "anthropic",
+			"models": [
+				{"name":"sonnet","id":"claude-sonnet","default":true},
+				{"name":"haiku","id":"claude-haiku","fast":true}
+			]
+		}]
+	}`)
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load(%q) = %v", path, err)
+	}
+	if cfg.FastModel != "claude-haiku" {
+		t.Fatalf("expected fast model claude-haiku, got %q", cfg.FastModel)
+	}
+}
+
 func TestSessionAndMemoryDirsDefaultUnderUserDir(t *testing.T) {
 	cfg := config.Default()
 	cfg.WorkDir = t.TempDir()
@@ -418,8 +442,11 @@ func TestMemoryConfigCompactionDefaults(t *testing.T) {
 	if cfg.Memory.CompactionTriggerPercent != 85 {
 		t.Fatalf("expected default trigger 85, got %d", cfg.Memory.CompactionTriggerPercent)
 	}
-	if cfg.Memory.CompactionTargetPercent != 50 {
-		t.Fatalf("expected default target 50, got %d", cfg.Memory.CompactionTargetPercent)
+	if cfg.Memory.SummaryTriggerPercent != 50 {
+		t.Fatalf("expected default summary trigger 50, got %d", cfg.Memory.SummaryTriggerPercent)
+	}
+	if cfg.Memory.CompactionTargetPercent != 15 {
+		t.Fatalf("expected default target 15, got %d", cfg.Memory.CompactionTargetPercent)
 	}
 	if cfg.Memory.TierM1TTLHours != 12 {
 		t.Fatalf("expected default M1 TTL 12, got %d", cfg.Memory.TierM1TTLHours)
@@ -433,15 +460,22 @@ func TestMemoryConfigCompactionDefaults(t *testing.T) {
 	if cfg.Memory.PromotionConfidence != 0.75 {
 		t.Fatalf("expected default promotion confidence 0.75, got %v", cfg.Memory.PromotionConfidence)
 	}
+	if cfg.Memory.RetrievalContextPercent != 10 || cfg.Memory.RetrievalMinTokens != 10_000 || cfg.Memory.RetrievalMaxTokens != 50_000 {
+		t.Fatalf("unexpected retrieval token defaults: %#v", cfg.Memory)
+	}
 	if cfg.Memory.RetrievalM2Limit != 4 || cfg.Memory.RetrievalM3Limit != 3 || cfg.Memory.RetrievalM4Limit != 3 || cfg.Memory.RetrievalM5Limit != 2 {
 		t.Fatalf("unexpected retrieval tier defaults: %#v", cfg.Memory)
 	}
 	cfg.Memory.CompactionTargetPercent = 95
 	cfg.Memory.CompactionTriggerPercent = 85
+	cfg.Memory.SummaryTriggerPercent = 0
 	cfg.Memory.TierM1TTLHours = 0
 	cfg.Memory.TierM2TTLHours = 0
 	cfg.Memory.PromotionAccessThreshold = 0
 	cfg.Memory.PromotionConfidence = 0
+	cfg.Memory.RetrievalContextPercent = 0
+	cfg.Memory.RetrievalMinTokens = 0
+	cfg.Memory.RetrievalMaxTokens = 0
 	cfg.Memory.RetrievalM2Limit = 0
 	cfg.Memory.RetrievalM3Limit = 0
 	cfg.Memory.RetrievalM4Limit = 0
@@ -452,8 +486,11 @@ func TestMemoryConfigCompactionDefaults(t *testing.T) {
 	if cfg.Memory.CompactionTargetPercent >= cfg.Memory.CompactionTriggerPercent {
 		t.Fatalf("expected target < trigger, got target=%d trigger=%d", cfg.Memory.CompactionTargetPercent, cfg.Memory.CompactionTriggerPercent)
 	}
-	if cfg.Memory.TierM1TTLHours != 12 || cfg.Memory.TierM2TTLHours != 72 || cfg.Memory.PromotionAccessThreshold != 3 || cfg.Memory.PromotionConfidence != 0.75 {
+	if cfg.Memory.SummaryTriggerPercent != 50 || cfg.Memory.TierM1TTLHours != 12 || cfg.Memory.TierM2TTLHours != 72 || cfg.Memory.PromotionAccessThreshold != 3 || cfg.Memory.PromotionConfidence != 0.75 {
 		t.Fatalf("memory normalize defaults not restored: %#v", cfg.Memory)
+	}
+	if cfg.Memory.RetrievalContextPercent != 10 || cfg.Memory.RetrievalMinTokens != 10_000 || cfg.Memory.RetrievalMaxTokens != 50_000 {
+		t.Fatalf("retrieval token defaults not restored: %#v", cfg.Memory)
 	}
 	if cfg.Memory.RetrievalM2Limit != 4 || cfg.Memory.RetrievalM3Limit != 3 || cfg.Memory.RetrievalM4Limit != 3 || cfg.Memory.RetrievalM5Limit != 2 {
 		t.Fatalf("retrieval tier defaults not restored: %#v", cfg.Memory)

@@ -55,3 +55,14 @@ func fieldString(fields map[string]any, key string) string {
 func oneLine(value string) string {
 	return strings.Join(strings.Fields(value), " ")
 }
+
+func isFileMutationTool(toolName string) bool {
+	name := strings.ToLower(strings.TrimSpace(toolName))
+	name = strings.TrimPrefix(name, "functions.")
+	switch name {
+	case "edit", "write", "patch", "diff",
+		"mcp__filesystem__edit-file", "mcp__filesystem__write-file":
+		return true
+	}
+	return strings.Contains(name, "edit-file") || strings.Contains(name, "write-file") || strings.HasSuffix(name, ".edit") || strings.HasSuffix(name, ".write") || strings.HasSuffix(name, ".patch")
+}

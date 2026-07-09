@@ -5,13 +5,21 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
+	"github.com/atotto/clipboard"
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/solosw/codeplus-agent/internal/tokenest"
 )
+
+const scrollbarWidth = 2
+const pasteEnterGuardWindow = 150 * time.Millisecond
+const inputBurstWindow = 35 * time.Millisecond
+const bulkPasteMinRunes = 8
 
 type SubmitFunc func(prompt string) (tea.Cmd, func())
 
@@ -78,12 +86,13 @@ type AskUserRequestMsg struct {
 }
 
 type ChatMessage struct {
-	Role      string
-	Content   string
-	ToolName  string
-	IsError   bool
-	Collapsed bool
-	TimeStamp time.Time
+	Role           string
+	Content        string
+	DisplayContent string
+	ToolName       string
+	IsError        bool
+	Collapsed      bool
+	TimeStamp      time.Time
 }
 
 type pendingPermission struct {
@@ -222,8 +231,14 @@ type Model struct {
 	cancelCurrent  func()
 
 	// Input history
-	history      []string
-	historyIndex int
+	history                []string
+	historyIndex           int
+	pastedInputLines       int
+	lastPasteAt            time.Time
+	suppressNextPasteEnter bool
+	inputBurstStartedAt    time.Time
+	lastInputAt            time.Time
+	inputBurstChars        int
 
 	// Select-all mode
 	selectAllMode bool
@@ -263,7 +278,7 @@ func New(submit SubmitFunc) Model {
 }
 
 func NewWith(submit SubmitFunc, theme Theme, modelName, cwd string, showTimestamp bool) Model {
-	vp := viewport.New(80, 20)
+	vp := viewport.New(78, 20)
 	input := textarea.New()
 	input.Placeholder = "Ask codeplus…"
 	input.Prompt = ""
@@ -271,6 +286,8 @@ func NewWith(submit SubmitFunc, theme Theme, modelName, cwd string, showTimestam
 	input.ShowLineNumbers = false
 	input.CharLimit = 20_000
 	input.SetHeight(3)
+	// Enter submits in the model; Alt+Enter inserts a newline.
+	input.KeyMap.InsertNewline = key.NewBinding(key.WithDisabled())
 	return Model{
 		viewport:      vp,
 		input:         input,
@@ -280,7 +297,7 @@ func NewWith(submit SubmitFunc, theme Theme, modelName, cwd string, showTimestam
 		modelName:     modelName,
 		cwd:           cwd,
 		showTimestamp: showTimestamp,
-		messages:      []ChatMessage{{Role: "system", Content: "codeplus-agent TUI — Enter sends, Alt+Enter newline, Ctrl+C cancels active responses or quits when idle, Ctrl+T toggles theme. Select text normally to copy; scroll chat with PageUp/PageDown or Ctrl+U/Ctrl+D.", TimeStamp: time.Now()}},
+		messages:      []ChatMessage{{Role: "welcome", Content: "Welcome to CodePlus Agent", TimeStamp: time.Now()}},
 	}
 }
 
@@ -333,12 +350,11 @@ func (m *Model) ReplaceMessages(messages []ChatMessage) {
 }
 
 func defaultToolCollapsed(name string) bool {
-	switch name {
-	case "TodoWrite", "TODOList", "TodoList":
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "todowrite", "todolist":
 		return false
-	default:
-		return true
 	}
+	return !isFileMutationTool(name)
 }
 
 func agentStatusContent(msg AgentStatusMsg) string {
@@ -391,7 +407,10 @@ func (m Model) currentModelName() string {
 }
 
 func (m Model) Init() tea.Cmd {
-	return textarea.Blink
+	return tea.Batch(
+		textarea.Blink,
+		func() tea.Msg { return tea.EnableBracketedPaste() },
+	)
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -432,6 +451,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if !m.input.Focused() && msg.Type == tea.KeyRunes {
 			m.input.Focus()
+		}
+		if msg.Type == tea.KeyRunes {
+			text := string(msg.Runes)
+			if m.likelyBulkPasteRunes(text, msg.Paste) {
+				if msg.Paste || strings.ContainsAny(text, "\r\n") || utf8.RuneCountInString(text) >= bulkPasteMinRunes {
+					m.pastedInputLines += pastedLineCount(text)
+				}
+				m.lastPasteAt = time.Now()
+				m.suppressNextPasteEnter = true
+			} else {
+				m.suppressNextPasteEnter = false
+			}
+		} else {
+			m.resetInputBurst()
+			if msg.Type != tea.KeyEnter {
+				m.suppressNextPasteEnter = false
+			}
 		}
 		switch msg.String() {
 		case "ctrl+c":
@@ -475,11 +511,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m.handleHistoryDown()
 			}
 		case "enter":
-			if !msg.Alt && !m.streaming {
+			if !msg.Alt && !msg.Paste && !m.streaming {
+				if m.suppressNextPasteEnter && time.Since(m.lastPasteAt) <= pasteEnterGuardWindow {
+					m.suppressNextPasteEnter = false
+					return m, nil
+				}
+				m.suppressNextPasteEnter = false
 				prompt := strings.TrimSpace(m.input.Value())
 				if prompt == "" {
 					return m, nil
 				}
+				displayContent := pastedInputDisplay(m.pastedInputLines)
+				m.pastedInputLines = 0
 				m.saveToHistory(prompt)
 				m.input.Reset()
 				if handled, cmd := m.handleSlashCommand(prompt); handled {
@@ -489,7 +532,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if skillPrompt, ok := m.slashSkillPrompt(prompt); ok {
 					submitPrompt = skillPrompt
 				}
-				m.messages = append(m.messages, ChatMessage{Role: "user", Content: prompt, TimeStamp: time.Now()})
+				m.messages = append(m.messages, ChatMessage{Role: "user", Content: prompt, DisplayContent: displayContent, TimeStamp: time.Now()})
 				m.streaming = true
 				m.canceling = false
 				m.status = "Thinking…"
@@ -504,6 +547,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.cancelCurrent = cancel
 				return m, tea.Batch(cmd, m.nextSpinnerTick())
 			}
+		case "alt+enter":
+			m.input.InsertString("\n")
+			return m, nil
+		case "ctrl+shift+c":
+			m.copyLastAssistant()
+			return m, nil
 		}
 	case StreamTextMsg:
 		m.appendAssistantDelta(msg.Text)
@@ -567,6 +616,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			CacheReadInputTokens:     msg.CacheReadInputTokens,
 			MaxContextTokens:         msg.MaxContextTokens,
 		}
+		m.refreshViewport()
 		return m, nil
 	case ToolStartMsg:
 		m.startToolActivity(msg)
@@ -639,8 +689,10 @@ func (m *Model) handleSelectAllKey(key string) (tea.Model, tea.Cmd) {
 		m.historyIndex = len(m.history)
 		return m, nil
 	case "ctrl+c":
+		// Copy selected text instead of canceling
+		m.copyInput()
 		m.selectAllMode = false
-		return m.handleCtrlC()
+		return m, nil
 	case "esc", "ctrl+a":
 		// Exit select-all, keep text
 		m.selectAllMode = false
@@ -681,6 +733,59 @@ func parseKeyMsg(key string) tea.KeyMsg {
 		}
 		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)}
 	}
+}
+
+func pastedLineCount(text string) int {
+	text = strings.TrimRight(strings.ReplaceAll(text, "\r\n", "\n"), "\r\n")
+	if text == "" {
+		return 0
+	}
+	return strings.Count(text, "\n") + 1
+}
+
+func (m *Model) likelyBulkPasteRunes(text string, explicitPaste bool) bool {
+	now := time.Now()
+	runes := utf8.RuneCountInString(text)
+	if runes <= 0 {
+		m.resetInputBurst()
+		return false
+	}
+	if explicitPaste {
+		m.inputBurstStartedAt = now
+		m.lastInputAt = now
+		m.inputBurstChars = runes
+		return true
+	}
+	if strings.ContainsAny(text, "\r\n") {
+		m.inputBurstStartedAt = now
+		m.lastInputAt = now
+		m.inputBurstChars += runes
+		return true
+	}
+	if m.lastInputAt.IsZero() || now.Sub(m.lastInputAt) > inputBurstWindow {
+		m.inputBurstStartedAt = now
+		m.inputBurstChars = runes
+	} else {
+		m.inputBurstChars += runes
+	}
+	m.lastInputAt = now
+	return runes >= bulkPasteMinRunes || m.inputBurstChars >= bulkPasteMinRunes
+}
+
+func (m *Model) resetInputBurst() {
+	m.inputBurstStartedAt = time.Time{}
+	m.lastInputAt = time.Time{}
+	m.inputBurstChars = 0
+}
+
+func pastedInputDisplay(lines int) string {
+	if lines <= 0 {
+		return ""
+	}
+	if lines == 1 {
+		return "Pasted 1 line"
+	}
+	return fmt.Sprintf("Pasted %d lines", lines)
 }
 
 // Input history navigation
@@ -1222,41 +1327,139 @@ func (m Model) View() string {
 	if m.width == 0 {
 		return "initializing..."
 	}
-	parts := []string{m.viewport.View()}
-	if m.autocomplete != nil {
+	parts := []string{m.renderViewportWithScrollbar()}
+	if dialog := m.renderActiveDialog(); dialog != "" {
+		parts = append(parts, dialog)
+	} else if m.autocomplete != nil {
 		parts = append(parts, m.renderAutocomplete())
 	}
-	parts = append(parts, m.renderStatusBar(), m.renderInput())
-	if m.pendingConf != nil {
-		parts = append(parts, m.renderConfirmDialog())
-	}
-	if m.pendingAsk != nil {
-		parts = append(parts, m.renderAskUserDialog())
-	}
-	if m.dialog != nil && m.dialog.Active != DialogNone {
-		parts = append(parts, m.renderDialog())
-	}
-	if m.pending != nil {
-		parts = append(parts, m.renderPermissionDialog())
-	}
+	parts = append(parts, m.renderRuntimeStatusBar(), m.renderStatusBar(), m.renderInput())
 	if panel := m.renderActivityPanel(); panel != "" {
 		parts = append(parts, panel)
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }
 
+func (m Model) renderViewportWithScrollbar() string {
+	view := m.viewport.View()
+	bar := m.renderScrollbar()
+	return lipgloss.JoinHorizontal(lipgloss.Top, view, bar)
+}
+
+func (m Model) renderScrollbar() string {
+	total := m.viewport.TotalLineCount()
+	visible := m.viewport.VisibleLineCount()
+	height := m.viewport.Height
+	if height <= 0 {
+		return ""
+	}
+	trackStyle := lipgloss.NewStyle().Foreground(m.theme.Subtle)
+	thumbStyle := lipgloss.NewStyle().Foreground(m.theme.Claude)
+	if total <= visible {
+		var b strings.Builder
+		for i := 0; i < height; i++ {
+			b.WriteString(trackStyle.Render(" │"))
+			if i < height-1 {
+				b.WriteString("\n")
+			}
+		}
+		return b.String()
+	}
+	thumbHeight := max(1, visible*height/total)
+	maxThumbPos := total - visible
+	thumbPos := 0
+	if maxThumbPos > 0 {
+		thumbPos = m.viewport.YOffset * (height - thumbHeight) / maxThumbPos
+	}
+	thumbPos = clamp(thumbPos, 0, height-thumbHeight)
+	var b strings.Builder
+	for i := 0; i < height; i++ {
+		if i >= thumbPos && i < thumbPos+thumbHeight {
+			b.WriteString(thumbStyle.Render(" █"))
+		} else {
+			b.WriteString(trackStyle.Render(" │"))
+		}
+		if i < height-1 {
+			b.WriteString("\n")
+		}
+	}
+	return b.String()
+}
+
+func (m Model) renderActiveDialog() string {
+	switch {
+	case m.pendingConf != nil:
+		return m.renderConfirmDialog()
+	case m.pendingAsk != nil:
+		return m.renderAskUserDialog()
+	case m.dialog != nil && m.dialog.Active != DialogNone:
+		return m.renderDialog()
+	case m.pending != nil:
+		return m.renderPermissionDialog()
+	}
+	return ""
+}
+
 func (m Model) renderInput() string {
 	t := m.theme
-	border := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(t.PromptBorder).
-		BorderBottom(false).
-		BorderLeft(false).
-		BorderRight(false).
-		PaddingTop(0).
-		Width(max(1, m.width))
-	prompt := t.Prompt.Render(PromptPrefix)
-	return border.Render(prompt + m.input.View())
+
+	// Build the input area with proper visual distinction
+	inputView := m.input.View()
+
+	// Determine border color — use accent when focused
+	borderColor := t.PromptBorder
+	if m.input.Focused() {
+		borderColor = t.Claude
+	}
+
+	// Input area with solid border, background, and padding
+	inputStyle := lipgloss.NewStyle().
+		Border(lipgloss.NormalBorder()).
+		BorderForeground(borderColor).
+		BorderTop(true).BorderBottom(true).BorderLeft(true).BorderRight(true).
+		Padding(0, 1).
+		Width(max(1, m.width-2)).
+		Background(lipgloss.Color("#1a1a1a"))
+
+	if t.Name == "light" {
+		inputStyle = inputStyle.Background(lipgloss.Color("#f0f0f0"))
+	}
+
+	// Compose the input without a prompt prefix.
+	line := inputView
+
+	// Right-side usage status, replacing the send/newline hint.
+	hintText := m.renderUsageStatus()
+	if hintText != "" {
+		hint := t.Dim.Render(hintText)
+		hintWidth := lipgloss.Width(hint)
+		contentWidth := m.width - 6 // accounting for border and padding
+
+		// Pad the line so the usage status can sit on the right.
+		lineWidth := lipgloss.Width(line)
+		gap := max(1, contentWidth-lineWidth-hintWidth)
+		line = line + strings.Repeat(" ", gap) + hint
+	}
+
+	return inputStyle.Render(line)
+}
+
+func (m Model) renderRuntimeStatusBar() string {
+	t := m.theme
+	label := strings.TrimSpace(m.status)
+	if label == "" {
+		label = "Ready"
+	}
+	left := " "
+	if m.spinnerActive {
+		left += renderSpinnerLabel(t, m.spinnerFrame, label, m.loadingStart)
+	} else {
+		left += t.Assistant.Render(label)
+	}
+	if m.activeToolName != "" {
+		left += t.Dim.Render(" · ") + t.Tool.Render(m.activeToolName)
+	}
+	return t.Status.Width(m.width).Render(left)
 }
 
 func (m Model) renderStatusBar() string {
@@ -1266,23 +1469,12 @@ func (m Model) renderStatusBar() string {
 		modelName = "codeplus"
 	}
 	left := " " + t.Assistant.Render(modelName)
-	if m.spinnerActive {
-		left = " " + renderSpinnerLabel(t, m.spinnerFrame, m.status, m.loadingStart)
-	} else if m.status != "" {
-		left += t.Dim.Render(" · ") + m.status
-	}
-	if m.activeToolName != "" {
-		left += t.Dim.Render(" · ") + t.Tool.Render(m.activeToolName)
-	}
 	rightParts := []string{}
 	if m.permissionMode != "" && m.permissionMode != "auto" {
 		rightParts = append(rightParts, t.Dim.Render("mode:")+t.ClaudeStyle.Render(m.permissionMode))
 	}
 	if m.theme.Name != "" {
 		rightParts = append(rightParts, m.theme.Name)
-	}
-	if usage := m.renderUsageStatus(); usage != "" {
-		rightParts = append(rightParts, t.ClaudeStyle.Render(usage))
 	}
 	if m.cwd != "" {
 		rightParts = append(rightParts, truncate(m.cwd, 40))
@@ -1298,18 +1490,35 @@ func (m Model) renderStatusBar() string {
 
 func (m Model) renderUsageStatus() string {
 	usage := m.tokenUsage
-	used := m.localEstimatedContextTokens()
+	used := m.displayContextTokens()
 	limit := m.currentContextLimit()
 	parts := []string{fmt.Sprintf("ctx %s/%s", compactTokens(used), renderContextLimit(limit))}
 	cacheWrite := usage.CacheCreationInputTokens
 	cacheRead := usage.CacheReadInputTokens
 	if cacheRead > 0 || cacheWrite > 0 {
-		parts = append(parts, fmt.Sprintf("cache %s/%s", compactTokens(cacheRead), compactTokens(cacheWrite)))
+		cache := fmt.Sprintf("cache %s/%s", compactTokens(cacheRead), compactTokens(cacheWrite))
+		if pct := cacheSharePercent(usage.InputTokens, cacheRead, cacheWrite); pct != "" {
+			cache += " (" + pct + ")"
+		}
+		parts = append(parts, cache)
 	}
 	if usage.OutputTokens > 0 {
 		parts = append(parts, fmt.Sprintf("out %s", compactTokens(usage.OutputTokens)))
 	}
 	return strings.Join(parts, " · ")
+}
+
+func cacheSharePercent(inputTokens, cacheRead, cacheWrite int64) string {
+	cacheTotal := cacheRead + cacheWrite
+	if cacheTotal <= 0 {
+		return ""
+	}
+	denominator := inputTokens + cacheTotal
+	if denominator <= 0 {
+		return ""
+	}
+	percent := cacheTotal * 100 / denominator
+	return fmt.Sprintf("%d%%", percent)
 }
 
 func compactTokens(value int64) string {
@@ -1345,6 +1554,17 @@ func (m Model) currentContextLimit() int64 {
 		return m.tokenUsage.MaxContextTokens
 	}
 	return 0
+}
+
+func (m Model) displayContextTokens() int64 {
+	if m.tokenUsage.EstimatedContextTokens > 0 {
+		input := strings.TrimSpace(m.input.Value())
+		if input == "" {
+			return m.tokenUsage.EstimatedContextTokens
+		}
+		return m.tokenUsage.EstimatedContextTokens + int64(tokenest.Text(input))
+	}
+	return m.localEstimatedContextTokens()
 }
 
 func (m Model) localEstimatedContextTokens() int64 {
@@ -1422,7 +1642,7 @@ func (m Model) renderDialog() string {
 	}
 	hint := t.PermHint.Render("[↑/↓] Navigate  [Enter] Select  [Esc] Cancel")
 	body := strings.Join([]string{title, "", items.String(), hint}, "\n")
-	return t.PermBorder.Width(dialogWidth).Render(body)
+	return lipgloss.PlaceHorizontal(m.width, lipgloss.Center, t.DialogBorder.Width(dialogWidth).Render(body))
 }
 
 func (m *Model) ShowDialog(kind DialogKind) {
@@ -1465,21 +1685,23 @@ func (m *Model) ShowDialog(kind DialogKind) {
 
 func (m Model) renderPermissionDialog() string {
 	t := m.theme
+	dialogWidth := min(60, m.width-4)
 	title := t.PermTitle.Render(ErrorMark + "  Permission Required")
 	tool := t.Tool.Render(m.pending.toolName)
 	desc := truncate(strings.TrimSpace(m.pending.description), 600)
 	hint := t.PermHint.Render("[y] Allow   [n] Deny")
 	body := strings.Join([]string{title, "", "Tool: " + tool, desc, "", hint}, "\n")
-	return t.PermBorder.Width(max(1, m.width-2)).Render(body)
+	return lipgloss.PlaceHorizontal(m.width, lipgloss.Center, t.DialogBorder.Width(dialogWidth).Render(body))
 }
 
 func (m Model) renderConfirmDialog() string {
 	t := m.theme
+	dialogWidth := min(60, m.width-4)
 	title := t.PermTitle.Render("Confirm")
 	question := truncate(strings.TrimSpace(m.pendingConf.question), 600)
 	hint := t.PermHint.Render("[y] Yes   [n] No")
 	body := strings.Join([]string{title, "", question, "", hint}, "\n")
-	return t.PermBorder.Width(max(1, m.width-2)).Render(body)
+	return lipgloss.PlaceHorizontal(m.width, lipgloss.Center, t.DialogBorder.Width(dialogWidth).Render(body))
 }
 
 func (m Model) renderAskUserDialog() string {
@@ -1525,7 +1747,8 @@ func (m Model) renderAskUserDialog() string {
 	}
 	lines = append(lines, "", t.PermHint.Render(hint))
 	body := strings.Join(lines, "\n")
-	return t.PermBorder.Width(max(1, m.width-2)).Render(body)
+	dialogWidth := min(60, m.width-4)
+	return lipgloss.PlaceHorizontal(m.width, lipgloss.Center, t.DialogBorder.Width(dialogWidth).Render(body))
 }
 
 func (m Model) renderActivityPanel() string {
@@ -1604,7 +1827,7 @@ func (m Model) activityPanelHeight() int {
 
 func (m *Model) resize() {
 	layout := m.layout()
-	m.viewport.Width = max(1, m.width)
+	m.viewport.Width = max(1, m.width-scrollbarWidth)
 	m.viewport.Height = layout.viewportHeight
 	m.input.SetWidth(layout.inputWidth)
 	m.input.SetHeight(layout.inputHeight)
@@ -1612,29 +1835,32 @@ func (m *Model) resize() {
 
 func (m Model) layout() tuiLayout {
 	inputHeight := 4
-	statusHeight := 1
-	dialogHeight := 0
-	if m.dialog != nil && m.dialog.Active != DialogNone {
-		dialogHeight = min(8, len(m.dialog.Items)+4)
-	}
-	permHeight := 0
-	if m.pending != nil {
-		permHeight = 8
-	}
+	statusHeight := 2 // runtime status line + context/status line
+	dialogHeight := m.activeDialogHeight()
 	activityHeight := m.activityPanelHeight()
 	return tuiLayout{
-		viewportHeight: max(1, m.height-inputHeight-statusHeight-dialogHeight-permHeight-activityHeight),
+		viewportHeight: max(1, m.height-inputHeight-statusHeight-dialogHeight-activityHeight),
 		inputWidth:     max(1, m.width-4),
 		inputHeight:    3,
 		statusHeight:   statusHeight,
 		dialogHeight:   dialogHeight,
-		permHeight:     permHeight,
+		permHeight:     dialogHeight,
 		activityHeight: activityHeight,
-		inputY:         max(0, m.height-inputHeight-dialogHeight-permHeight-activityHeight),
-		dialogY:        max(0, m.height-dialogHeight-permHeight-activityHeight),
-		permY:          max(0, m.height-permHeight-activityHeight),
+		inputY:         max(0, m.height-inputHeight-activityHeight),
+		dialogY:        max(0, m.height-inputHeight-statusHeight-dialogHeight-activityHeight),
+		permY:          max(0, m.height-activityHeight),
 		activityY:      max(0, m.height-activityHeight),
 	}
+}
+
+func (m Model) activeDialogHeight() int {
+	if m.pendingConf != nil || m.pendingAsk != nil || m.pending != nil {
+		return 8
+	}
+	if m.dialog != nil && m.dialog.Active != DialogNone {
+		return min(8, len(m.dialog.Items)+4)
+	}
+	return 0
 }
 
 func (m *Model) appendAssistantDelta(text string) {
@@ -1650,6 +1876,28 @@ func (m *Model) appendAssistantDelta(text string) {
 }
 
 func (m *Model) refreshViewport() {
-	m.viewport.SetContent(renderMessages(m.messages, m.theme, m.showTimestamp, m.width))
+	m.viewport.SetContent(renderMessages(m.messages, m.theme, m.showTimestamp, m.viewport.Width))
 	m.viewport.GotoBottom()
+}
+
+func (m *Model) copyInput() {
+	if err := clipboard.WriteAll(m.input.Value()); err != nil {
+		m.status = fmt.Sprintf("Copy failed: %v", err)
+		return
+	}
+	m.status = "Copied input"
+}
+
+func (m *Model) copyLastAssistant() {
+	for i := len(m.messages) - 1; i >= 0; i-- {
+		if m.messages[i].Role == "assistant" {
+			if err := clipboard.WriteAll(m.messages[i].Content); err != nil {
+				m.status = fmt.Sprintf("Copy failed: %v", err)
+				return
+			}
+			m.status = "Copied assistant reply"
+			return
+		}
+	}
+	m.status = "No assistant reply to copy"
 }

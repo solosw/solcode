@@ -18,9 +18,14 @@ func TestExtractToolTraceMemories(t *testing.T) {
 		t.Fatalf("expected 3 deterministic memories, got %d: %#v", len(judgements), judgements)
 	}
 	joined := judgements[0].CanonicalText + "\n" + judgements[1].CanonicalText + "\n" + judgements[2].CanonicalText
-	for _, want := range []string{"internal/app/app.go: edited", "old behavior", "new behavior", "go test ./internal/app ./internal/session", "Edit", "Bash"} {
+	for _, want := range []string{"internal/app/app.go: edited", "targeted replacement", "go test ./internal/app ./internal/session", "Edit", "Bash"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("expected %q in deterministic memories: %s", want, joined)
+		}
+	}
+	for _, unwanted := range []string{"old behavior", "new behavior"} {
+		if strings.Contains(joined, unwanted) {
+			t.Fatalf("did not expect verbose replacement snippet %q in deterministic memories: %s", unwanted, joined)
 		}
 	}
 	if !strings.Contains(judgements[0].CanonicalText, "file modifications") {

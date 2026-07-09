@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	sdk "github.com/anthropics/anthropic-sdk-go"
 	"github.com/solosw/codeplus-agent/internal/engine"
 )
 
@@ -42,9 +43,9 @@ func TestContextBuilderSystemPromptIsStable(t *testing.T) {
 		t.Fatalf("unexpected system prompt order: %q", req.System)
 	}
 	if len(req.Messages) < 2 {
-		t.Fatalf("expected context messages to be prepended, got %d messages", len(req.Messages))
+		t.Fatalf("expected context messages to be appended, got %d messages", len(req.Messages))
 	}
-	rendered := req.Messages[0].Content
+	rendered := req.Messages[len(req.Messages)-2].Content
 	foundSummary := false
 	foundMemory := false
 	for _, block := range rendered {
@@ -58,9 +59,87 @@ func TestContextBuilderSystemPromptIsStable(t *testing.T) {
 		}
 	}
 	if !foundSummary {
-		t.Fatalf("expected session summary in context messages, got %v", rendered)
+		t.Fatalf("expected session summary in appended context messages, got %v", rendered)
 	}
 	if !foundMemory {
-		t.Fatalf("expected retrieved memory in context messages, got %v", rendered)
+		t.Fatalf("expected retrieved memory in appended context messages, got %v", rendered)
+	}
+	if req.Messages[len(req.Messages)-1].Content[0].OfText == nil || !strings.Contains(req.Messages[len(req.Messages)-1].Content[0].OfText.Text, "keep this context in mind") {
+		t.Fatalf("expected assistant ack at tail, got %#v", req.Messages[len(req.Messages)-1])
+	}
+}
+
+func TestContextBuilderSanitizesPollutedSessionSummaryBlock(t *testing.T) {
+	builder := engine.ContextBuilder{}
+	req := builder.Build(engine.BuildRequest{
+		Messages: []sdk.MessageParam{sdk.NewUserMessage(sdk.NewTextBlock("继续"))},
+		SessionSummary: strings.Join([]string{
+			"Session summary:",
+			"user: 继续",
+			"var b strings.Builder",
+			"+ \tvar b strings.Builder",
+			"assistant: 我继续直接收尾：先把 `app.go` 的 build 错修掉，再把“加载旧 session 时自动去污 summary”接上，同时更新失效测试。",
+			"assistant: 我继续直接修，先把 **build/test 断点** 和 **旧 session summary 去污入口** 一起收掉。",
+			"for _, want := range []string{\"internal/app/app.go: edited\", \"old behavior\", \"new behavior\", \"go test ./internal/app ./internal/session\", \"Edit\", \"Bash\"} {",
+			"+ \tfor _, want := range []string{\"internal/app/app.go: edited\", \"targeted replacement\", \"go test ./internal/app ./internal/session\", \"Edit\", \"Bash\"} {",
+			"`{\"command\":\"gofmt -w internal/session/compactor.go internal/memory/anthropic_extractor.go\"}`",
+			"Compacted session file modifications: internal/anthropic/messages.go: edited; internal/app/app.go: edited; internal/app/app.go: edited; internal/app/app.go: edited; internal/engine/engine.go: edited; internal/engine/engine.go: edited.",
+			"Compacted session validation/build commands run: \"); idx >= 0 {.",
+			"Compacted session validation/build commands run: \"):]).",
+			"+\t\t\treturn \"Compacted session validation/build commands run.\"",
+			"Compacted session validation/build commands run: \" + strings.Join(cleaned, \"; \") + \".\".",
+			"+\t\t\"+ \tvar output strings.Builder\",",
+			"+\t\t\"if strings.Contains(lower, \\\"gofmt\\\") && strings.Contains(lower, \\\" -w\\\") {\",",
+			"我先 `gofmt`，再用 **逐条精确测试名** 的方式重跑，避免 shell 引号问题。",
+			"\"+ \tvar output strings.Builder\",",
+			"\"if strings.Contains(lower, \\\"gofmt\\\") && strings.Contains(lower, \\\" -w\\\") {\",",
+			"internal/memory/sanitize.go",
+			"internal/memory/memory.go",
+			"internal/memory/manager.go",
+			"internal/memory/sanitize_test.go",
+			"internal/app/app.go",
+			"unit_tests/memory_summary_test.go",
+			"files := dedupeSummaryLines(append(append(priorityFiles, toolFileHints...), extractRelevantPriorHints(priorHints, []string{\"files\", \"code sections\", \"file modifications\"})...))",
+			"item.ID = strings.TrimSuffix(entry.Name(), \".json\")",
+			"func (m *Manager) RememberExtracted(ctx context.Context, input ExtractionInput) ([]Item, error) {",
+			"[ ] Add regression tests stored memory self-healing retrieval (pending)",
+			"@@ -810,7 +810,9 @@",
+			"currentWork = []string{primary}",
+		}, "\n"),
+	})
+	if len(req.Messages) == 0 || req.Messages[0].Content[0].OfText == nil {
+		t.Fatalf("expected injected context message, got %#v", req.Messages)
+	}
+	text := req.Messages[0].Content[0].OfText.Text
+	for _, want := range []string{
+		"Session summary:",
+		"Compacted session file modifications: internal/anthropic/messages.go: edited; internal/app/app.go: edited; internal/engine/engine.go: edited.",
+		"internal/memory/sanitize.go",
+		"internal/memory/memory.go",
+		"internal/memory/manager.go",
+		"internal/memory/sanitize_test.go",
+		"internal/app/app.go",
+		"unit_tests/memory_summary_test.go",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected sanitized context block to contain %q, got:\n%s", want, text)
+		}
+	}
+	for _, unwanted := range []string{
+		"user: 继续",
+		"var b strings.Builder",
+		"assistant: 我继续",
+		"Compacted session validation/build commands run: \"); idx >= 0 {.",
+		"Compacted session validation/build commands run: \"):]).",
+		"return \"Compacted session validation/build commands run.\"",
+		"files := dedupeSummaryLines",
+		"item.ID = strings.TrimSuffix",
+		"[ ] Add regression tests stored memory self-healing retrieval (pending)",
+		"@@ -810,7 +810,9 @@",
+		"currentWork = []string{primary}",
+	} {
+		if strings.Contains(text, unwanted) {
+			t.Fatalf("did not expect polluted session-summary content %q, got:\n%s", unwanted, text)
+		}
 	}
 }

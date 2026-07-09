@@ -122,17 +122,21 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 			program.Send(tui.ToolDoneMsg{Name: name, Output: output, IsError: isError})
 		}
 	}
-	onUsage := func(usage engine.Usage) {
-		if program != nil {
-			program.Send(tui.TokenUsageMsg{
-				EstimatedContextTokens:   usage.EstimatedContextTokens,
-				InputTokens:              usage.InputTokens,
-				OutputTokens:             usage.OutputTokens,
-				CacheCreationInputTokens: usage.CacheCreationInputTokens,
-				CacheReadInputTokens:     usage.CacheReadInputTokens,
-				MaxContextTokens:         usage.MaxContextTokens,
-			})
+	sendUsage := func(usage engine.Usage) {
+		if program == nil {
+			return
 		}
+		program.Send(tui.TokenUsageMsg{
+			EstimatedContextTokens:   usage.EstimatedContextTokens,
+			InputTokens:              usage.InputTokens,
+			OutputTokens:             usage.OutputTokens,
+			CacheCreationInputTokens: usage.CacheCreationInputTokens,
+			CacheReadInputTokens:     usage.CacheReadInputTokens,
+			MaxContextTokens:         usage.MaxContextTokens,
+		})
+	}
+	onUsage := func(usage engine.Usage) {
+		sendUsage(usage)
 	}
 	onStatus := func(status string) {
 		if program != nil {
@@ -232,7 +236,7 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 				return tui.StreamErrorMsg{Err: fmt.Errorf("%s", result.Error)}
 			}
 			if application.Sessions != nil && program != nil {
-				if s, loadErr := application.Sessions.LoadOrCreate(context.Background(), sessionID(currentSessionID), cfg.WorkDir, cfg.Model); loadErr == nil && s != nil {
+				if s, loadErr := loadSanitizedSession(context.Background(), application, currentSessionID, cfg); loadErr == nil && s != nil {
 					program.Send(tui.ReplaceMessagesMsg{Messages: chatMessagesFromSession(s)})
 				}
 			}
@@ -250,7 +254,7 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 		if sessionName == "" {
 			sessionName = "main"
 		}
-		if s, err := application.Sessions.LoadOrCreate(context.Background(), sessionID(sessionName), cfg.WorkDir, cfg.Model); err == nil && len(s.Messages) > 0 {
+		if s, err := loadSanitizedSession(context.Background(), application, sessionName, cfg); err == nil && s != nil && len(s.Messages) > 0 {
 			model.ReplaceMessages(chatMessagesFromSession(s))
 		}
 	}
@@ -284,6 +288,7 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 				}
 				if s != nil && program != nil {
 					program.Send(tui.ReplaceMessagesMsg{Messages: chatMessagesFromSession(s)})
+					sendUsage(usageFromSession(cfg, application, s))
 				}
 				if !changed {
 					return tui.CommandResultMsg{Text: "Compact skipped: current session is below the compaction threshold or has no older segment to compress."}
@@ -390,7 +395,8 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 		}
 		return names
 	})
-	program = tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	// program = tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	program = tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseAllMotion())
 	_, err = program.Run()
 	return err
 }
@@ -559,7 +565,7 @@ func handleSessionSwitch(cfg *config.Config, application *app.App, sessionName, 
 	if application == nil || application.Sessions == nil {
 		return tui.SelectResult{Message: "Sessions are not enabled."}
 	}
-	s, err := application.Sessions.LoadOrCreate(context.Background(), sessionID(sessionName), cfg.WorkDir, cfg.Model)
+	s, err := loadSanitizedSession(context.Background(), application, sessionName, *cfg)
 	if err != nil {
 		return tui.SelectResult{Message: fmt.Sprintf("Could not switch session to %q: %v", sessionName, err)}
 	}
@@ -766,9 +772,12 @@ func handleNewSessionCommand(cfg *config.Config, application *app.App, args, per
 	if name == "" {
 		return tui.SelectResult{Message: "Session name is required."}
 	}
-	s, err := application.Sessions.LoadOrCreate(context.Background(), sessionID(name), cfg.WorkDir, cfg.Model)
+	s, err := loadSanitizedSession(context.Background(), application, name, *cfg)
 	if err != nil {
 		return tui.SelectResult{Message: fmt.Sprintf("Could not create session %q: %v", name, err)}
+	}
+	if s == nil {
+		s = session.NewSession(sessionID(name), cfg.WorkDir, cfg.Model)
 	}
 	s.Metadata.Title = name
 	s.Metadata.CrossSessionMemory = &crossSessionMemory
@@ -779,7 +788,7 @@ func handleNewSessionCommand(cfg *config.Config, application *app.App, args, per
 	application.Config.Session.DefaultSession = name
 	messages := []tui.ChatMessage{{Role: "system", Content: fmt.Sprintf("Started new session: %s", name), TimeStamp: time.Now()}}
 	if len(s.Messages) == 0 {
-		messages = append(messages, tui.ChatMessage{Role: "system", Content: "New session created.", TimeStamp: time.Now()})
+		messages = append(messages, tui.ChatMessage{Role: "welcome", Content: "New session created.", TimeStamp: time.Now()})
 	} else {
 		messages = append(messages, chatMessagesFromSession(s)...)
 	}
@@ -849,6 +858,60 @@ func appSkillNames(application *app.App) []string {
 		out = append(out, def.Name)
 	}
 	return out
+}
+
+func loadSanitizedSession(ctx context.Context, application *app.App, sessionName string, cfg config.Config) (*session.Session, error) {
+	if application == nil || application.Sessions == nil {
+		return nil, nil
+	}
+	s, err := application.Sessions.LoadOrCreate(ctx, sessionID(sessionName), cfg.WorkDir, cfg.Model)
+	if err != nil {
+		return nil, err
+	}
+	if application.SanitizeLoadedSession(s) {
+		if err := application.Sessions.Save(context.WithoutCancel(ctx), s); err != nil {
+			return nil, err
+		}
+	}
+	return s, nil
+}
+
+func appcoreSanitizedSummary(application *app.App, s *session.Session) string {
+	if s == nil {
+		return ""
+	}
+	if application != nil {
+		application.SanitizeLoadedSession(s)
+	}
+	return strings.TrimSpace(s.Summary)
+}
+
+func usageFromSession(cfg config.Config, application *app.App, s *session.Session) engine.Usage {
+	if s == nil {
+		return engine.Usage{MaxContextTokens: cfg.MaxContextTokens}
+	}
+	workDir := s.Metadata.WorkDir
+	if strings.TrimSpace(workDir) == "" {
+		workDir = cfg.WorkDir
+	}
+	builder := engine.ContextBuilder{SystemPrompt: cfg.SystemPrompt, SkillNames: appSkillNames(application)}
+	var tools []tool.Tool
+	if application != nil && application.Tools != nil {
+		tools = application.Tools.All()
+	}
+	estimated := builder.EstimateContextTokens(engine.BuildRequest{
+		Model:          cfg.Model,
+		MaxTokens:      cfg.MaxTokens,
+		WorkDir:        workDir,
+		Messages:       s.CopyMessages(),
+		Tools:          tools,
+		Thinking:       cfg.Thinking,
+		ThinkingText:   cfg.ThinkingText,
+		Effort:         cfg.Effort,
+		Stream:         cfg.Stream,
+		SessionSummary: appcoreSanitizedSummary(application, s),
+	})
+	return engine.Usage{EstimatedContextTokens: estimated, MaxContextTokens: cfg.MaxContextTokens}
 }
 
 func configCloneMCPServers(servers []config.MCPServerConfig) []config.MCPServerConfig {

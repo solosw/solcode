@@ -7,41 +7,42 @@ import "github.com/charmbracelet/lipgloss"
 type Theme struct {
 	Name string
 
-	Claude       lipgloss.Color
+	Claude        lipgloss.Color
 	ClaudeShimmer lipgloss.Color
-	Text         lipgloss.Color
-	Inactive     lipgloss.Color
-	Subtle       lipgloss.Color
-	Suggestion   lipgloss.Color
-	Success      lipgloss.Color
-	Error        lipgloss.Color
-	Warning      lipgloss.Color
-	Permission   lipgloss.Color
-	PromptBorder lipgloss.Color
-	Background   lipgloss.Color
-	StatusBG     lipgloss.Color
-	StatusFG     lipgloss.Color
+	Text          lipgloss.Color
+	Inactive      lipgloss.Color
+	Subtle        lipgloss.Color
+	Suggestion    lipgloss.Color
+	Success       lipgloss.Color
+	Error         lipgloss.Color
+	Warning       lipgloss.Color
+	Permission    lipgloss.Color
+	PromptBorder  lipgloss.Color
+	Background    lipgloss.Color
+	StatusBG      lipgloss.Color
+	StatusFG      lipgloss.Color
 
 	// Derived styles
-	User        lipgloss.Style
-	Assistant   lipgloss.Style
-	System      lipgloss.Style
-	ErrorStyle  lipgloss.Style
-	Tool        lipgloss.Style
-	ToolDone    lipgloss.Style
-	ToolResult  lipgloss.Style
-	Connector   lipgloss.Style
-	Dim         lipgloss.Style
-	ClaudeStyle lipgloss.Style
-	Status      lipgloss.Style
-	Prompt      lipgloss.Style
-	PermBorder  lipgloss.Style
-	PermTitle   lipgloss.Style
-	PermHint    lipgloss.Style
-	DiffAdd     lipgloss.Style
-	DiffDel     lipgloss.Style
-	DiffCtx     lipgloss.Style
-	DiffHdr     lipgloss.Style
+	User         lipgloss.Style
+	Assistant    lipgloss.Style
+	System       lipgloss.Style
+	ErrorStyle   lipgloss.Style
+	Tool         lipgloss.Style
+	ToolDone     lipgloss.Style
+	ToolResult   lipgloss.Style
+	Connector    lipgloss.Style
+	Dim          lipgloss.Style
+	ClaudeStyle  lipgloss.Style
+	Status       lipgloss.Style
+	Prompt       lipgloss.Style
+	PermBorder   lipgloss.Style
+	DialogBorder lipgloss.Style
+	PermTitle    lipgloss.Style
+	PermHint     lipgloss.Style
+	DiffAdd      lipgloss.Style
+	DiffDel      lipgloss.Style
+	DiffCtx      lipgloss.Style
+	DiffHdr      lipgloss.Style
 }
 
 var Dark = buildTheme("dark", themePalette{
@@ -80,7 +81,7 @@ var Light = buildTheme("light", themePalette{
 
 type themePalette struct {
 	claude, claudeShimmer, text, inactive, subtle, suggestion string
-	success, err, warning, permission, promptBorder          string
+	success, err, warning, permission, promptBorder           string
 	background, statusBG, statusFG                            string
 }
 
@@ -118,6 +119,11 @@ func buildTheme(name string, p themePalette) Theme {
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(t.Permission).
 		BorderBottom(false).BorderLeft(false).BorderRight(false).
+		MarginTop(1)
+	t.DialogBorder = lipgloss.NewStyle().
+		Border(lipgloss.NormalBorder()).
+		BorderForeground(t.Permission).
+		Padding(1, 2).
 		MarginTop(1)
 	t.PermTitle = lipgloss.NewStyle().Foreground(t.Permission).Bold(true)
 	t.PermHint = lipgloss.NewStyle().Foreground(t.Inactive)

@@ -37,6 +37,7 @@ type AgentConfig struct {
 	Prompt       string
 	AllowedTools []string
 	MaxTurns     int
+	Model        string
 }
 
 type EventKind string

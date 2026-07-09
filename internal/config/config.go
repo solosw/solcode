@@ -93,6 +93,7 @@ type Config struct {
 	APIKey           string            `json:"api_key"`
 	BaseURL          string            `json:"base_url"`
 	Model            string            `json:"model"`
+	FastModel        string            `json:"fast_model,omitempty"`
 	MaxContextTokens int64             `json:"max_context_tokens,omitempty"`
 	MaxTokens        int64             `json:"max_tokens"`
 	SystemPrompt     string            `json:"system_prompt"`
@@ -137,9 +138,13 @@ type MemoryConfig struct {
 	Dir                      string  `json:"dir,omitempty"`
 	MaxRecentTurns           int     `json:"max_recent_turns,omitempty"`
 	SummaryThresholdTokens   int     `json:"summary_threshold_tokens,omitempty"`
+	SummaryTriggerPercent    int     `json:"summary_trigger_percent,omitempty"`
 	CompactionTriggerPercent int     `json:"compaction_trigger_percent,omitempty"`
 	CompactionTargetPercent  int     `json:"compaction_target_percent,omitempty"`
 	RetrievalLimit           int     `json:"retrieval_limit,omitempty"`
+	RetrievalContextPercent  int     `json:"retrieval_context_percent,omitempty"`
+	RetrievalMinTokens       int     `json:"retrieval_min_tokens,omitempty"`
+	RetrievalMaxTokens       int     `json:"retrieval_max_tokens,omitempty"`
 	RetrievalM2Limit         int     `json:"retrieval_m2_limit,omitempty"`
 	RetrievalM3Limit         int     `json:"retrieval_m3_limit,omitempty"`
 	RetrievalM4Limit         int     `json:"retrieval_m4_limit,omitempty"`
@@ -185,6 +190,7 @@ type ModelConfig struct {
 	DisplayName      string                     `json:"display_name,omitempty"`
 	Provider         string                     `json:"provider,omitempty"`
 	Default          bool                       `json:"default,omitempty"`
+	Fast             bool                       `json:"fast,omitempty"`
 	MaxContextTokens int64                      `json:"max_context_tokens,omitempty"`
 	MaxTokens        *int64                     `json:"max_tokens,omitempty"`
 	MaxTurns         *int                       `json:"max_turns,omitempty"`
@@ -200,6 +206,7 @@ func Default() Config {
 		APIKey:           os.Getenv("ANTHROPIC_API_KEY"),
 		BaseURL:          os.Getenv("ANTHROPIC_BASE_URL"),
 		Model:            anthropic.DefaultModel,
+		FastModel:        "",
 		MaxContextTokens: 200_000,
 		MaxTokens:        64_000,
 		WorkDir:          wd,
@@ -221,9 +228,13 @@ func Default() Config {
 			Enabled:                  true,
 			MaxRecentTurns:           20,
 			SummaryThresholdTokens:   60_000,
+			SummaryTriggerPercent:    50,
 			CompactionTriggerPercent: 85,
-			CompactionTargetPercent:  50,
+			CompactionTargetPercent:  15,
 			RetrievalLimit:           8,
+			RetrievalContextPercent:  10,
+			RetrievalMinTokens:       10_000,
+			RetrievalMaxTokens:       50_000,
 			RetrievalM2Limit:         4,
 			RetrievalM3Limit:         3,
 			RetrievalM4Limit:         3,
@@ -299,6 +310,7 @@ func defaultSettingsPayload(workDir string) map[string]any {
 				ID:               anthropic.DefaultModel,
 				DisplayName:      anthropic.DefaultModel,
 				Default:          true,
+				Fast:             true,
 				MaxContextTokens: 200_000,
 				MaxTokens:        &maxTokens,
 				MaxTurns:         &maxTurns,
@@ -405,6 +417,10 @@ func (cfg *Config) Normalize() error {
 	}
 	if cfg.MaxTokens <= 0 {
 		cfg.MaxTokens = 64_000
+	}
+	cfg.FastModel = strings.TrimSpace(cfg.FastModel)
+	if cfg.FastModel == "" {
+		cfg.FastModel = cfg.resolveFastModelName(prov.Name)
 	}
 	if cfg.MaxTurns < 0 {
 		cfg.MaxTurns = 0
@@ -559,6 +575,15 @@ func (cfg Config) modelsOf(name string) []ModelConfig {
 	return nil
 }
 
+func (cfg Config) resolveFastModelName(providerName string) string {
+	for _, m := range cfg.modelsOf(providerName) {
+		if m.Fast {
+			return m.ID
+		}
+	}
+	return ""
+}
+
 func (cfg Config) validateProviders() error {
 	defaultCount := 0
 	for _, p := range cfg.Providers {
@@ -597,6 +622,7 @@ func applyEnvLegacy(cfg *Config) {
 	if cfg.Model == "" {
 		cfg.Model = anthropic.DefaultModel
 	}
+	cfg.FastModel = strings.TrimSpace(cfg.FastModel)
 	if cfg.MaxContextTokens <= 0 {
 		cfg.MaxContextTokens = 200_000
 	}
@@ -637,11 +663,17 @@ func (cfg *Config) normalizeSessionMemory() {
 	if cfg.Memory.SummaryThresholdTokens <= 0 {
 		cfg.Memory.SummaryThresholdTokens = 60_000
 	}
+	if cfg.Memory.SummaryTriggerPercent <= 0 {
+		cfg.Memory.SummaryTriggerPercent = 50
+	}
+	if cfg.Memory.SummaryTriggerPercent > 100 {
+		cfg.Memory.SummaryTriggerPercent = 100
+	}
 	if cfg.Memory.CompactionTriggerPercent <= 0 {
 		cfg.Memory.CompactionTriggerPercent = 85
 	}
 	if cfg.Memory.CompactionTargetPercent <= 0 {
-		cfg.Memory.CompactionTargetPercent = 50
+		cfg.Memory.CompactionTargetPercent = 15
 	}
 	if cfg.Memory.CompactionTriggerPercent > 100 {
 		cfg.Memory.CompactionTriggerPercent = 100
@@ -657,6 +689,21 @@ func (cfg *Config) normalizeSessionMemory() {
 	}
 	if cfg.Memory.RetrievalLimit <= 0 {
 		cfg.Memory.RetrievalLimit = 8
+	}
+	if cfg.Memory.RetrievalContextPercent <= 0 {
+		cfg.Memory.RetrievalContextPercent = 10
+	}
+	if cfg.Memory.RetrievalContextPercent > 10 {
+		cfg.Memory.RetrievalContextPercent = 10
+	}
+	if cfg.Memory.RetrievalMinTokens <= 0 {
+		cfg.Memory.RetrievalMinTokens = 10_000
+	}
+	if cfg.Memory.RetrievalMaxTokens <= 0 {
+		cfg.Memory.RetrievalMaxTokens = 50_000
+	}
+	if cfg.Memory.RetrievalMaxTokens < cfg.Memory.RetrievalMinTokens {
+		cfg.Memory.RetrievalMaxTokens = cfg.Memory.RetrievalMinTokens
 	}
 	if cfg.Memory.RetrievalM2Limit <= 0 {
 		cfg.Memory.RetrievalM2Limit = 4

@@ -13,13 +13,16 @@ import (
 type SessionID string
 
 type Metadata struct {
-	ID                 SessionID `json:"id"`
-	Title              string    `json:"title,omitempty"`
-	WorkDir            string    `json:"work_dir,omitempty"`
-	Model              string    `json:"model,omitempty"`
-	CrossSessionMemory *bool     `json:"cross_session_memory,omitempty"`
-	CreatedAt          time.Time `json:"created_at"`
-	UpdatedAt          time.Time `json:"updated_at"`
+	ID                           SessionID `json:"id"`
+	Title                        string    `json:"title,omitempty"`
+	WorkDir                      string    `json:"work_dir,omitempty"`
+	Model                        string    `json:"model,omitempty"`
+	CrossSessionMemory           *bool     `json:"cross_session_memory,omitempty"`
+	MemorySummaryCompleted       bool      `json:"memory_summary_completed,omitempty"`
+	MemoryCompactionCompleted    bool      `json:"memory_compaction_completed,omitempty"`
+	MemoryCompactionMessageCount int       `json:"memory_compaction_message_count,omitempty"`
+	CreatedAt                    time.Time `json:"created_at"`
+	UpdatedAt                    time.Time `json:"updated_at"`
 }
 
 type Session struct {
@@ -79,6 +82,7 @@ func (m *Manager) Save(ctx context.Context, s *Session) error {
 	if m == nil || m.store == nil || s == nil {
 		return nil
 	}
+	s.Messages = StripEphemeralContextMessages(s.Messages)
 	return m.store.Save(ctx, s)
 }
 

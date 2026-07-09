@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/sergi/go-diff/diffmatchpatch"
 )
 
 // WriteParams is the input schema for the write tool.
@@ -120,62 +122,164 @@ func (w *writeTool) Invoke(ctx context.Context, uctx *UseContext, input json.Raw
 }
 
 func GenerateSimpleDiff(oldContent, newContent, fileName string) string {
-	if oldContent == "" {
-		return fmt.Sprintf("--- /dev/null\n+++ b/%s\n@@ -0,0 +1,%d @@\n%s",
-			filepath.Base(fileName),
-			strings.Count(newContent, "\n")+1,
-			prefixLines(newContent, "+"))
+	if oldContent == newContent {
+		return ""
 	}
 
-	oldLines := strings.Split(oldContent, "\n")
-	newLines := strings.Split(newContent, "\n")
+	dmp := diffmatchpatch.New()
+	text1, text2, lineArray := dmp.DiffLinesToChars(oldContent, newContent)
+	diffs := dmp.DiffMain(text1, text2, false)
+	diffs = dmp.DiffCleanupSemantic(diffs)
+	diffs = dmp.DiffCharsToLines(diffs, lineArray)
+	lines := diffLinesFromDiffs(diffs)
+	if len(lines) == 0 {
+		return ""
+	}
 
 	var output strings.Builder
-	output.WriteString(fmt.Sprintf("--- a/%s\n+++ b/%s\n", filepath.Base(fileName), filepath.Base(fileName)))
-
-	// Simple line-by-line diff
-	maxLen := len(oldLines)
-	if len(newLines) > maxLen {
-		maxLen = len(newLines)
+	if oldContent == "" {
+		output.WriteString(fmt.Sprintf("--- /dev/null\n+++ b/%s\n", filepath.Base(fileName)))
+	} else {
+		output.WriteString(fmt.Sprintf("--- a/%s\n+++ b/%s\n", filepath.Base(fileName), filepath.Base(fileName)))
 	}
-
-	// Find changed ranges
-	inDiff := false
-	for i := 0; i < maxLen; i++ {
-		oldLine := ""
-		newLine := ""
-		if i < len(oldLines) {
-			oldLine = oldLines[i]
-		}
-		if i < len(newLines) {
-			newLine = newLines[i]
-		}
-
-		if oldLine != newLine {
-			if !inDiff {
-				output.WriteString(fmt.Sprintf("@@ -%d +%d @@\n", i+1, i+1))
-				inDiff = true
-			}
-			if i < len(oldLines) {
-				output.WriteString(fmt.Sprintf("- %s\n", oldLine))
-			}
-			if i < len(newLines) {
-				output.WriteString(fmt.Sprintf("+ %s\n", newLine))
-			}
-		} else {
-			inDiff = false
-		}
-	}
-
+	writeUnifiedHunks(&output, lines, 3)
 	return output.String()
 }
 
-func prefixLines(content, prefix string) string {
-	lines := strings.Split(content, "\n")
-	for i, line := range lines {
-		lines[i] = prefix + line
+type unifiedDiffLine struct {
+	op    byte
+	text  string
+	oldNo int
+	newNo int
+}
+
+func diffLinesFromDiffs(diffs []diffmatchpatch.Diff) []unifiedDiffLine {
+	lines := make([]unifiedDiffLine, 0)
+	oldNo, newNo := 1, 1
+	for _, diff := range diffs {
+		var op byte
+		switch diff.Type {
+		case diffmatchpatch.DiffDelete:
+			op = '-'
+		case diffmatchpatch.DiffInsert:
+			op = '+'
+		default:
+			op = ' '
+		}
+		for _, line := range splitDiffTextLines(diff.Text) {
+			lines = append(lines, unifiedDiffLine{op: op, text: line, oldNo: oldNo, newNo: newNo})
+			if op != '+' {
+				oldNo++
+			}
+			if op != '-' {
+				newNo++
+			}
+		}
 	}
-	return strings.Join(lines, "\n")
+	return lines
+}
+
+func splitDiffTextLines(text string) []string {
+	if text == "" {
+		return nil
+	}
+	parts := strings.SplitAfter(text, "\n")
+	if len(parts) > 0 && parts[len(parts)-1] == "" {
+		parts = parts[:len(parts)-1]
+	}
+	lines := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSuffix(part, "\n")
+		part = strings.TrimSuffix(part, "\r")
+		lines = append(lines, part)
+	}
+	return lines
+}
+
+func writeUnifiedHunks(output *strings.Builder, lines []unifiedDiffLine, context int) {
+	for search := 0; search < len(lines); {
+		change := -1
+		for i := search; i < len(lines); i++ {
+			if lines[i].op != ' ' {
+				change = i
+				break
+			}
+		}
+		if change == -1 {
+			return
+		}
+		hunkStart := maxInt(change-context, 0)
+		hunkEnd := change
+		trailingContext := 0
+		for i := change; i < len(lines); i++ {
+			if lines[i].op == ' ' {
+				trailingContext++
+				if trailingContext > context {
+					break
+				}
+			} else {
+				trailingContext = 0
+			}
+			hunkEnd = i + 1
+		}
+		writeUnifiedHunk(output, lines[hunkStart:hunkEnd])
+		search = hunkEnd
+	}
+}
+
+func writeUnifiedHunk(output *strings.Builder, hunk []unifiedDiffLine) {
+	if len(hunk) == 0 {
+		return
+	}
+	oldStart, newStart, oldCount, newCount := hunkRange(hunk)
+	output.WriteString(fmt.Sprintf("@@ -%s +%s @@\n", formatUnifiedRange(oldStart, oldCount), formatUnifiedRange(newStart, newCount)))
+	for _, line := range hunk {
+		output.WriteByte(line.op)
+		output.WriteString(line.text)
+		output.WriteByte('\n')
+	}
+}
+
+func hunkRange(hunk []unifiedDiffLine) (oldStart, newStart, oldCount, newCount int) {
+	oldStart, newStart = -1, -1
+	for _, line := range hunk {
+		if line.op != '+' {
+			if oldStart == -1 {
+				oldStart = line.oldNo
+			}
+			oldCount++
+		}
+		if line.op != '-' {
+			if newStart == -1 {
+				newStart = line.newNo
+			}
+			newCount++
+		}
+	}
+	if oldStart == -1 {
+		oldStart = hunk[0].oldNo - 1
+		if oldStart < 0 {
+			oldStart = 0
+		}
+	}
+	if newStart == -1 {
+		newStart = hunk[0].newNo - 1
+		if newStart < 0 {
+			newStart = 0
+		}
+	}
+	return oldStart, newStart, oldCount, newCount
+}
+
+func formatUnifiedRange(start, count int) string {
+	return fmt.Sprintf("%d,%d", start, count)
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func CountDiffChanges(diffText string) (int, int) {

@@ -226,24 +226,25 @@ func modificationSummary(toolName, path string, fields map[string]string) string
 }
 
 func replacementDetail(fields map[string]string) string {
-	oldText := excerpt(fields["old_string"], 80)
-	newText := excerpt(fields["new_string"], 80)
+	hasOld := strings.TrimSpace(fields["old_string"]) != ""
+	hasNew := strings.TrimSpace(fields["new_string"]) != ""
 	switch {
-	case oldText != "" && newText != "":
-		return " (replaced " + oldText + " -> " + newText + ")"
-	case newText != "":
-		return " (new content includes " + newText + ")"
+	case hasOld && hasNew:
+		return " (targeted replacement)"
+	case hasNew:
+		return " (added content)"
+	case hasOld:
+		return " (removed content)"
 	default:
 		return ""
 	}
 }
 
 func patchDetail(fields map[string]string) string {
-	patch := excerpt(fields["patch_text"], 120)
-	if patch == "" {
+	if strings.TrimSpace(fields["patch_text"]) == "" {
 		return ""
 	}
-	return " (" + patch + ")"
+	return " (unified diff patch)"
 }
 
 func bashModificationSummary(command string) string {

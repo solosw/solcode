@@ -45,8 +45,8 @@ var (
 )
 
 func (r LayeredRetriever) Retrieve(items []Item, plan RetrievalPlan) []Item {
-	if plan.TotalLimit <= 0 {
-		plan.TotalLimit = 8
+	if plan.TotalLimit < 0 {
+		plan.TotalLimit = 0
 	}
 	if plan.M2Limit <= 0 {
 		plan.M2Limit = 4
@@ -81,10 +81,14 @@ func (r LayeredRetriever) Retrieve(items []Item, plan RetrievalPlan) []Item {
 	for tier := range grouped {
 		grouped[tier] = sortByTierRelevance(grouped[tier], profile)
 	}
-	result := make([]Item, 0, plan.TotalLimit)
+	capacity := plan.TotalLimit
+	if capacity <= 0 {
+		capacity = len(filtered)
+	}
+	result := make([]Item, 0, capacity)
 	appendTier := func(tier Tier, limit int) {
 		for _, item := range grouped[tier] {
-			if len(result) >= plan.TotalLimit || limit <= 0 {
+			if (plan.TotalLimit > 0 && len(result) >= plan.TotalLimit) || limit <= 0 {
 				return
 			}
 			if containsItem(result, item.ID) {

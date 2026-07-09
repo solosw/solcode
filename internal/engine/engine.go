@@ -43,6 +43,7 @@ type Config struct {
 	Tools            *tool.Registry
 	Permissions      *permission.Service
 	ModelName        string
+	FastModelName    string
 	MaxContextTokens int64
 	MaxTokens        int64
 	SystemPrompt     string
@@ -141,7 +142,7 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 		turnLimit = e.config.MaxTurns
 	}
 	if turnLimit <= 0 {
-		turnLimit = 10
+		turnLimit = 10000
 	}
 
 	tools := e.selectedTools(cfg.AllowedTools)
@@ -152,12 +153,17 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 	}
 
 	var finalText string
+	isMain := cfg.Role == "" || cfg.Role == agent.AgentRoleMain
 	for turn := 0; turn < turnLimit; turn++ {
 		if err := ctx.Err(); err != nil {
 			return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: err.Error()}, Messages: messages}
 		}
+		modelName := cfg.Model
+		if modelName == "" {
+			modelName = e.config.ModelName
+		}
 		req := builder.Build(BuildRequest{
-			Model:          e.config.ModelName,
+			Model:          modelName,
 			MaxTokens:      e.config.MaxTokens,
 			WorkDir:        cfg.WorkDir,
 			Messages:       messages,
@@ -169,15 +175,17 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 			SessionSummary: runReq.SessionSummary,
 			MemoryContext:  runReq.MemoryContext,
 		})
-		req.OnTextDelta = e.config.OnTextDelta
-		req.OnThinkingDelta = e.config.OnThinkingDelta
+		if isMain {
+			req.OnTextDelta = e.config.OnTextDelta
+			req.OnThinkingDelta = e.config.OnThinkingDelta
+		}
 
 		message, err := e.config.Client.Create(ctx, req)
 		if err != nil {
 			return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: err.Error()}, Messages: messages}
 		}
 		estimatedContextTokens := builder.EstimateContextTokens(BuildRequest{
-			Model:          e.config.ModelName,
+			Model:          modelName,
 			MaxTokens:      e.config.MaxTokens,
 			WorkDir:        cfg.WorkDir,
 			Messages:       messages[:len(messages)-1],
@@ -189,7 +197,7 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 			SessionSummary: runReq.SessionSummary,
 			MemoryContext:  runReq.MemoryContext,
 		}) + int64(tokenest.Text(prompt))
-		if e.config.OnUsage != nil {
+		if isMain && e.config.OnUsage != nil {
 			e.config.OnUsage(Usage{
 				EstimatedContextTokens:   estimatedContextTokens,
 				InputTokens:              message.Usage.InputTokens,
@@ -217,7 +225,7 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 				return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: err.Error()}, Messages: messages}
 			}
 			input := cpanthropic.RawInput(use.Input)
-			if e.config.OnToolStart != nil {
+			if isMain && e.config.OnToolStart != nil {
 				e.config.OnToolStart(use.Name, input)
 			}
 			toolResult := executor.Execute(ctx, ToolCall{
@@ -230,6 +238,7 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 					WorkDir:   cfg.WorkDir,
 					AgentID:   string(cfg.ID),
 					TodoPath:  e.config.TodoPath,
+					FastModel: e.config.FastModelName,
 					AskUser:   e.config.OnAskUser,
 				},
 			})
@@ -242,7 +251,7 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 				text = toolResult.Content.Text
 				isError = toolResult.IsError || toolResult.Content.IsError
 			}
-			if e.config.OnToolDone != nil {
+			if isMain && e.config.OnToolDone != nil {
 				e.config.OnToolDone(use.Name, text, isError)
 			}
 			results = append(results, cpanthropic.ToolResult{ToolUseID: use.ID, Text: text, IsError: isError})

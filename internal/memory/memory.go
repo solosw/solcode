@@ -144,6 +144,18 @@ func (s *FileStore) List(ctx context.Context) ([]Item, error) {
 		if item.ID == "" {
 			item.ID = strings.TrimSuffix(entry.Name(), ".json")
 		}
+		cleaned, changed, keep := sanitizeStoredMemoryItem(item)
+		if !keep {
+			_ = os.Remove(filepath.Join(s.dir, entry.Name()))
+			continue
+		}
+		if changed {
+			if _, err := s.Save(ctx, cleaned); err == nil {
+				item = cleaned
+			} else {
+				item = cleaned
+			}
+		}
 		items = append(items, item)
 	}
 	return items, nil

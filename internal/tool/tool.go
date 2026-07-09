@@ -15,6 +15,7 @@ type UseContext struct {
 	WorkDir   string
 	AgentID   string
 	TodoPath  string
+	FastModel string
 	AskUser   func(ctx context.Context, params AskUserParams) (map[string]string, error)
 }
 
@@ -23,6 +24,8 @@ type ContentBlock struct {
 	Type      string `json:"type"` // text | image | tool_use | tool_result
 	Text      string `json:"text,omitempty"`
 	IsError   bool   `json:"is_error,omitempty"`
+	MimeType  string `json:"mime_type,omitempty"`   // for image blocks
+	Data      string `json:"data,omitempty"`        // base64-encoded image data
 	ToolUseID string `json:"tool_use_id,omitempty"` // for tool_result blocks
 }
 

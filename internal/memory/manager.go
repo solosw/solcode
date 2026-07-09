@@ -56,7 +56,11 @@ type ExtractionInput struct {
 	CompactedTranscript string
 	RetainedTranscript  string
 	DiscardedTranscript string
+	TriggerReason       string
+	EstimatedTokens     int
 }
+
+const memoryWorkingSetLimit = 10
 
 type Manager struct {
 	Store           *FileStore
@@ -139,8 +143,12 @@ func (m *Manager) remember(ctx context.Context, text, sourceSessionID, workDir, 
 	if err != nil {
 		return Item{}, false, err
 	}
+	workingItems, err := m.limitWorkingSet(ctx, text, sourceSessionID, items)
+	if err != nil {
+		return Item{}, false, err
+	}
 	var related []Item
-	for _, item := range items {
+	for _, item := range workingItems {
 		if item.SourceSessionID == sourceSessionID || normalizeText(item.Text) == normalizeText(text) {
 			related = append(related, item)
 		}
@@ -227,7 +235,15 @@ func (m *Manager) Retrieve(ctx context.Context, query, currentSessionID string, 
 		M4Limit:           m.RetrieveM4Limit,
 		M5Limit:           m.RetrieveM5Limit,
 	})
-	return selected, nil
+	cleaned := make([]Item, 0, len(selected))
+	for _, item := range selected {
+		next, _, keep := sanitizeStoredMemoryItem(item)
+		if !keep {
+			continue
+		}
+		cleaned = append(cleaned, next)
+	}
+	return cleaned, nil
 }
 
 func (m *Manager) RememberExtracted(ctx context.Context, input ExtractionInput) ([]Item, error) {
@@ -246,6 +262,10 @@ func (m *Manager) RememberExtracted(ctx context.Context, input ExtractionInput) 
 	}
 	stored := make([]Item, 0, len(judgements))
 	existingItems, err := m.Store.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	workingItems, err := m.limitWorkingSet(ctx, input.Transcript+"\n"+input.CompactedTranscript, input.SourceSessionID, existingItems)
 	if err != nil {
 		return nil, err
 	}
@@ -273,7 +293,7 @@ func (m *Manager) RememberExtracted(ctx context.Context, input ExtractionInput) 
 			item.Tier = TierShortTerm
 		}
 		mergedExisting := false
-		for _, existing := range existingItems {
+		for _, existing := range workingItems {
 			if !shouldMergeCandidate(existing, item) {
 				continue
 			}
@@ -296,9 +316,55 @@ func (m *Manager) RememberExtracted(ctx context.Context, input ExtractionInput) 
 			return stored, err
 		}
 		stored = append(stored, created)
-		existingItems = append(existingItems, created)
+		workingItems = append(workingItems, created)
 	}
 	return stored, nil
+}
+
+func (m *Manager) limitWorkingSet(ctx context.Context, query, sourceSessionID string, items []Item) ([]Item, error) {
+	_ = sourceSessionID
+	if len(items) <= memoryWorkingSetLimit {
+		return items, nil
+	}
+	sorted := sortByTierRelevance(items, analyzeRetrievalQuery(query))
+	selected := append([]Item(nil), sorted[:memoryWorkingSetLimit]...)
+	selectedIDs := itemIDSet(selected)
+	for _, item := range items {
+		if selectedIDs[item.ID] {
+			continue
+		}
+		downgraded := downgradeMemoryItem(item)
+		if downgraded.Tier == item.Tier {
+			continue
+		}
+		if _, err := m.Store.Save(ctx, downgraded); err != nil {
+			return selected, err
+		}
+	}
+	return selected, nil
+}
+
+func itemIDSet(items []Item) map[string]bool {
+	set := make(map[string]bool, len(items))
+	for _, item := range items {
+		set[item.ID] = true
+	}
+	return set
+}
+
+func downgradeMemoryItem(item Item) Item {
+	switch item.Tier {
+	case TierProcedural:
+		item.Tier = TierLongTerm
+	case TierLongTerm:
+		item.Tier = TierShortTerm
+	case TierShortTerm:
+		item.Tier = TierWorking
+	case TierWorking:
+		item.Tier = TierSensory
+	}
+	item.UpdatedAt = time.Now()
+	return item
 }
 
 func (m *Manager) Consolidate(ctx context.Context) error {

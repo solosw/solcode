@@ -13,8 +13,8 @@ import (
 
 // PatchParams is the input schema for the patch tool.
 type PatchParams struct {
-	FilePath   string `json:"file_path"`
-	PatchText  string `json:"patch_text"`
+	FilePath  string `json:"file_path"`
+	PatchText string `json:"patch_text"`
 }
 
 const PatchToolName = "Patch"
@@ -28,9 +28,9 @@ func NewPatchTool() Tool {
 	return &patchTool{}
 }
 
-func (p *patchTool) Name() string                        { return PatchToolName }
+func (p *patchTool) Name() string                         { return PatchToolName }
 func (p *patchTool) IsDestructive(_ json.RawMessage) bool { return true }
-func (p *patchTool) IsReadOnly(_ json.RawMessage) bool     { return false }
+func (p *patchTool) IsReadOnly(_ json.RawMessage) bool    { return false }
 
 func (p *patchTool) Description() string {
 	return `Applies a unified diff patch to a file.
@@ -102,8 +102,17 @@ func (p *patchTool) Invoke(ctx context.Context, uctx *UseContext, input json.Raw
 
 	oldLines := strings.Count(oldContent, "\n") + 1
 	newLines := strings.Count(newContent, "\n") + 1
+	diff := GenerateSimpleDiff(oldContent, newContent, filePath)
+	additions, removals := CountDiffChanges(diff)
 
-	return Result(fmt.Sprintf("Patch applied to %s\nLines: %d → %d", filePath, oldLines, newLines)), nil
+	var result strings.Builder
+	result.WriteString(fmt.Sprintf("Patch applied to %s\n", filePath))
+	result.WriteString(fmt.Sprintf("Lines: %d → %d (+%d -%d)\n", oldLines, newLines, additions, removals))
+	if diff != "" {
+		result.WriteString("\n")
+		result.WriteString(diff)
+	}
+	return Result(result.String()), nil
 }
 
 func applyPatch(content, patchText string) (string, error) {

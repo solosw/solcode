@@ -18,6 +18,17 @@ func (s stubJudge) JudgeMemory(ctx context.Context, input memory.MemoryJudgement
 	return s.judgement, nil
 }
 
+type captureJudge struct {
+	judgement memory.MemoryJudgement
+	input     memory.MemoryJudgementInput
+}
+
+func (s *captureJudge) JudgeMemory(ctx context.Context, input memory.MemoryJudgementInput) (memory.MemoryJudgement, error) {
+	_ = ctx
+	s.input = input
+	return s.judgement, nil
+}
+
 type stubExtractor struct {
 	judgements []memory.MemoryJudgement
 	seenInput  memory.ExtractionInput
@@ -64,6 +75,66 @@ func TestMemoryManagerRememberExplicitUsesJudgeResult(t *testing.T) {
 	}
 	if item.Confidence != 0.93 {
 		t.Fatalf("expected confidence 0.93, got %v", item.Confidence)
+	}
+}
+
+func TestMemoryManagerRememberExplicitLimitsRelatedMemoriesAndDowngradesExtras(t *testing.T) {
+	ctx := context.Background()
+	store := memory.NewFileStore(t.TempDir())
+	now := time.Now()
+	for i := 0; i < 12; i++ {
+		tier := memory.TierLongTerm
+		if i < 10 {
+			tier = memory.TierShortTerm
+		}
+		_, err := store.Save(ctx, memory.Item{
+			ID:              string(rune('a' + i)),
+			Tier:            tier,
+			Kind:            memory.KindFact,
+			Scope:           memory.ScopeProject,
+			Text:            "same session memory item",
+			Importance:      float64(i + 1),
+			Confidence:      0.8,
+			AccessCount:     i + 1,
+			UpdatedAt:       now.Add(time.Duration(i) * time.Minute),
+			LastAccessedAt:  now.Add(time.Duration(i) * time.Minute),
+			SourceSessionID: "s1",
+		})
+		if err != nil {
+			t.Fatalf("save memory %d: %v", i, err)
+		}
+	}
+	judge := &captureJudge{judgement: memory.MemoryJudgement{
+		ShouldStore:   true,
+		Kind:          memory.KindFact,
+		Scope:         memory.ScopeProject,
+		SuggestedTier: memory.TierShortTerm,
+		Confidence:    0.8,
+		CanonicalText: "new unrelated explicit memory",
+	}}
+	manager := memory.NewManager(store, memory.DefaultGate{}, judge)
+	_, _, err := manager.RememberExplicit(ctx, "new unrelated explicit memory", "s1", t.TempDir(), "")
+	if err != nil {
+		t.Fatalf("RememberExplicit: %v", err)
+	}
+	if len(judge.input.RelatedMemories) != 10 {
+		t.Fatalf("expected 10 related memories sent to judge, got %d", len(judge.input.RelatedMemories))
+	}
+	loaded, err := store.List(ctx)
+	if err != nil {
+		t.Fatalf("list memories: %v", err)
+	}
+	downgraded := 0
+	for _, item := range loaded {
+		if item.ID == "a" || item.ID == "b" {
+			if item.Tier != memory.TierWorking {
+				t.Fatalf("expected low-priority extra %s to downgrade to M2, got %s", item.ID, item.Tier)
+			}
+			downgraded++
+		}
+	}
+	if downgraded != 2 {
+		t.Fatalf("expected 2 downgraded extra memories, got %d", downgraded)
 	}
 }
 

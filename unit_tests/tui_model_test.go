@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/solosw/codeplus-agent/internal/tui"
@@ -85,6 +86,206 @@ func TestTUIModelNormalToolOutputStaysCollapsed(t *testing.T) {
 	}
 }
 
+func TestTUIModelFileMutationOutputIsExpandedAndShowsDiff(t *testing.T) {
+	model := newTUI(t)
+	output := strings.Join([]string{
+		"Content replaced in file: test.go",
+		"Lines changed: +1 -1",
+		"",
+		"--- a/test.go",
+		"+++ b/test.go",
+		"@@ -1 +1 @@",
+		"- old",
+		"+ new",
+	}, "\n")
+	updated, _ := model.Update(tui.ToolDoneMsg{Name: "Edit", Output: output, IsError: false})
+	model = updated.(tui.Model)
+	view := model.View()
+	if strings.Contains(view, "more lines") {
+		t.Fatalf("expected Edit output to be expanded, got collapsed view: %s", view)
+	}
+	if !strings.Contains(view, "--- a/test.go") || !strings.Contains(view, "+++ b/test.go") || !strings.Contains(view, "- old") || !strings.Contains(view, "+ new") {
+		t.Fatalf("expected inline diff in expanded Edit output: %s", view)
+	}
+	if !hasLineContainingAll(view, "- old", "│", "+ new") {
+		t.Fatalf("expected side-by-side diff row with old/new columns: %s", view)
+	}
+}
+
+func TestTUIModelFileMutationOutputForcesExpandedEvenIfCollapsedStateIsSet(t *testing.T) {
+	model := newTUI(t)
+	model.ReplaceMessages([]tui.ChatMessage{{
+		Role:      "tool-done",
+		ToolName:  "Write",
+		Content:   "--- a/test.go\n+++ b/test.go\n@@ -1 +1 @@\n- old\n+ new",
+		Collapsed: true,
+	}})
+	view := model.View()
+	if strings.Contains(view, "more lines") {
+		t.Fatalf("expected Write output to ignore collapsed state: %s", view)
+	}
+	if !strings.Contains(view, "+ new") {
+		t.Fatalf("expected Write diff line to be visible: %s", view)
+	}
+}
+
+func TestTUIModelWelcomeRendersLogoStyle(t *testing.T) {
+	model := newTUI(t)
+	view := model.View()
+	if !strings.Contains(view, "✦ CodePlus") || !strings.Contains(view, "Welcome to CodePlus Agent") {
+		t.Fatalf("expected logo-style welcome in view: %s", view)
+	}
+	if strings.Contains(view, "codeplus-agent TUI") {
+		t.Fatalf("expected old prose welcome to be replaced: %s", view)
+	}
+}
+
+func TestTUIModelUserMessageRendersBoxWithoutPromptMarker(t *testing.T) {
+	model := newTUI(t)
+	model.ReplaceMessages([]tui.ChatMessage{{Role: "user", Content: "hello user"}})
+	view := model.View()
+	if !strings.Contains(view, "hello user") || !strings.Contains(view, "╭") || !strings.Contains(view, "╰") {
+		t.Fatalf("expected user message box in view: %s", view)
+	}
+	if strings.Contains(view, "❯") {
+		t.Fatalf("expected user message without prompt marker: %s", view)
+	}
+}
+
+func TestTUIModelInitEnablesBracketedPaste(t *testing.T) {
+	model := tui.New(nil)
+	cmd := model.Init()
+	if cmd == nil {
+		t.Fatal("expected init command")
+	}
+	msg := cmd()
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("expected batch init message, got %T", msg)
+	}
+	found := false
+	for _, subcmd := range batch {
+		if subcmd == nil {
+			continue
+		}
+		if fmt.Sprintf("%#v", subcmd()) == fmt.Sprintf("%#v", tea.EnableBracketedPaste()) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected init to enable bracketed paste")
+	}
+}
+
+func TestTUIModelPasteDoesNotSubmitWithoutExplicitEnter(t *testing.T) {
+	submitted := ""
+	model := tui.New(func(prompt string) (tea.Cmd, func()) {
+		submitted = prompt
+		return func() tea.Msg { return tui.StreamDoneMsg{} }, nil
+	})
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	model = updated.(tui.Model)
+	paste := "alpha\nbeta\n"
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(paste), Paste: true})
+	model = updated.(tui.Model)
+	if submitted != "" {
+		t.Fatalf("expected no submit before explicit enter, got %q", submitted)
+	}
+	view := model.View()
+	if !strings.Contains(view, "alpha") || !strings.Contains(view, "beta") {
+		t.Fatalf("expected pasted content to remain in input before submit: %s", view)
+	}
+}
+
+func TestTUIModelImmediateSyntheticEnterAfterPasteIsIgnored(t *testing.T) {
+	submitted := ""
+	model := tui.New(func(prompt string) (tea.Cmd, func()) {
+		submitted = prompt
+		return func() tea.Msg { return tui.StreamDoneMsg{} }, nil
+	})
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	model = updated.(tui.Model)
+	paste := "alpha\nbeta\n"
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(paste), Paste: true})
+	model = updated.(tui.Model)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(tui.Model)
+	if submitted != "" {
+		t.Fatalf("expected synthetic enter after paste to be ignored, got %q", submitted)
+	}
+	view := model.View()
+	if !strings.Contains(view, "alpha") || !strings.Contains(view, "beta") {
+		t.Fatalf("expected pasted content to stay in input after ignored enter: %s", view)
+	}
+}
+
+func TestTUIModelRapidBulkRunesWithoutPasteFlagStillSuppressNextEnter(t *testing.T) {
+	submitted := ""
+	model := tui.New(func(prompt string) (tea.Cmd, func()) {
+		submitted = prompt
+		return func() tea.Msg { return tui.StreamDoneMsg{} }, nil
+	})
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	model = updated.(tui.Model)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("alpha\nbeta")})
+	model = updated.(tui.Model)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(tui.Model)
+	if submitted != "" {
+		t.Fatalf("expected rapid bulk runes enter to be ignored, got %q", submitted)
+	}
+	view := model.View()
+	if !strings.Contains(view, "alpha") || !strings.Contains(view, "beta") {
+		t.Fatalf("expected bulk runes content to stay in input after ignored enter: %s", view)
+	}
+}
+
+func TestTUIModelDelayedExplicitEnterAfterPasteSubmits(t *testing.T) {
+	submitted := ""
+	model := tui.New(func(prompt string) (tea.Cmd, func()) {
+		submitted = prompt
+		return func() tea.Msg { return tui.StreamDoneMsg{} }, nil
+	})
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	model = updated.(tui.Model)
+	paste := "alpha\nbeta\n"
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(paste), Paste: true})
+	model = updated.(tui.Model)
+	time.Sleep(200 * time.Millisecond)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(tui.Model)
+	if submitted != "alpha\nbeta" {
+		t.Fatalf("expected delayed explicit enter to submit pasted content, got %q", submitted)
+	}
+}
+
+func TestTUIModelPastedUserMessageShowsLineCountOnly(t *testing.T) {
+	submitted := ""
+	model := tui.New(func(prompt string) (tea.Cmd, func()) {
+		submitted = prompt
+		return func() tea.Msg { return tui.StreamDoneMsg{} }, nil
+	})
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	model = updated.(tui.Model)
+	paste := "alpha\nbeta\ngamma"
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(paste), Paste: true})
+	model = updated.(tui.Model)
+	time.Sleep(200 * time.Millisecond)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(tui.Model)
+	view := model.View()
+	if submitted != paste {
+		t.Fatalf("expected full pasted content submitted, got %q", submitted)
+	}
+	if !strings.Contains(view, "Pasted 3 lines") {
+		t.Fatalf("expected pasted line count in view: %s", view)
+	}
+	if strings.Contains(view, "alpha") || strings.Contains(view, "beta") || strings.Contains(view, "gamma") {
+		t.Fatalf("expected pasted content hidden from chat view: %s", view)
+	}
+}
+
 func TestTUIModelReplaceMessages(t *testing.T) {
 	model := newTUI(t)
 	model.ReplaceMessages([]tui.ChatMessage{{Role: "system", Content: "restored transcript"}})
@@ -92,7 +293,7 @@ func TestTUIModelReplaceMessages(t *testing.T) {
 	if !strings.Contains(view, "restored transcript") {
 		t.Fatalf("expected restored transcript in view: %s", view)
 	}
-	if strings.Contains(view, "codeplus-agent TUI") {
+	if strings.Contains(view, "codeplus-agent TUI") || strings.Contains(view, "✦ CodePlus") {
 		t.Fatalf("expected initial welcome message to be replaced: %s", view)
 	}
 }
@@ -176,8 +377,14 @@ func TestTUIModelUsageStatusRenders(t *testing.T) {
 	updated, _ := model.Update(tui.TokenUsageMsg{EstimatedContextTokens: 1900, InputTokens: 1200, CacheCreationInputTokens: 200, CacheReadInputTokens: 800, OutputTokens: 250, MaxContextTokens: 1000000})
 	model = updated.(tui.Model)
 	view := model.View()
-	if !strings.Contains(view, "/1M") || !strings.Contains(view, "ctx 2.") || !strings.Contains(view, "cache 800/200") || !strings.Contains(view, "out 250") {
-		t.Fatalf("expected usage status in view: %s", view)
+	if !strings.Contains(view, "/1M") || !strings.Contains(view, "ctx 1.9k") || !strings.Contains(view, "cache 800/200 (45%)") || !strings.Contains(view, "out 250") {
+		t.Fatalf("expected usage status with cache percentage in view: %s", view)
+	}
+	if strings.Contains(view, "⏎ send") || strings.Contains(view, "Alt+⏎ newline") {
+		t.Fatalf("expected input hint to be replaced by usage status: %s", view)
+	}
+	if strings.Count(view, "ctx ") != 1 {
+		t.Fatalf("expected ctx usage to render once in the input row only: %s", view)
 	}
 }
 
@@ -188,6 +395,32 @@ func TestTUIModelUsageStatusAlwaysVisible(t *testing.T) {
 	view := model.View()
 	if !strings.Contains(view, "/1M") || !strings.Contains(view, "ctx 1.") {
 		t.Fatalf("expected always-visible context usage in view: %s", view)
+	}
+}
+
+func TestTUIModelRuntimeStatusRendersAboveContextStatus(t *testing.T) {
+	model := newTUI(t)
+	model.SetContextLimitFn(func() int64 { return 1000000 })
+	view := model.View()
+	readyIndex := strings.Index(view, "Ready")
+	ctxIndex := strings.Index(view, "ctx ")
+	if readyIndex < 0 || ctxIndex < 0 {
+		t.Fatalf("expected Ready and ctx status lines in view: %s", view)
+	}
+	if readyIndex > ctxIndex {
+		t.Fatalf("expected runtime status above context status: %s", view)
+	}
+}
+
+func TestTUIModelInputBoxHasNoPromptPrefix(t *testing.T) {
+	model := newTUI(t)
+	model, _ = setInputValue(model, "hello")
+	view := model.View()
+	if strings.Contains(view, "> hello") || strings.Contains(view, ">  hello") {
+		t.Fatalf("expected input box without > prompt prefix: %s", view)
+	}
+	if !strings.Contains(view, "hello") {
+		t.Fatalf("expected typed input in view: %s", view)
 	}
 }
 
@@ -466,6 +699,22 @@ func setInputValue(model tui.Model, value string) (tui.Model, tea.Cmd) {
 		return m, cmd
 	}
 	return *updated.(*tui.Model), cmd
+}
+
+func hasLineContainingAll(text string, parts ...string) bool {
+	for _, line := range strings.Split(text, "\n") {
+		matched := true
+		for _, part := range parts {
+			if !strings.Contains(line, part) {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return true
+		}
+	}
+	return false
 }
 
 var errTestTUI = testErr("tui test error")

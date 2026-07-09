@@ -9,6 +9,7 @@ import (
 )
 
 const DefaultModel = "claude-opus-4-8"
+const DefaultMaxRetries = 5
 
 // Options configures the Anthropic API client wrapper.
 type Options struct {
@@ -24,7 +25,8 @@ type Client struct {
 }
 
 func NewClient(opts Options) *Client {
-	requestOptions := make([]option.RequestOption, 0, 2)
+	requestOptions := make([]option.RequestOption, 0, 3)
+	requestOptions = append(requestOptions, option.WithMaxRetries(DefaultMaxRetries))
 	if opts.APIKey != "" {
 		requestOptions = append(requestOptions, option.WithAPIKey(opts.APIKey))
 	}

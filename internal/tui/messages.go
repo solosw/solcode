@@ -3,6 +3,8 @@ package tui
 import (
 	"fmt"
 	"strings"
+
+	"github.com/charmbracelet/lipgloss"
 )
 
 func renderMessages(messages []ChatMessage, t Theme, showTimestamp bool, width int) string {
@@ -11,6 +13,8 @@ func renderMessages(messages []ChatMessage, t Theme, showTimestamp bool, width i
 	for _, msg := range messages {
 		ts := renderTimestamp(msg, t, showTimestamp)
 		switch msg.Role {
+		case "welcome":
+			renderWelcomeMessage(&b, msg, t, contentWidth)
 		case "user":
 			renderUserMessage(&b, msg, t, ts, contentWidth)
 		case "assistant":
@@ -37,13 +41,50 @@ func renderTimestamp(msg ChatMessage, t Theme, showTimestamp bool) string {
 	return " " + t.Dim.Render(msg.TimeStamp.Format("15:04"))
 }
 
+func renderWelcomeMessage(b *strings.Builder, msg ChatMessage, t Theme, width int) {
+	content := strings.TrimSpace(msg.Content)
+	if content == "" {
+		content = "Welcome to CodePlus Agent"
+	}
+	lines := []string{
+		t.ClaudeStyle.Render("✦ CodePlus"),
+		t.Dim.Render(content),
+		"",
+		t.Dim.Render("Ask a question, edit code, or run /help for commands."),
+	}
+	body := strings.Join(lines, "\n")
+	boxWidth := min(max(32, maxLineWidth(body)+4), max(32, width))
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(t.Claude).
+		Padding(1, 2).
+		Width(boxWidth).
+		Render(body)
+	b.WriteString(box)
+	b.WriteString("\n")
+}
+
 func renderUserMessage(b *strings.Builder, msg ChatMessage, t Theme, ts string, width int) {
 	content := strings.TrimSpace(msg.Content)
+	if display := strings.TrimSpace(msg.DisplayContent); display != "" {
+		content = display
+	}
 	if content == "" {
 		return
 	}
-	b.WriteString(t.User.Render(UserMark) + ts + "\n")
-	b.WriteString(wrapIndent(content, width, ""))
+	body := strings.TrimRight(wrapIndent(content, max(10, width-4), ""), "\n")
+	boxWidth := min(max(16, maxLineWidth(body)+4), max(16, width))
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(t.Claude).
+		Padding(0, 1).
+		Width(boxWidth).
+		Render(body)
+	if ts != "" {
+		b.WriteString(t.Dim.Render("You" + ts))
+		b.WriteString("\n")
+	}
+	b.WriteString(box)
 	b.WriteString("\n")
 }
 
@@ -105,14 +146,67 @@ func renderToolDoneMessage(b *strings.Builder, msg ChatMessage, t Theme, ts stri
 	if out == "" {
 		out = "(no output)"
 	}
-	if msg.Collapsed {
+	collapsed := msg.Collapsed && !isFileMutationTool(msg.ToolName)
+	if collapsed {
 		lines := strings.Split(out, "\n")
 		if len(lines) > 1 {
 			out = lines[0] + fmt.Sprintf("\n… %d more lines (Ctrl+O to expand)", len(lines)-1)
 		}
 	}
+
+	// Try inline diff rendering first
+	diffContent := renderInlineDiff(out, t, width)
+	if diffContent != "" {
+		b.WriteString(indentBlock(diffContent, t.Connector.Render(Connector)))
+		b.WriteString("\n")
+		return
+	}
+
+	// Try syntax highlighting for file content from View/Read/Edit tools
+	if isFileViewTool(msg.ToolName) && !msg.Collapsed {
+		filePath := extractFilePath(msg.ToolName, out)
+		if highlighted := renderCodeWithHighlight(out, filePath, t, width); highlighted != "" && highlighted != out {
+			b.WriteString(wrapIndent(highlighted, width, t.Connector.Render(Connector)))
+			b.WriteString("\n")
+			return
+		}
+	}
+
 	b.WriteString(wrapIndent(out, width, t.Connector.Render(Connector)))
 	b.WriteString("\n")
+}
+
+// isFileViewTool returns true for tools that display file content.
+func isFileViewTool(toolName string) bool {
+	switch toolName {
+	case "View", "Read", "mcp__filesystem__read-text-file", "mcp__filesystem__read-file",
+		"mcp__filesystem__read-multiple-files", "Edit", "Write", "Patch":
+		return true
+	}
+	return false
+}
+
+// extractFilePath tries to extract a file path from tool output or tool name context.
+func extractFilePath(toolName string, content string) string {
+	// Try to find a file path pattern in the first few lines
+	lines := strings.Split(content, "\n")
+	for i := 0; i < min(5, len(lines)); i++ {
+		line := strings.TrimSpace(lines[i])
+		// Common patterns: "File: path", "--- a/path", "+++ b/path"
+		for _, prefix := range []string{"File: ", "Path: ", "--- a/", "+++ b/"} {
+			if after, ok := strings.CutPrefix(line, prefix); ok {
+				return strings.TrimSpace(after)
+			}
+		}
+	}
+	// Check first line for path-like strings
+	if len(lines) > 0 {
+		first := strings.TrimSpace(lines[0])
+		if strings.Contains(first, "/") && !strings.Contains(first, " ") {
+			return first
+		}
+	}
+	return ""
 }
 
 func renderAgentMessage(b *strings.Builder, msg ChatMessage, t Theme, ts string, width int) {
@@ -203,6 +297,14 @@ func wrapLine(line string, width int) []string {
 	return out
 }
 
+func maxLineWidth(text string) int {
+	width := 0
+	for _, line := range strings.Split(text, "\n") {
+		width = max(width, lipgloss.Width(line))
+	}
+	return width
+}
+
 func truncate(value string, limit int) string {
 	if len(value) <= limit {
 		return value
@@ -222,4 +324,14 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func clamp(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
 }

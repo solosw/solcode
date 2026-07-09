@@ -27,9 +27,9 @@ func NewEditTool() Tool {
 	return &editTool{}
 }
 
-func (e *editTool) Name() string                        { return EditToolName }
+func (e *editTool) Name() string                         { return EditToolName }
 func (e *editTool) IsDestructive(_ json.RawMessage) bool { return true }
-func (e *editTool) IsReadOnly(_ json.RawMessage) bool     { return false }
+func (e *editTool) IsReadOnly(_ json.RawMessage) bool    { return false }
 
 func (e *editTool) Description() string {
 	return `Edits files by replacing text with exact string matching.
@@ -118,7 +118,16 @@ func (e *editTool) createFile(filePath, content string) (*ContentBlock, error) {
 		return ErrorResult(fmt.Sprintf("error writing file: %v", err)), nil
 	}
 
-	return Result(fmt.Sprintf("File created: %s\n\n+%d lines", filePath, CountLines(content))), nil
+	diff := GenerateSimpleDiff("", content, filePath)
+	additions, removals := CountDiffChanges(diff)
+	var result strings.Builder
+	result.WriteString(fmt.Sprintf("File created: %s\n", filePath))
+	result.WriteString(fmt.Sprintf("Lines changed: +%d -%d\n", additions, removals))
+	if diff != "" {
+		result.WriteString("\n")
+		result.WriteString(diff)
+	}
+	return Result(result.String()), nil
 }
 
 func (e *editTool) deleteContent(filePath, oldString string) (*ContentBlock, error) {
@@ -152,7 +161,16 @@ func (e *editTool) deleteContent(filePath, oldString string) (*ContentBlock, err
 		return ErrorResult(fmt.Sprintf("error writing file: %v", err)), nil
 	}
 
-	return Result(fmt.Sprintf("Content deleted from file: %s\n\n-%d lines", filePath, CountLines(oldString))), nil
+	diff := GenerateSimpleDiff(content, newContent, filePath)
+	additions, removals := CountDiffChanges(diff)
+	var result strings.Builder
+	result.WriteString(fmt.Sprintf("Content deleted from file: %s\n", filePath))
+	result.WriteString(fmt.Sprintf("Lines changed: +%d -%d\n", additions, removals))
+	if diff != "" {
+		result.WriteString("\n")
+		result.WriteString(diff)
+	}
+	return Result(result.String()), nil
 }
 
 func (e *editTool) replaceContent(filePath, oldString, newString string) (*ContentBlock, error) {
@@ -190,10 +208,19 @@ func (e *editTool) replaceContent(filePath, oldString, newString string) (*Conte
 		return ErrorResult(fmt.Sprintf("error writing file: %v", err)), nil
 	}
 
-	additions := CountLines(newString) - CountLines(oldString)
-	return Result(fmt.Sprintf("Content replaced in file: %s\n\n%d lines changed (+%d/-%d)",
-		filePath, abs(additions)+abs(CountLines(oldString)-CountLines(newString)),
-		max(0, additions), max(0, -additions))), nil
+	// Generate diff for display
+	diff := GenerateSimpleDiff(content, newContent, filePath)
+	additions, removals := CountDiffChanges(diff)
+
+	var result strings.Builder
+	result.WriteString(fmt.Sprintf("Content replaced in file: %s\n", filePath))
+	result.WriteString(fmt.Sprintf("Lines changed: +%d -%d\n", additions, removals))
+	if diff != "" {
+		result.WriteString("\n")
+		result.WriteString(diff)
+	}
+
+	return Result(result.String()), nil
 }
 
 func CountLines(s string) int {
