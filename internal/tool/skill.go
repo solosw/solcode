@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/solosw/codeplus-agent/internal/skill"
+	"github.com/solosw/solcode/internal/skill"
 )
 
 const SkillToolName = "Skill"

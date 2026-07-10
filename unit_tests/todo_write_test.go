@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/solosw/codeplus-agent/internal/tool"
+	"github.com/solosw/solcode/internal/tool"
 )
 
 func TestTodoWriteTool_Invoke(t *testing.T) {
@@ -102,7 +102,7 @@ func TestTodoWriteTool_FallsBackToWorkDirTodos(t *testing.T) {
 		t.Fatalf("unexpected error result: %s", result.Text)
 	}
 
-	path := filepath.Join(dir, ".codeplus", "todos.json")
+	path := filepath.Join(dir, ".solcode", "todos.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("todos file not created at fallback path: %v", err)

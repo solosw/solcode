@@ -34,7 +34,7 @@ type Config struct {
 }
 
 type MatcherConfig struct {
-	Matcher string         `json:"matcher,omitempty"`
+	Matcher string          `json:"matcher,omitempty"`
 	Hooks   []CommandConfig `json:"hooks,omitempty"`
 }
 
@@ -46,15 +46,15 @@ type CommandConfig struct {
 }
 
 type Event struct {
-	Name      EventName       `json:"event"`
-	SessionID string          `json:"session_id,omitempty"`
-	MessageID string          `json:"message_id,omitempty"`
-	AgentID   string          `json:"agent_id,omitempty"`
-	WorkDir   string          `json:"work_dir,omitempty"`
-	Prompt    string          `json:"prompt,omitempty"`
-	ToolName  string          `json:"tool_name,omitempty"`
-	ToolInput json.RawMessage `json:"tool_input,omitempty"`
-	ToolResult any            `json:"tool_result,omitempty"`
+	Name       EventName       `json:"event"`
+	SessionID  string          `json:"session_id,omitempty"`
+	MessageID  string          `json:"message_id,omitempty"`
+	AgentID    string          `json:"agent_id,omitempty"`
+	WorkDir    string          `json:"work_dir,omitempty"`
+	Prompt     string          `json:"prompt,omitempty"`
+	ToolName   string          `json:"tool_name,omitempty"`
+	ToolInput  json.RawMessage `json:"tool_input,omitempty"`
+	ToolResult any             `json:"tool_result,omitempty"`
 }
 
 type Result struct {

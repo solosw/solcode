@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/solosw/codeplus-agent/internal/tool"
+	"github.com/solosw/solcode/internal/tool"
 )
 
 func TestViewTool_ReadOnly(t *testing.T) {

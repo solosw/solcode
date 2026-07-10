@@ -8,13 +8,13 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/solosw/codeplus-agent/internal/anthropic"
-	"github.com/solosw/codeplus-agent/internal/hook"
-	"github.com/solosw/codeplus-agent/internal/permission"
+	"github.com/solosw/solcode/internal/anthropic"
+	"github.com/solosw/solcode/internal/hook"
+	"github.com/solosw/solcode/internal/permission"
 )
 
 const (
-	configDirName     = ".agentcode"
+	configDirName     = ".solcode"
 	settingsFileName  = "settings.json"
 	settingsLocalName = "settings.local.json"
 )

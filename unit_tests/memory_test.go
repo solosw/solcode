@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/solosw/codeplus-agent/internal/memory"
+	"github.com/solosw/solcode/internal/memory"
 )
 
 func TestMemoryFileStoreRememberDeduplicates(t *testing.T) {

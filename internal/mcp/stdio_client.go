@@ -10,8 +10,8 @@ import (
 	"time"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/solosw/codeplus-agent/internal/config"
-	"github.com/solosw/codeplus-agent/internal/tool"
+	"github.com/solosw/solcode/internal/config"
+	"github.com/solosw/solcode/internal/tool"
 )
 
 type stdioClient struct {
@@ -46,7 +46,7 @@ func (c *stdioClient) Start(ctx context.Context) error {
 		return fmt.Errorf("mcp server %q transport stdio does not use url", c.server.Name)
 	}
 
-	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "codeplus-agent", Version: "0.1.0"}, nil)
+	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "solcode", Version: "0.1.0"}, nil)
 	session, err := client.Connect(ctx, &sdkmcp.CommandTransport{Command: execCmd, TerminateDuration: 5 * time.Second}, nil)
 	if err != nil {
 		return fmt.Errorf("connect mcp server %q: %w", c.server.Name, err)

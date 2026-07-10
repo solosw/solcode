@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	app "github.com/solosw/codeplus-agent/internal/app"
-	"github.com/solosw/codeplus-agent/internal/memory"
+	app "github.com/solosw/solcode/internal/app"
+	"github.com/solosw/solcode/internal/memory"
 )
 
 func TestSummarizeForContextStructuredSections(t *testing.T) {

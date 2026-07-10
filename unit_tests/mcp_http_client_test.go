@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"testing"
 
-	internalmcp "github.com/solosw/codeplus-agent/internal/mcp"
+	internalmcp "github.com/solosw/solcode/internal/mcp"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)

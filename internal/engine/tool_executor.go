@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/solosw/codeplus-agent/internal/hook"
-	"github.com/solosw/codeplus-agent/internal/permission"
-	"github.com/solosw/codeplus-agent/internal/tool"
+	"github.com/solosw/solcode/internal/hook"
+	"github.com/solosw/solcode/internal/permission"
+	"github.com/solosw/solcode/internal/tool"
 )
 
 type ToolCall struct {

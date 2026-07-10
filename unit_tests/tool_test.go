@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/solosw/codeplus-agent/internal/tool"
+	"github.com/solosw/solcode/internal/tool"
 )
 
 type dummyTool struct {
@@ -14,13 +14,13 @@ type dummyTool struct {
 	destructive bool
 }
 
-func (d *dummyTool) Name() string                                 { return d.name }
-func (d *dummyTool) Description() string                           { return "dummy" }
-func (d *dummyTool) InputSchema() map[string]any                   { return nil }
-func (d *dummyTool) IsDestructive(_ json.RawMessage) bool          { return d.destructive }
-func (d *dummyTool) IsReadOnly(_ json.RawMessage) bool             { return d.readOnly }
-func (d *dummyTool) IsConcurrencySafe(_ json.RawMessage) bool      { return false }
-func (d *dummyTool) Aliases() []string                             { return nil }
+func (d *dummyTool) Name() string                                             { return d.name }
+func (d *dummyTool) Description() string                                      { return "dummy" }
+func (d *dummyTool) InputSchema() map[string]any                              { return nil }
+func (d *dummyTool) IsDestructive(_ json.RawMessage) bool                     { return d.destructive }
+func (d *dummyTool) IsReadOnly(_ json.RawMessage) bool                        { return d.readOnly }
+func (d *dummyTool) IsConcurrencySafe(_ json.RawMessage) bool                 { return false }
+func (d *dummyTool) Aliases() []string                                        { return nil }
 func (d *dummyTool) ValidateInput(_ context.Context, _ json.RawMessage) error { return nil }
 func (d *dummyTool) Invoke(ctx context.Context, uctx *tool.UseContext, input json.RawMessage) (*tool.ContentBlock, error) {
 	return tool.Result("ok"), nil

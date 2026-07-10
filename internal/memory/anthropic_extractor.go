@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
-	cpanthropic "github.com/solosw/codeplus-agent/internal/anthropic"
+	cpanthropic "github.com/solosw/solcode/internal/anthropic"
 )
 
 type AnthropicExtractor struct {

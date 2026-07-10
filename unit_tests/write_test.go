@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/solosw/codeplus-agent/internal/tool"
+	"github.com/solosw/solcode/internal/tool"
 )
 
 func TestWriteTool_IsDestructive(t *testing.T) {

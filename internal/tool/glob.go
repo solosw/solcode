@@ -34,8 +34,8 @@ func NewGlobTool() Tool {
 	return &globTool{}
 }
 
-func (g *globTool) Name() string                        { return GlobToolName }
-func (g *globTool) IsReadOnly(_ json.RawMessage) bool    { return true }
+func (g *globTool) Name() string                             { return GlobToolName }
+func (g *globTool) IsReadOnly(_ json.RawMessage) bool        { return true }
 func (g *globTool) IsConcurrencySafe(_ json.RawMessage) bool { return true }
 
 func (g *globTool) Description() string {

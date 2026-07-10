@@ -28,9 +28,9 @@ func NewWriteTool() Tool {
 	return &writeTool{}
 }
 
-func (w *writeTool) Name() string                        { return WriteToolName }
+func (w *writeTool) Name() string                         { return WriteToolName }
 func (w *writeTool) IsDestructive(_ json.RawMessage) bool { return true }
-func (w *writeTool) IsReadOnly(_ json.RawMessage) bool     { return false }
+func (w *writeTool) IsReadOnly(_ json.RawMessage) bool    { return false }
 
 func (w *writeTool) Description() string {
 	return `File writing tool that creates or completely overwrites files.

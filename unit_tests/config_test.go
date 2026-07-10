@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/solosw/codeplus-agent/internal/anthropic"
-	"github.com/solosw/codeplus-agent/internal/config"
-	"github.com/solosw/codeplus-agent/internal/permission"
+	"github.com/solosw/solcode/internal/anthropic"
+	"github.com/solosw/solcode/internal/config"
+	"github.com/solosw/solcode/internal/permission"
 )
 
 func TestLoadEmptyConfigDefaults(t *testing.T) {
@@ -168,12 +168,12 @@ func TestLoadLegacyFlatJSON(t *testing.T) {
 	}
 }
 
-func TestLoadAgentcodeLayeredConfig(t *testing.T) {
+func TestLoadSolcodeLayeredConfig(t *testing.T) {
 	dir := t.TempDir()
 	home := filepath.Join(dir, "home")
 	project := filepath.Join(dir, "project")
-	globalDir := filepath.Join(home, ".agentcode")
-	projectDir := filepath.Join(project, ".agentcode")
+	globalDir := filepath.Join(home, ".solcode")
+	projectDir := filepath.Join(project, ".solcode")
 	mustMkdirAll(t, globalDir)
 	mustMkdirAll(t, projectDir)
 
@@ -184,7 +184,7 @@ func TestLoadAgentcodeLayeredConfig(t *testing.T) {
 			"allow_bash": ["git status"]
 		},
 		"skills": {
-			"paths": ["~/.agentcode/skills", " ./skills "],
+			"paths": ["~/.solcode/skills", " ./skills "],
 			"enabled": ["verify"],
 			"disabled": ["debug"]
 		},
@@ -788,7 +788,7 @@ func TestDefaultSessionDirSanitizesWindowsDrivePath(t *testing.T) {
 
 func TestSaveLocalOverridesCreatesAndMerges(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, ".agentcode", "settings.local.json")
+	path := filepath.Join(dir, ".solcode", "settings.local.json")
 	if err := config.SaveLocalOverrides(path, map[string]any{"model": "opus"}); err != nil {
 		t.Fatalf("SaveLocalOverrides create = %v", err)
 	}

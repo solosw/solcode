@@ -28,8 +28,8 @@ func NewDiffTool() Tool {
 	return &diffTool{}
 }
 
-func (d *diffTool) Name() string                        { return DiffToolName }
-func (d *diffTool) IsReadOnly(_ json.RawMessage) bool    { return true }
+func (d *diffTool) Name() string                             { return DiffToolName }
+func (d *diffTool) IsReadOnly(_ json.RawMessage) bool        { return true }
 func (d *diffTool) IsConcurrencySafe(_ json.RawMessage) bool { return true }
 
 func (d *diffTool) Description() string {

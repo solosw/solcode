@@ -33,8 +33,8 @@ func NewViewTool() Tool {
 	return &viewTool{}
 }
 
-func (v *viewTool) Name() string                        { return ViewToolName }
-func (v *viewTool) IsReadOnly(_ json.RawMessage) bool    { return true }
+func (v *viewTool) Name() string                             { return ViewToolName }
+func (v *viewTool) IsReadOnly(_ json.RawMessage) bool        { return true }
 func (v *viewTool) IsConcurrencySafe(_ json.RawMessage) bool { return true }
 
 func (v *viewTool) Description() string {

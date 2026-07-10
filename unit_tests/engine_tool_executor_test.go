@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/solosw/codeplus-agent/internal/engine"
-	"github.com/solosw/codeplus-agent/internal/hook"
-	"github.com/solosw/codeplus-agent/internal/tool"
+	"github.com/solosw/solcode/internal/engine"
+	"github.com/solosw/solcode/internal/hook"
+	"github.com/solosw/solcode/internal/tool"
 )
 
 type recordingTool struct {

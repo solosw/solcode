@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/solosw/codeplus-agent/internal/config"
-	"github.com/solosw/codeplus-agent/internal/skill"
-	"github.com/solosw/codeplus-agent/internal/tool"
+	"github.com/solosw/solcode/internal/config"
+	"github.com/solosw/solcode/internal/skill"
+	"github.com/solosw/solcode/internal/tool"
 )
 
 func TestLoadFromDirsSupportsMarkdownFilesAndSkillDirectories(t *testing.T) {

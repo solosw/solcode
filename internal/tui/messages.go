@@ -44,10 +44,10 @@ func renderTimestamp(msg ChatMessage, t Theme, showTimestamp bool) string {
 func renderWelcomeMessage(b *strings.Builder, msg ChatMessage, t Theme, width int) {
 	content := strings.TrimSpace(msg.Content)
 	if content == "" {
-		content = "Welcome to CodePlus Agent"
+		content = "Welcome to solcode"
 	}
 	lines := []string{
-		t.ClaudeStyle.Render("✦ CodePlus"),
+		t.ClaudeStyle.Render("✦ solcode"),
 		t.Dim.Render(content),
 		"",
 		t.Dim.Render("Ask a question, edit code, or run /help for commands."),

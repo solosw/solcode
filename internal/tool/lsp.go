@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/solosw/codeplus-agent/internal/lsp"
+	"github.com/solosw/solcode/internal/lsp"
 )
 
 type lspTool struct {

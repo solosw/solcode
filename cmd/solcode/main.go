@@ -12,15 +12,15 @@ import (
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/solosw/codeplus-agent/internal/agent"
-	"github.com/solosw/codeplus-agent/internal/app"
-	"github.com/solosw/codeplus-agent/internal/config"
-	"github.com/solosw/codeplus-agent/internal/engine"
-	"github.com/solosw/codeplus-agent/internal/permission"
-	"github.com/solosw/codeplus-agent/internal/session"
-	"github.com/solosw/codeplus-agent/internal/skill"
-	"github.com/solosw/codeplus-agent/internal/tool"
-	"github.com/solosw/codeplus-agent/internal/tui"
+	"github.com/solosw/solcode/internal/agent"
+	"github.com/solosw/solcode/internal/app"
+	"github.com/solosw/solcode/internal/config"
+	"github.com/solosw/solcode/internal/engine"
+	"github.com/solosw/solcode/internal/permission"
+	"github.com/solosw/solcode/internal/session"
+	"github.com/solosw/solcode/internal/skill"
+	"github.com/solosw/solcode/internal/tool"
+	"github.com/solosw/solcode/internal/tui"
 )
 
 func main() {

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/solosw/codeplus-agent/internal/tool"
+	"github.com/solosw/solcode/internal/tool"
 )
 
 // TestBashTool_Invoke_API tests the Bash tool end-to-end via its public API.

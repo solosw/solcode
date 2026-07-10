@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/solosw/codeplus-agent/internal/memory"
+	"github.com/solosw/solcode/internal/memory"
 )
 
 type stubJudge struct {

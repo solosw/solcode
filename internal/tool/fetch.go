@@ -38,7 +38,7 @@ func NewFetchTool() Tool {
 	}
 }
 
-func (f *fetchTool) Name() string                     { return FetchToolName }
+func (f *fetchTool) Name() string                      { return FetchToolName }
 func (f *fetchTool) IsReadOnly(_ json.RawMessage) bool { return true }
 
 func (f *fetchTool) Description() string {
@@ -102,7 +102,7 @@ func (f *fetchTool) Invoke(ctx context.Context, uctx *UseContext, input json.Raw
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("failed to create request: %v", err)), nil
 	}
-	req.Header.Set("User-Agent", "codeplus-agent/1.0")
+	req.Header.Set("User-Agent", "solcode/1.0")
 
 	resp, err := client.Do(req)
 	if err != nil {

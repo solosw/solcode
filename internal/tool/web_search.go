@@ -30,16 +30,16 @@ type SearchHit struct {
 
 // WebSearchOutput is the structured output of a WebSearch invocation.
 type WebSearchOutput struct {
-	Query           string       `json:"query"`
-	Results         []SearchHit  `json:"results"`
-	DurationSeconds float64      `json:"duration_seconds"`
+	Query           string      `json:"query"`
+	Results         []SearchHit `json:"results"`
+	DurationSeconds float64     `json:"duration_seconds"`
 }
 
 const (
-	WebSearchToolName   = "WebSearch"
-	DefaultMaxResults   = 10
-	MaxResultsCap       = 50
-	SearchHTTPTimeout   = 15 * time.Second
+	WebSearchToolName = "WebSearch"
+	DefaultMaxResults = 10
+	MaxResultsCap     = 50
+	SearchHTTPTimeout = 15 * time.Second
 )
 
 type webSearchTool struct {
@@ -62,8 +62,8 @@ func (t *webSearchTool) SetAPIKey(key string) {
 	t.apiKey = key
 }
 
-func (t *webSearchTool) Name() string          { return WebSearchToolName }
-func (t *webSearchTool) IsReadOnly(json.RawMessage) bool { return true }
+func (t *webSearchTool) Name() string                           { return WebSearchToolName }
+func (t *webSearchTool) IsReadOnly(json.RawMessage) bool        { return true }
 func (t *webSearchTool) IsConcurrencySafe(json.RawMessage) bool { return true }
 
 func (t *webSearchTool) Description() string {

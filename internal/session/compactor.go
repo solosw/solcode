@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
-	"github.com/solosw/codeplus-agent/internal/tokenest"
+	"github.com/solosw/solcode/internal/tokenest"
 	headroom "github.com/superops-team/headroom-go"
 )
 

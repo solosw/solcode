@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/solosw/codeplus-agent/internal/lsp"
-	"github.com/solosw/codeplus-agent/internal/tool"
+	"github.com/solosw/solcode/internal/lsp"
+	"github.com/solosw/solcode/internal/tool"
 )
 
 func TestLSPValidateRequiresQueryForWorkspaceSymbol(t *testing.T) {

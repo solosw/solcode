@@ -45,8 +45,8 @@ func NewGrepTool() Tool {
 	return &grepTool{}
 }
 
-func (g *grepTool) Name() string                        { return GrepToolName }
-func (g *grepTool) IsReadOnly(_ json.RawMessage) bool    { return true }
+func (g *grepTool) Name() string                             { return GrepToolName }
+func (g *grepTool) IsReadOnly(_ json.RawMessage) bool        { return true }
 func (g *grepTool) IsConcurrencySafe(_ json.RawMessage) bool { return true }
 
 func (g *grepTool) Description() string {

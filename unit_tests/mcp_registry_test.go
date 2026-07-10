@@ -6,9 +6,9 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/solosw/codeplus-agent/internal/config"
-	internalmcp "github.com/solosw/codeplus-agent/internal/mcp"
-	"github.com/solosw/codeplus-agent/internal/tool"
+	"github.com/solosw/solcode/internal/config"
+	internalmcp "github.com/solosw/solcode/internal/mcp"
+	"github.com/solosw/solcode/internal/tool"
 )
 
 type fakeMCPClient struct {

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/solosw/codeplus-agent/internal/agent"
+	"github.com/solosw/solcode/internal/agent"
 )
 
 type staticAgentRunner struct {

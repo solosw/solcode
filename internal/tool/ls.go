@@ -31,9 +31,9 @@ func NewLsTool() Tool {
 	return &lsTool{}
 }
 
-func (l *lsTool) Name() string                        { return LSToolName }
-func (l *lsTool) Aliases() []string                    { return []string{"List"} }
-func (l *lsTool) IsReadOnly(_ json.RawMessage) bool    { return true }
+func (l *lsTool) Name() string                             { return LSToolName }
+func (l *lsTool) Aliases() []string                        { return []string{"List"} }
+func (l *lsTool) IsReadOnly(_ json.RawMessage) bool        { return true }
 func (l *lsTool) IsConcurrencySafe(_ json.RawMessage) bool { return true }
 
 func (l *lsTool) Description() string {

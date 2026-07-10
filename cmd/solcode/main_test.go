@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	appcore "github.com/solosw/codeplus-agent/internal/app"
-	"github.com/solosw/codeplus-agent/internal/config"
-	"github.com/solosw/codeplus-agent/internal/session"
+	appcore "github.com/solosw/solcode/internal/app"
+	"github.com/solosw/solcode/internal/config"
+	"github.com/solosw/solcode/internal/session"
 )
 
 func TestLoadSanitizedSessionRewritesPollutedSummary(t *testing.T) {

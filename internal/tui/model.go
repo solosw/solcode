@@ -13,7 +13,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/solosw/codeplus-agent/internal/tokenest"
+	"github.com/solosw/solcode/internal/tokenest"
 )
 
 const scrollbarWidth = 2
@@ -280,7 +280,7 @@ func New(submit SubmitFunc) Model {
 func NewWith(submit SubmitFunc, theme Theme, modelName, cwd string, showTimestamp bool) Model {
 	vp := viewport.New(78, 20)
 	input := textarea.New()
-	input.Placeholder = "Ask codeplus…"
+	input.Placeholder = "Ask solcode…"
 	input.Prompt = ""
 	input.Focus()
 	input.ShowLineNumbers = false
@@ -297,7 +297,7 @@ func NewWith(submit SubmitFunc, theme Theme, modelName, cwd string, showTimestam
 		modelName:     modelName,
 		cwd:           cwd,
 		showTimestamp: showTimestamp,
-		messages:      []ChatMessage{{Role: "welcome", Content: "Welcome to CodePlus Agent", TimeStamp: time.Now()}},
+		messages:      []ChatMessage{{Role: "welcome", Content: "Welcome to solcode", TimeStamp: time.Now()}},
 	}
 }
 
@@ -1466,7 +1466,7 @@ func (m Model) renderStatusBar() string {
 	t := m.theme
 	modelName := strings.TrimSpace(m.currentModelName())
 	if modelName == "" {
-		modelName = "codeplus"
+		modelName = "solcode"
 	}
 	left := " " + t.Assistant.Render(modelName)
 	rightParts := []string{}

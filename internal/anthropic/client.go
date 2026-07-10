@@ -18,7 +18,7 @@ type Options struct {
 }
 
 // Client is a thin wrapper around the official Anthropic Go SDK. It keeps the
-// rest of codeplus-agent from depending on SDK construction details while still
+// rest of solcode from depending on SDK construction details while still
 // preserving SDK message/content types for safe multi-turn tool-use replay.
 type Client struct {
 	sdk sdk.Client

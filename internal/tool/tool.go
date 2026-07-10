@@ -1,4 +1,4 @@
-// Package tool defines the Tool interface and supporting types for the codeplus-agent.
+// Package tool defines the Tool interface and supporting types for the solcode.
 // The design references ClaudeCode Go's engine.Tool interface with safety annotations,
 // and OpenCode's simpler BaseTool pattern.
 package tool

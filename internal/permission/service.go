@@ -6,7 +6,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/solosw/codeplus-agent/internal/tool"
+	"github.com/solosw/solcode/internal/tool"
 )
 
 type Decision struct {

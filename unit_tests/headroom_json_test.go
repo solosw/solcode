@@ -11,13 +11,13 @@ import (
 
 	headroom "github.com/superops-team/headroom-go"
 
-	"github.com/solosw/codeplus-agent/internal/session"
+	"github.com/solosw/solcode/internal/session"
 )
 
 func TestHeadroomJSONVsMessageCompact(t *testing.T) {
 	ctx := context.Background()
 
-	path := "C:\\software\\codeplus\\codeplus-agent\\session-20260707-165344.json"
+	path := "C:\\software\\solcode\\solcode\\session-20260707-165344.json"
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Skipf("session file not available: %v", err)

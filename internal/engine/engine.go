@@ -6,12 +6,12 @@ import (
 	"fmt"
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
-	"github.com/solosw/codeplus-agent/internal/agent"
-	cpanthropic "github.com/solosw/codeplus-agent/internal/anthropic"
-	"github.com/solosw/codeplus-agent/internal/hook"
-	"github.com/solosw/codeplus-agent/internal/permission"
-	"github.com/solosw/codeplus-agent/internal/tokenest"
-	"github.com/solosw/codeplus-agent/internal/tool"
+	"github.com/solosw/solcode/internal/agent"
+	cpanthropic "github.com/solosw/solcode/internal/anthropic"
+	"github.com/solosw/solcode/internal/hook"
+	"github.com/solosw/solcode/internal/permission"
+	"github.com/solosw/solcode/internal/tokenest"
+	"github.com/solosw/solcode/internal/tool"
 )
 
 type Model interface {

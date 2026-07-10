@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/solosw/codeplus-agent/internal/hook"
+	"github.com/solosw/solcode/internal/hook"
 )
 
 func TestHookRuntime_PreToolUseCommandCanModifyToolInput(t *testing.T) {

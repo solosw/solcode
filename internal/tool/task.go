@@ -8,7 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/solosw/codeplus-agent/internal/agent"
+	"github.com/solosw/solcode/internal/agent"
 )
 
 const TaskToolName = "Task"

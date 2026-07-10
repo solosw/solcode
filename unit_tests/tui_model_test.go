@@ -7,7 +7,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/solosw/codeplus-agent/internal/tui"
+	"github.com/solosw/solcode/internal/tui"
 )
 
 func newTUI(t *testing.T) tui.Model {
@@ -132,10 +132,10 @@ func TestTUIModelFileMutationOutputForcesExpandedEvenIfCollapsedStateIsSet(t *te
 func TestTUIModelWelcomeRendersLogoStyle(t *testing.T) {
 	model := newTUI(t)
 	view := model.View()
-	if !strings.Contains(view, "✦ CodePlus") || !strings.Contains(view, "Welcome to CodePlus Agent") {
+	if !strings.Contains(view, "✦ solcode") || !strings.Contains(view, "Welcome to solcode") {
 		t.Fatalf("expected logo-style welcome in view: %s", view)
 	}
-	if strings.Contains(view, "codeplus-agent TUI") {
+	if strings.Contains(view, "solcode TUI") {
 		t.Fatalf("expected old prose welcome to be replaced: %s", view)
 	}
 }
@@ -293,7 +293,7 @@ func TestTUIModelReplaceMessages(t *testing.T) {
 	if !strings.Contains(view, "restored transcript") {
 		t.Fatalf("expected restored transcript in view: %s", view)
 	}
-	if strings.Contains(view, "codeplus-agent TUI") || strings.Contains(view, "✦ CodePlus") {
+	if strings.Contains(view, "solcode TUI") || strings.Contains(view, "✦ solcode") {
 		t.Fatalf("expected initial welcome message to be replaced: %s", view)
 	}
 }

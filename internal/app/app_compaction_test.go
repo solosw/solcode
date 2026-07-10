@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
-	"github.com/solosw/codeplus-agent/internal/config"
-	"github.com/solosw/codeplus-agent/internal/session"
+	"github.com/solosw/solcode/internal/config"
+	"github.com/solosw/solcode/internal/session"
 )
 
 func TestShouldCompactUses85PercentTrigger(t *testing.T) {

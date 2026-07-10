@@ -72,9 +72,9 @@ func NewBashToolWithShell(shell ShellRunner) Tool {
 	return &bashTool{shell: shell}
 }
 
-func (b *bashTool) Name() string                           { return BashToolName }
-func (b *bashTool) IsDestructive(_ json.RawMessage) bool   { return true }
-func (b *bashTool) IsReadOnly(_ json.RawMessage) bool       { return false }
+func (b *bashTool) Name() string                             { return BashToolName }
+func (b *bashTool) IsDestructive(_ json.RawMessage) bool     { return true }
+func (b *bashTool) IsReadOnly(_ json.RawMessage) bool        { return false }
 func (b *bashTool) IsConcurrencySafe(_ json.RawMessage) bool { return false }
 
 func (b *bashTool) Description() string {

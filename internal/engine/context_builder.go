@@ -6,9 +6,9 @@ import (
 	"unicode"
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
-	cpanthropic "github.com/solosw/codeplus-agent/internal/anthropic"
-	"github.com/solosw/codeplus-agent/internal/tokenest"
-	"github.com/solosw/codeplus-agent/internal/tool"
+	cpanthropic "github.com/solosw/solcode/internal/anthropic"
+	"github.com/solosw/solcode/internal/tokenest"
+	"github.com/solosw/solcode/internal/tool"
 )
 
 type ContextBuilder struct {
@@ -207,7 +207,7 @@ func looksLikeContextSummaryCodeLine(line string) bool {
 	if contextSummaryLineNumberPattern.MatchString(line) || contextSummaryNamedLineNumberPattern.MatchString(line) || contextSummaryDiffLinePattern.MatchString(line) || contextSummaryCodeLinePattern.MatchString(line) {
 		return true
 	}
-	codeMarkers := []string{" :=",":="," = ","strings.","sdk.","append(","func(","for _,","return ","t.Fatalf(","json.","fmt.","[]string{","map[string]any{","bulletsection(","limitsummarylines(","recordcompactevent(","content replaced in file:","lines changed:"}
+	codeMarkers := []string{" :=", ":=", " = ", "strings.", "sdk.", "append(", "func(", "for _,", "return ", "t.Fatalf(", "json.", "fmt.", "[]string{", "map[string]any{", "bulletsection(", "limitsummarylines(", "recordcompactevent(", "content replaced in file:", "lines changed:"}
 	lower := strings.ToLower(line)
 	for _, marker := range codeMarkers {
 		if strings.Contains(lower, strings.ToLower(marker)) {
@@ -223,7 +223,7 @@ func looksLikeContextProceduralLine(line string) bool {
 		return false
 	}
 	lower := strings.ToLower(line)
-	phrases := []string{"我现在直接","下一步我会","我刚把","我继续把","我先把","继续把","先把","这个样本","exact sample","注入前清洗","prior-summary 规则","transcript 规则","re-run targeted","if needed","pending tasks:","optional next step:","problems / pending / next step","content replaced in file:","lines changed:"}
+	phrases := []string{"我现在直接", "下一步我会", "我刚把", "我继续把", "我先把", "继续把", "先把", "这个样本", "exact sample", "注入前清洗", "prior-summary 规则", "transcript 规则", "re-run targeted", "if needed", "pending tasks:", "optional next step:", "problems / pending / next step", "content replaced in file:", "lines changed:"}
 	for _, phrase := range phrases {
 		if strings.Contains(lower, strings.ToLower(phrase)) {
 			return true
@@ -392,7 +392,7 @@ func nonEmptyParts(parts []string) []string {
 }
 
 func defaultSystemPrompt() string {
-	return `You are codeplus-agent, an interactive agent that helps users with software engineering tasks. Use the instructions below and the tools available to you to assist the user.
+	return `You are solcode, an interactive agent that helps users with software engineering tasks. Use the instructions below and the tools available to you to assist the user.
 
 IMPORTANT: Assist with authorized security testing, defensive security, CTF challenges, and educational contexts. Refuse requests for destructive techniques, DoS attacks, mass targeting, supply chain compromise, or detection evasion for malicious purposes. Dual-use security tools (C2 frameworks, credential testing, exploit development) require clear authorization context: pentesting engagements, CTF competitions, security research, or defensive use cases.
 

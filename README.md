@@ -1,4 +1,4 @@
-# codeplus-agent
+# solcode
 
 A terminal-based coding agent powered by Claude (Anthropic API) that can read, write, edit, search, and reason about your codebase — all from the command line.
 
@@ -22,7 +22,7 @@ A terminal-based coding agent powered by Claude (Anthropic API) that can read, w
 ### Installation
 
 ```bash
-go install github.com/solosw/codeplus-agent/cmd/codeplus@latest
+go install github.com/solosw/solcode/cmd/solcode@latest
 ```
 
 ### Prerequisites
@@ -36,16 +36,16 @@ go install github.com/solosw/codeplus-agent/cmd/codeplus@latest
 export ANTHROPIC_API_KEY="sk-ant-..."
 
 # Interactive mode
-codeplus
+solcode
 
 # Batch mode
-codeplus -prompt "Explain the architecture of this project"
+solcode -prompt "Explain the architecture of this project"
 ```
 
 ## Usage
 
 ```
-codeplus [flags]
+solcode [flags]
 ```
 
 | Flag | Default | Description |
@@ -57,7 +57,7 @@ codeplus [flags]
 | `-timeout` | `30m` | Maximum run duration |
 | `-model` | from config | Override model (name or ID) |
 
-Config auto-discovery looks for `~/.agentcode/settings.json`, `~/.agentcode/settings.local.json`, `./.agentcode/settings.json`, and `./.agentcode/settings.local.json` in order; later files merge on top.
+Config auto-discovery looks for `~/.solcode/settings.json`, `~/.solcode/settings.local.json`, `./.solcode/settings.json`, and `./.solcode/settings.local.json` in order; later files merge on top.
 
 ## TUI Controls
 
@@ -130,7 +130,7 @@ All configuration lives in a JSON file. Example:
     }
   ],
   "skills": {
-    "paths": [".agentcode/skills"],
+    "paths": [".solcode/skills"],
     "enabled": [],
     "disabled": []
   },
@@ -210,8 +210,8 @@ Switch modes at runtime with `Shift+Tab`.
 ## Project Structure
 
 ```
-codeplus-agent/
-├── cmd/codeplus/main.go       # Entry point
+solcode/
+├── cmd/solcode/main.go       # Entry point
 ├── internal/
 │   ├── agent/                 # Coordinator & sub-agent orchestration
 │   ├── anthropic/             # Anthropic API client & message types

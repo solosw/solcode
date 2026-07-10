@@ -5,7 +5,7 @@
 *.so
 *.dylib
 
-codeplus-agent
+solcode
 
 # Test binary
 *.test
@@ -29,6 +29,7 @@ go.work.sum
 .DS_Store
 Thumbs.db
 
-# Agent runtime state (project-scoped, under ~/.agentcode/<project>/)
+# solcode runtime state (project-scoped, under ~/.solcode/<project>/)
 # These are generated at runtime, not committed
-.agentcode/
+.solcode/
+.warp-snapshots

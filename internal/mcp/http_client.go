@@ -8,8 +8,8 @@ import (
 	"time"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/solosw/codeplus-agent/internal/config"
-	"github.com/solosw/codeplus-agent/internal/tool"
+	"github.com/solosw/solcode/internal/config"
+	"github.com/solosw/solcode/internal/tool"
 )
 
 type sseClient struct {
@@ -33,7 +33,7 @@ func (c *sseClient) Start(ctx context.Context) error {
 	if c.session != nil {
 		return nil
 	}
-	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "codeplus-agent", Version: "0.1.0"}, nil)
+	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "solcode", Version: "0.1.0"}, nil)
 	httpClient := newHeaderHTTPClient(c.server.Headers)
 	session, err := client.Connect(ctx, &sdkmcp.SSEClientTransport{Endpoint: c.server.URL, HTTPClient: httpClient}, nil)
 	if err != nil {
@@ -107,7 +107,7 @@ func (c *streamableClient) Start(ctx context.Context) error {
 	if c.session != nil {
 		return nil
 	}
-	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "codeplus-agent", Version: "0.1.0"}, nil)
+	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "solcode", Version: "0.1.0"}, nil)
 	httpClient := newHeaderHTTPClient(c.server.Headers)
 	session, err := client.Connect(ctx, &sdkmcp.StreamableClientTransport{Endpoint: c.server.URL, HTTPClient: httpClient, MaxRetries: 5}, nil)
 	if err != nil {

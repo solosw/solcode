@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
-	"github.com/solosw/codeplus-agent/internal/engine"
+	"github.com/solosw/solcode/internal/engine"
 )
 
 func TestContextBuilderSystemPromptIsStable(t *testing.T) {
@@ -19,7 +19,7 @@ func TestContextBuilderSystemPromptIsStable(t *testing.T) {
 	})
 	for _, want := range []string{
 		"user system",
-		"You are codeplus-agent, an interactive CLI-based coding agent that helps with software engineering tasks.",
+		"You are solcode, an interactive CLI-based coding agent that helps with software engineering tasks.",
 		"Tool usage:",
 		"Skills:",
 		"Skills are reusable markdown workflows loaded from the configured skills directories.",
@@ -36,7 +36,7 @@ func TestContextBuilderSystemPromptIsStable(t *testing.T) {
 		}
 	}
 	idxUser := strings.Index(req.System, "user system")
-	idxDefault := strings.Index(req.System, "You are codeplus-agent")
+	idxDefault := strings.Index(req.System, "You are solcode")
 	idxTools := strings.Index(req.System, "Tool usage:")
 	idxSkills := strings.Index(req.System, "Skills:")
 	if !(idxUser >= 0 && idxDefault > idxUser && idxTools > idxDefault && idxSkills > idxTools) {

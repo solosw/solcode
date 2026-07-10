@@ -7,8 +7,8 @@ import (
 	"strings"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/solosw/codeplus-agent/internal/config"
-	"github.com/solosw/codeplus-agent/internal/tool"
+	"github.com/solosw/solcode/internal/config"
+	"github.com/solosw/solcode/internal/tool"
 )
 
 type Client interface {

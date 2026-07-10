@@ -151,7 +151,7 @@ func todoPath(uctx *UseContext) string {
 	if uctx != nil {
 		workDir = uctx.WorkDir
 	}
-	return filepath.Join(workDir, ".codeplus", "todos.json")
+	return filepath.Join(workDir, ".solcode", "todos.json")
 }
 
 func readExistingTodos(path string) []TodoItem {

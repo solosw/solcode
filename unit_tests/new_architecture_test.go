@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"testing"
 
-	cpanthropic "github.com/solosw/codeplus-agent/internal/anthropic"
-	"github.com/solosw/codeplus-agent/internal/permission"
-	"github.com/solosw/codeplus-agent/internal/tool"
+	cpanthropic "github.com/solosw/solcode/internal/anthropic"
+	"github.com/solosw/solcode/internal/permission"
+	"github.com/solosw/solcode/internal/tool"
 )
 
 func TestPermissionService_DefaultBlocksDestructiveTools(t *testing.T) {
