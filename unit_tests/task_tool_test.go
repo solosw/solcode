@@ -21,8 +21,7 @@ func TestTaskTool_SpawnsSubAgentAndReturnsResult(t *testing.T) {
 	input := json.RawMessage(`{
 		"description":"Review files",
 		"prompt":"Inspect the tool package",
-		"allowed_tools":["View","Grep"],
-		"max_turns":20
+		"allowed_tools":["View","Grep"]
 	}`)
 
 	result, err := taskTool.Invoke(context.Background(), &tool.UseContext{
@@ -79,6 +78,23 @@ func TestTaskTool_PropagatesDescription(t *testing.T) {
 	if runner.cfgs[0].Description != "Summarize package" {
 		t.Fatalf("expected description propagated, got %q", runner.cfgs[0].Description)
 	}
+	if !runner.cfgs[0].UnlimitedTurns {
+		t.Fatal("expected task agents to run without a turn limit")
+	}
+}
+
+func TestTaskTool_InputSchemaOmitsMaxTurns(t *testing.T) {
+	coordinator := agent.NewCoordinator(staticAgentRunner{})
+	taskTool := tool.NewTaskTool(coordinator)
+
+	properties := taskTool.InputSchema()["properties"].(map[string]any)
+	if _, exists := properties["max_turns"]; exists {
+		t.Fatal("task input schema must not expose max_turns")
+	}
+	taskProperties := properties["tasks"].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any)
+	if _, exists := taskProperties["max_turns"]; exists {
+		t.Fatal("task item schema must not expose max_turns")
+	}
 }
 
 func TestTaskTool_MultipleTasksUseFastModelAndDependencyGraph(t *testing.T) {
@@ -110,6 +126,60 @@ func TestTaskTool_MultipleTasksUseFastModelAndDependencyGraph(t *testing.T) {
 	if !strings.Contains(result.Text, "## a - Easy task") || !strings.Contains(result.Text, "## b - Hard task") {
 		t.Fatalf("expected grouped multi-task output, got %q", result.Text)
 	}
+}
+
+type failFirstTaskRunner struct {
+	started chan string
+}
+
+func (r failFirstTaskRunner) Run(ctx context.Context, cfg agent.AgentConfig) agent.AgentResult {
+	r.started <- cfg.Description
+	if cfg.Description == "Failing task" {
+		return agent.AgentResult{Error: "sub-agent failure"}
+	}
+	<-ctx.Done()
+	return agent.AgentResult{Error: ctx.Err().Error()}
+}
+
+func TestTaskTool_FailureCancelsParallelTasksAndReturnsError(t *testing.T) {
+	runner := failFirstTaskRunner{started: make(chan string, 2)}
+	coordinator := agent.NewCoordinator(runner)
+	taskTool := tool.NewTaskTool(coordinator)
+
+	result, err := taskTool.Invoke(context.Background(), &tool.UseContext{AgentID: "main", WorkDir: "/tmp/project"}, json.RawMessage(`{
+		"tasks":[
+			{"id":"fail","description":"Failing task","prompt":"fail"},
+			{"id":"slow","description":"Slow task","prompt":"wait"}
+		]
+	}`))
+	if err != nil {
+		t.Fatalf("invoke: %v", err)
+	}
+	if !result.IsError || !strings.Contains(result.Text, "task fail failed: sub-agent failure") {
+		t.Fatalf("expected propagated sub-agent failure, got %#v", result)
+	}
+
+	seen := map[string]bool{<-runner.started: true, <-runner.started: true}
+	if !seen["Failing task"] || !seen["Slow task"] {
+		t.Fatalf("expected both parallel tasks to start, got %v", seen)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		statuses := coordinator.List()
+		if len(statuses) == 2 {
+			allDone := true
+			for _, status := range statuses {
+				if status.State == agent.AgentRunning {
+					allDone = false
+				}
+			}
+			if allDone {
+				return
+			}
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("expected sibling task to stop after failure; statuses: %#v", coordinator.List())
 }
 
 func TestTaskTool_IsNotReadOnlyBecauseSubAgentMayUseWriteTools(t *testing.T) {

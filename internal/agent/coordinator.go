@@ -29,15 +29,16 @@ const (
 )
 
 type AgentConfig struct {
-	ID           AgentID
-	ParentID     AgentID
-	Role         AgentRole
-	Description  string
-	WorkDir      string
-	Prompt       string
-	AllowedTools []string
-	MaxTurns     int
-	Model        string
+	ID             AgentID
+	ParentID       AgentID
+	Role           AgentRole
+	Description    string
+	WorkDir        string
+	Prompt         string
+	AllowedTools   []string
+	MaxTurns       int
+	UnlimitedTurns bool
+	Model          string
 }
 
 type EventKind string

@@ -138,10 +138,10 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 	}
 
 	turnLimit := cfg.MaxTurns
-	if turnLimit <= 0 {
+	if turnLimit <= 0 && !cfg.UnlimitedTurns {
 		turnLimit = e.config.MaxTurns
 	}
-	if turnLimit <= 0 {
+	if turnLimit <= 0 && !cfg.UnlimitedTurns {
 		turnLimit = 10000
 	}
 
@@ -154,7 +154,7 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 
 	var finalText string
 	isMain := cfg.Role == "" || cfg.Role == agent.AgentRoleMain
-	for turn := 0; turn < turnLimit; turn++ {
+	for turn := 0; turnLimit <= 0 || turn < turnLimit; turn++ {
 		if err := ctx.Err(); err != nil {
 			return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: err.Error()}, Messages: messages}
 		}
@@ -253,6 +253,14 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 			}
 			if isMain && e.config.OnToolDone != nil {
 				e.config.OnToolDone(use.Name, text, isError)
+			}
+			if isError {
+				if cfg.Role == agent.AgentRoleTask {
+					return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: fmt.Sprintf("tool %s failed: %s", use.Name, text)}, Messages: messages}
+				}
+				if use.Name == tool.TaskToolName {
+					return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: fmt.Sprintf("task failed: %s", text)}, Messages: messages}
+				}
 			}
 			results = append(results, cpanthropic.ToolResult{ToolUseID: use.ID, Text: text, IsError: isError})
 		}

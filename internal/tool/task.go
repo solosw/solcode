@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"sync"
 	"sync/atomic"
 
 	"github.com/solosw/solcode/internal/agent"
@@ -19,7 +18,6 @@ type TaskParams struct {
 	Description   string              `json:"description"`
 	Prompt        string              `json:"prompt"`
 	AllowedTools  []string            `json:"allowed_tools,omitempty"`
-	MaxTurns      int                 `json:"max_turns,omitempty"`
 	Model         string              `json:"model,omitempty"`
 	FastModel     string              `json:"fast_model,omitempty"`
 	Tasks         []TaskItem          `json:"tasks,omitempty"`
@@ -32,7 +30,6 @@ type TaskItem struct {
 	Description  string   `json:"description"`
 	Prompt       string   `json:"prompt"`
 	AllowedTools []string `json:"allowed_tools,omitempty"`
-	MaxTurns     int      `json:"max_turns,omitempty"`
 	Difficulty   string   `json:"difficulty,omitempty"`
 	Model        string   `json:"model,omitempty"`
 	DependsOn    []string `json:"depends_on,omitempty"`
@@ -60,7 +57,6 @@ func (t *taskTool) InputSchema() map[string]any {
 			"description":   map[string]any{"type": "string", "description": "Short label for this task"},
 			"prompt":        map[string]any{"type": "string", "description": "Detailed prompt for this sub-agent"},
 			"allowed_tools": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Optional list of tools this sub-agent may use"},
-			"max_turns":     map[string]any{"type": "integer", "description": "Optional maximum turns for this sub-agent"},
 			"difficulty":    map[string]any{"type": "string", "enum": []string{"easy", "medium", "hard"}, "description": "Use easy for fast model, hard for main model"},
 			"model":         map[string]any{"type": "string", "description": "Optional explicit model or 'fast'"},
 			"depends_on":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Task ids that must complete before this task starts"},
@@ -73,7 +69,6 @@ func (t *taskTool) InputSchema() map[string]any {
 			"description":    map[string]any{"type": "string", "description": "Short label for a single task"},
 			"prompt":         map[string]any{"type": "string", "description": "Detailed prompt for a single sub-agent"},
 			"allowed_tools":  map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Optional list of tools the single sub-agent may use"},
-			"max_turns":      map[string]any{"type": "integer", "description": "Optional maximum turns for the single sub-agent"},
 			"model":          map[string]any{"type": "string", "description": "Optional explicit model or 'fast'"},
 			"fast_model":     map[string]any{"type": "string", "description": "Configured fast model id, passed by the host"},
 			"execution_mode": map[string]any{"type": "string", "enum": []string{"auto", "parallel", "serial"}, "description": "auto runs independent graph levels in parallel; serial runs tasks one by one"},
@@ -121,9 +116,6 @@ func normalizeTaskItems(params TaskParams) []TaskItem {
 	if len(params.Tasks) > 0 {
 		tasks := append([]TaskItem(nil), params.Tasks...)
 		for i := range tasks {
-			if tasks[i].MaxTurns <= 0 {
-				tasks[i].MaxTurns = params.MaxTurns
-			}
 			if tasks[i].Model == "" {
 				tasks[i].Model = params.Model
 			}
@@ -140,8 +132,7 @@ func normalizeTaskItems(params TaskParams) []TaskItem {
 		ID:           "task_1",
 		Description:  params.Description,
 		Prompt:       params.Prompt,
-		AllowedTools: nil,
-		MaxTurns:     params.MaxTurns,
+		AllowedTools: params.AllowedTools,
 		Model:        params.Model,
 	}}
 }
@@ -229,24 +220,30 @@ func dependenciesCompleted(deps []string, completed map[string]bool) bool {
 }
 
 func (t *taskTool) runTaskLevel(ctx context.Context, uctx *UseContext, tasks []TaskItem, fastModel string) ([]taskRunResult, error) {
-	results := make([]taskRunResult, len(tasks))
-	errs := make([]error, len(tasks))
-	var wg sync.WaitGroup
-	for i, task := range tasks {
-		i, task := i, task
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			result, err := t.runOneTask(ctx, uctx, task, fastModel)
-			results[i] = result
-			errs[i] = err
-		}()
+	levelCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	type taskOutcome struct {
+		index  int
+		result taskRunResult
+		err    error
 	}
-	wg.Wait()
-	for _, err := range errs {
-		if err != nil {
-			return nil, err
+	outcomes := make(chan taskOutcome, len(tasks))
+	for i, task := range tasks {
+		go func(index int, task TaskItem) {
+			result, err := t.runOneTask(levelCtx, uctx, task, fastModel)
+			outcomes <- taskOutcome{index: index, result: result, err: err}
+		}(i, task)
+	}
+
+	results := make([]taskRunResult, len(tasks))
+	for range tasks {
+		outcome := <-outcomes
+		if outcome.err != nil {
+			cancel()
+			return nil, outcome.err
 		}
+		results[outcome.index] = outcome.result
 	}
 	return results, nil
 }
@@ -254,15 +251,15 @@ func (t *taskTool) runTaskLevel(ctx context.Context, uctx *UseContext, tasks []T
 func (t *taskTool) runOneTask(ctx context.Context, uctx *UseContext, task TaskItem, fastModel string) (taskRunResult, error) {
 	id := agent.AgentID(fmt.Sprintf("task-%d", atomic.AddUint64(&taskIDCounter, 1)))
 	_, err := t.coordinator.Spawn(ctx, agent.AgentConfig{
-		ID:           id,
-		ParentID:     agent.AgentID(uctx.AgentID),
-		Role:         agent.AgentRoleTask,
-		Description:  task.Description,
-		WorkDir:      uctx.WorkDir,
-		Prompt:       task.Prompt,
-		AllowedTools: task.AllowedTools,
-		MaxTurns:     task.MaxTurns,
-		Model:        taskModel(task, fastModel),
+		ID:             id,
+		ParentID:       agent.AgentID(uctx.AgentID),
+		Role:           agent.AgentRoleTask,
+		Description:    task.Description,
+		WorkDir:        uctx.WorkDir,
+		Prompt:         task.Prompt,
+		AllowedTools:   task.AllowedTools,
+		UnlimitedTurns: true,
+		Model:          taskModel(task, fastModel),
 	})
 	if err != nil {
 		return taskRunResult{}, fmt.Errorf("spawn task %s: %w", task.ID, err)
@@ -273,6 +270,9 @@ func (t *taskTool) runOneTask(ctx context.Context, uctx *UseContext, task TaskIt
 	}
 	if result.Error != "" {
 		return taskRunResult{}, fmt.Errorf("task %s failed: %s", task.ID, result.Error)
+	}
+	if err := ctx.Err(); err != nil {
+		return taskRunResult{}, fmt.Errorf("task %s canceled: %w", task.ID, err)
 	}
 	return taskRunResult{ID: task.ID, Description: task.Description, Output: result.Output}, nil
 }
