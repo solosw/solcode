@@ -46,6 +46,7 @@ func slashHelpText() string {
 		"/effort — select thinking effort via dialog",
 		"/sessions — list saved sessions",
 		"/compact — compact the current session now",
+		"/fix-session — repair invalid tool-use chains in the current session",
 		"/new-session [name] — create and switch to a new session",
 		"/skills — browse skills and toggle enabled/disabled",
 		"/mcp — browse MCP servers and toggle enabled/disabled",
@@ -113,6 +114,16 @@ func (m *Model) handleSlashCommand(input string) (bool, tea.Cmd) {
 			m.refreshViewport()
 			return true, tea.Batch(m.slashAsyncHandler(cmd.Name, cmd.Args), m.nextSpinnerTick())
 		}
+	case "fix-session":
+		if m.slashAsyncHandler == nil {
+			m.appendCommandResult("/fix-session is not available in this session.")
+		} else {
+			m.status = "Repairing session..."
+			m.spinnerActive = true
+			m.loadingStart = time.Now()
+			m.refreshViewport()
+			return true, tea.Batch(m.slashAsyncHandler(cmd.Name, cmd.Args), m.nextSpinnerTick())
+		}
 	case "new-session":
 		if m.newSessionHandler == nil {
 			m.appendCommandResult(fmt.Sprintf("/%s is not available in this session.", cmd.Name))
@@ -166,6 +177,7 @@ var builtinCommands = map[string]bool{
 	"effort":      true,
 	"sessions":    true,
 	"compact":     true,
+	"fix-session": true,
 	"new-session": true,
 	"skills":      true,
 	"mcp":         true,

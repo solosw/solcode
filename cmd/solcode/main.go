@@ -295,6 +295,25 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 				}
 				return tui.CommandResultMsg{Text: "Compacted current session."}
 			}
+		case "fix-session":
+			return func() tea.Msg {
+				currentSessionID := cfg.Session.DefaultSession
+				if currentSessionID == "" {
+					currentSessionID = "main"
+				}
+				s, removed, err := application.RepairSession(context.Background(), currentSessionID, cfg.WorkDir)
+				if err != nil {
+					return tui.CommandResultMsg{Text: fmt.Sprintf("Session repair failed: %v", err)}
+				}
+				if s != nil && program != nil {
+					program.Send(tui.ReplaceMessagesMsg{Messages: chatMessagesFromSession(s)})
+					sendUsage(usageFromSession(cfg, application, s))
+				}
+				if removed == 0 {
+					return tui.CommandResultMsg{Text: "Session is already valid; no incomplete tool exchanges were found."}
+				}
+				return tui.CommandResultMsg{Text: fmt.Sprintf("Repaired current session: removed %d incomplete tool block(s).", removed)}
+			}
 		default:
 			return func() tea.Msg {
 				return tui.CommandResultMsg{Text: fmt.Sprintf("Unknown command: /%s. Try /help.", command)}

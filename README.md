@@ -91,6 +91,7 @@ Type `/` in the input to access commands:
 | `/effort` | Select thinking effort (low/medium/high) |
 | `/sessions` | List and load saved sessions |
 | `/compact` | Compact the current session context |
+| `/fix-session` | Repair incomplete tool-use exchanges in the current session |
 | `/new-session [name]` | Create and switch to a new session |
 | `/skills` | Browse skills and toggle enabled/disabled |
 | `/mcp` | Browse MCP servers and toggle enabled/disabled |

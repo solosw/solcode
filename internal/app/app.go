@@ -284,6 +284,44 @@ func (a *App) CheckMCPServer(server config.MCPServerConfig, mcpFactory mcp.Clien
 	return registry.Close()
 }
 
+func (a *App) RepairSession(ctx context.Context, sessionID, workDir string) (*session.Session, int, error) {
+	if a == nil || a.Sessions == nil {
+		return nil, 0, fmt.Errorf("sessions are not enabled")
+	}
+	if strings.TrimSpace(sessionID) == "" {
+		sessionID = a.Config.Session.DefaultSession
+	}
+	if strings.TrimSpace(sessionID) == "" {
+		sessionID = "main"
+	}
+	if strings.TrimSpace(workDir) == "" {
+		workDir = a.Config.WorkDir
+	}
+	current, err := a.Sessions.LoadOrCreate(ctx, session.SessionID(sessionID), workDir, a.Config.Model)
+	if err != nil {
+		return nil, 0, fmt.Errorf("load session: %w", err)
+	}
+	repaired, removed := session.RepairMessages(current.CopyMessages())
+	changed := removed > 0 || len(repaired) != len(current.Messages)
+	if changed {
+		current.ReplaceMessages(repaired)
+	}
+	if a.SanitizeLoadedSession(current) {
+		changed = true
+		// SanitizeLoadedSession may remove stale tool-use blocks after the first pass.
+		if repaired, extraRemoved := session.RepairMessages(current.CopyMessages()); extraRemoved > 0 || len(repaired) != len(current.Messages) {
+			current.ReplaceMessages(repaired)
+			removed += extraRemoved
+		}
+	}
+	if changed {
+		if err := a.Sessions.Save(context.WithoutCancel(ctx), current); err != nil {
+			return nil, 0, fmt.Errorf("save repaired session: %w", err)
+		}
+	}
+	return current, removed, nil
+}
+
 func (a *App) RunPrompt(ctx context.Context, prompt, workDir string, maxTurns int) (agent.AgentResult, error) {
 	if a == nil {
 		return agent.AgentResult{}, fmt.Errorf("app is nil")
@@ -1158,9 +1196,9 @@ func (a *App) SanitizeLoadedSession(current *session.Session) bool {
 		return false
 	}
 	changed := sanitizeLoadedSessionState(current)
-	stripped := session.StripEphemeralContextMessages(current.CopyMessages())
-	if len(stripped) != len(current.Messages) {
-		current.ReplaceMessages(stripped)
+	repaired, removed := session.RepairMessages(current.CopyMessages())
+	if removed > 0 || len(repaired) != len(current.Messages) {
+		current.ReplaceMessages(repaired)
 		changed = true
 	}
 	return changed

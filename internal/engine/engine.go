@@ -256,9 +256,13 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 			}
 			if isError {
 				if cfg.Role == agent.AgentRoleTask {
+					results = append(results, cpanthropic.ToolResult{ToolUseID: use.ID, Text: text, IsError: true})
+					messages = append(messages, sdk.NewUserMessage(cpanthropic.ToolResultBlocks(results)...))
 					return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: fmt.Sprintf("tool %s failed: %s", use.Name, text)}, Messages: messages}
 				}
 				if use.Name == tool.TaskToolName {
+					results = append(results, cpanthropic.ToolResult{ToolUseID: use.ID, Text: text, IsError: true})
+					messages = append(messages, sdk.NewUserMessage(cpanthropic.ToolResultBlocks(results)...))
 					return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: fmt.Sprintf("task failed: %s", text)}, Messages: messages}
 				}
 			}
