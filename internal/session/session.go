@@ -26,9 +26,10 @@ type Metadata struct {
 }
 
 type Session struct {
-	Metadata Metadata           `json:"metadata"`
-	Messages []sdk.MessageParam `json:"messages,omitempty"`
-	Summary  string             `json:"summary,omitempty"`
+	Metadata          Metadata           `json:"metadata"`
+	Messages          []sdk.MessageParam `json:"messages,omitempty"`
+	MessageTimestamps []time.Time        `json:"message_timestamps,omitempty"`
+	Summary           string             `json:"summary,omitempty"`
 }
 
 type Store interface {
@@ -83,6 +84,7 @@ func (m *Manager) Save(ctx context.Context, s *Session) error {
 		return nil
 	}
 	s.Messages = StripEphemeralContextMessages(s.Messages)
+	s.EnsureMessageTimestamps()
 	return m.store.Save(ctx, s)
 }
 
@@ -112,16 +114,69 @@ func (s *Session) Append(messages ...sdk.MessageParam) {
 	if s == nil || len(messages) == 0 {
 		return
 	}
+	now := time.Now()
+	s.EnsureMessageTimestamps()
 	s.Messages = append(s.Messages, messages...)
-	s.Metadata.UpdatedAt = time.Now()
+	for range messages {
+		s.MessageTimestamps = append(s.MessageTimestamps, now)
+	}
+	s.Metadata.UpdatedAt = now
 }
 
 func (s *Session) ReplaceMessages(messages []sdk.MessageParam) {
 	if s == nil {
 		return
 	}
+	now := time.Now()
+	s.EnsureMessageTimestamps()
+	timestamps := append([]time.Time(nil), s.MessageTimestamps...)
+	if len(timestamps) > len(messages) {
+		timestamps = timestamps[:len(messages)]
+	}
+	for len(timestamps) < len(messages) {
+		timestamps = append(timestamps, now)
+	}
 	s.Messages = append([]sdk.MessageParam(nil), messages...)
-	s.Metadata.UpdatedAt = time.Now()
+	s.MessageTimestamps = timestamps
+	s.Metadata.UpdatedAt = now
+}
+
+// EnsureMessageTimestamps keeps message timestamps aligned with Messages.
+// Sessions saved before timestamps were introduced use their last update time
+// as a stable fallback rather than displaying the time they are reopened.
+func (s *Session) EnsureMessageTimestamps() {
+	if s == nil {
+		return
+	}
+	if len(s.MessageTimestamps) > len(s.Messages) {
+		s.MessageTimestamps = s.MessageTimestamps[:len(s.Messages)]
+	}
+	fallback := s.Metadata.UpdatedAt
+	if fallback.IsZero() {
+		fallback = s.Metadata.CreatedAt
+	}
+	if fallback.IsZero() {
+		fallback = time.Now()
+	}
+	for len(s.MessageTimestamps) < len(s.Messages) {
+		s.MessageTimestamps = append(s.MessageTimestamps, fallback)
+	}
+}
+
+// MessageTimestamp returns the persisted timestamp for a message. It provides
+// a stable metadata fallback for sessions created before per-message timestamps
+// were persisted.
+func (s *Session) MessageTimestamp(index int) time.Time {
+	if s == nil || index < 0 || index >= len(s.Messages) {
+		return time.Time{}
+	}
+	if index < len(s.MessageTimestamps) && !s.MessageTimestamps[index].IsZero() {
+		return s.MessageTimestamps[index]
+	}
+	if !s.Metadata.UpdatedAt.IsZero() {
+		return s.Metadata.UpdatedAt
+	}
+	return s.Metadata.CreatedAt
 }
 
 func (s *Session) CopyMessages() []sdk.MessageParam {

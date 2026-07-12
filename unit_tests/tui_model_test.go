@@ -370,6 +370,16 @@ func TestTUIModelThemeToggle(t *testing.T) {
 	}
 }
 
+func TestThemeWithBackground(t *testing.T) {
+	theme := tui.ThemeByName("light").WithBackground("#102030")
+	if string(theme.Background) != "#102030" {
+		t.Fatalf("background = %q, want %q", theme.Background, "#102030")
+	}
+	if theme.BackgroundOverride != "#102030" {
+		t.Fatalf("background override = %q, want %q", theme.BackgroundOverride, "#102030")
+	}
+}
+
 func TestTUIModelUsageStatusRenders(t *testing.T) {
 	model := newTUI(t)
 	model.SetContextLimitFn(func() int64 { return 1000000 })

@@ -7,20 +7,21 @@ import "github.com/charmbracelet/lipgloss"
 type Theme struct {
 	Name string
 
-	Claude        lipgloss.Color
-	ClaudeShimmer lipgloss.Color
-	Text          lipgloss.Color
-	Inactive      lipgloss.Color
-	Subtle        lipgloss.Color
-	Suggestion    lipgloss.Color
-	Success       lipgloss.Color
-	Error         lipgloss.Color
-	Warning       lipgloss.Color
-	Permission    lipgloss.Color
-	PromptBorder  lipgloss.Color
-	Background    lipgloss.Color
-	StatusBG      lipgloss.Color
-	StatusFG      lipgloss.Color
+	Claude             lipgloss.Color
+	ClaudeShimmer      lipgloss.Color
+	Text               lipgloss.Color
+	Inactive           lipgloss.Color
+	Subtle             lipgloss.Color
+	Suggestion         lipgloss.Color
+	Success            lipgloss.Color
+	Error              lipgloss.Color
+	Warning            lipgloss.Color
+	Permission         lipgloss.Color
+	PromptBorder       lipgloss.Color
+	Background         lipgloss.Color
+	BackgroundOverride string
+	StatusBG           lipgloss.Color
+	StatusFG           lipgloss.Color
 
 	// Derived styles
 	User         lipgloss.Style
@@ -139,4 +140,16 @@ func ThemeByName(name string) Theme {
 		return Light
 	}
 	return Dark
+}
+
+// WithBackground returns a copy of theme with a custom TUI background. An empty
+// value preserves the palette default. The color value is passed to lipgloss, so
+// it may be a hexadecimal color or an ANSI color index.
+func (t Theme) WithBackground(background string) Theme {
+	if background == "" {
+		return t
+	}
+	t.Background = lipgloss.Color(background)
+	t.BackgroundOverride = background
+	return t
 }

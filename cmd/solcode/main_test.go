@@ -4,11 +4,35 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
+	sdk "github.com/anthropics/anthropic-sdk-go"
 	appcore "github.com/solosw/solcode/internal/app"
 	"github.com/solosw/solcode/internal/config"
 	"github.com/solosw/solcode/internal/session"
 )
+
+func TestChatMessagesFromSessionUsesPersistedMessageTimes(t *testing.T) {
+	first := time.Date(2024, time.January, 2, 3, 4, 0, 0, time.UTC)
+	second := first.Add(5 * time.Minute)
+	s := session.NewSession("main", "", "")
+	s.Messages = []sdk.MessageParam{
+		sdk.NewUserMessage(sdk.NewTextBlock("first message")),
+		sdk.NewAssistantMessage(sdk.NewTextBlock("second message")),
+	}
+	s.MessageTimestamps = []time.Time{first, second}
+
+	messages := chatMessagesFromSession(s)
+	if len(messages) != 3 {
+		t.Fatalf("got %d messages, want loaded-session notice plus two transcript messages", len(messages))
+	}
+	if messages[1].Role != "user" || !messages[1].TimeStamp.Equal(first) {
+		t.Fatalf("first transcript message = %#v, want user at %s", messages[1], first)
+	}
+	if messages[2].Role != "assistant" || !messages[2].TimeStamp.Equal(second) {
+		t.Fatalf("second transcript message = %#v, want assistant at %s", messages[2], second)
+	}
+}
 
 func TestLoadSanitizedSessionRewritesPollutedSummary(t *testing.T) {
 	ctx := context.Background()

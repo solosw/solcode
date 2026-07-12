@@ -106,6 +106,7 @@ type Config struct {
 	PermissionMode   permission.Mode   `json:"permission_mode"`
 	Permissions      permission.Config `json:"permissions,omitempty"`
 	Hooks            hook.Config       `json:"hooks,omitempty"`
+	TUI              TUIConfig         `json:"tui,omitempty"`
 	Skills           SkillsConfig      `json:"skills,omitempty"`
 	MCP              MCPConfig         `json:"mcp,omitempty"`
 	MCPServers       []MCPServerConfig `json:"mcp_servers,omitempty"`
@@ -114,6 +115,13 @@ type Config struct {
 
 	Provider  string           `json:"provider,omitempty"`
 	Providers []ProviderConfig `json:"providers,omitempty"`
+}
+
+// TUIConfig customizes the terminal interface palette. Colors accept any
+// lipgloss-compatible terminal color value, such as "#1e1e2e" or "236".
+type TUIConfig struct {
+	Theme      string `json:"theme,omitempty"`
+	Background string `json:"background,omitempty"`
 }
 
 type SkillsConfig struct {
@@ -219,6 +227,10 @@ func Default() Config {
 		Permissions: permission.Config{
 			Mode: permission.ModeAuto,
 		},
+		TUI: TUIConfig{
+			Theme:      "dark",
+			Background: "dark",
+		},
 		Session: SessionConfig{
 			Enabled:        true,
 			Persist:        true,
@@ -318,6 +330,10 @@ func defaultSettingsPayload(workDir string) map[string]any {
 			}},
 		}},
 		"work_dir": workDir,
+		"tui": TUIConfig{
+			Theme:      "dark",
+			Background: "dark",
+		},
 	}
 }
 
@@ -896,6 +912,10 @@ func applyJSONConfig(cfg *Config, data []byte) error {
 			if err := applyHooksJSON(&cfg.Hooks, value); err != nil {
 				return err
 			}
+		case "tui":
+			if err := applyTUIJSON(&cfg.TUI, value); err != nil {
+				return err
+			}
 		case "skills":
 			if err := applySkillsJSON(&cfg.Skills, value); err != nil {
 				return err
@@ -948,6 +968,26 @@ func applyPermissionsJSON(cfg *permission.Config, data []byte) error {
 			}
 		case "allow_bash", "allowed_bash":
 			if err := json.Unmarshal(value, &cfg.AllowBash); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func applyTUIJSON(cfg *TUIConfig, data []byte) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	for key, value := range raw {
+		switch key {
+		case "theme":
+			if err := json.Unmarshal(value, &cfg.Theme); err != nil {
+				return err
+			}
+		case "background":
+			if err := json.Unmarshal(value, &cfg.Background); err != nil {
 				return err
 			}
 		}

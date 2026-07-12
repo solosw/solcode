@@ -248,7 +248,8 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 		return cmd, cancel
 	}
 
-	model := tui.NewWith(submit, tui.Dark, cfg.Model, cfg.WorkDir, true)
+	theme := tui.ThemeByName(cfg.TUI.Theme).WithBackground(cfg.TUI.Background)
+	model := tui.NewWith(submit, theme, cfg.Model, cfg.WorkDir, true)
 	if application.Sessions != nil {
 		sessionName := cfg.Session.DefaultSession
 		if sessionName == "" {
@@ -692,7 +693,8 @@ func chatMessagesFromSession(s *session.Session) []tui.ChatMessage {
 		return nil
 	}
 	messages := []tui.ChatMessage{{Role: "system", Content: fmt.Sprintf("Loaded session: %s", s.Metadata.ID), TimeStamp: time.Now()}}
-	for _, msg := range s.Messages {
+	for index, msg := range s.Messages {
+		timestamp := s.MessageTimestamp(index)
 		role := string(msg.Role)
 		for _, block := range msg.Content {
 			switch {
@@ -707,7 +709,7 @@ func chatMessagesFromSession(s *session.Session) []tui.ChatMessage {
 				} else if role == "system" {
 					displayRole = "system"
 				}
-				messages = append(messages, tui.ChatMessage{Role: displayRole, Content: text, TimeStamp: time.Now()})
+				messages = append(messages, tui.ChatMessage{Role: displayRole, Content: text, TimeStamp: timestamp})
 			case block.OfToolUse != nil:
 				input := ""
 				if raw, err := json.Marshal(block.OfToolUse.Input); err == nil {
@@ -717,7 +719,7 @@ func chatMessagesFromSession(s *session.Session) []tui.ChatMessage {
 					Role:      "tool",
 					ToolName:  block.OfToolUse.Name,
 					Content:   input,
-					TimeStamp: time.Now(),
+					TimeStamp: timestamp,
 				})
 			case block.OfToolResult != nil:
 				text := toolResultText(block.OfToolResult)
@@ -726,7 +728,7 @@ func chatMessagesFromSession(s *session.Session) []tui.ChatMessage {
 					ToolName:  "Result",
 					Content:   text,
 					Collapsed: true,
-					TimeStamp: time.Now(),
+					TimeStamp: timestamp,
 				})
 			}
 		}

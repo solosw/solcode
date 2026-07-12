@@ -4,7 +4,8 @@ A terminal-based coding agent powered by Claude (Anthropic API) that can read, w
 
 ## Features
 
-- **Interactive TUI** — Rich terminal UI built with [Bubble Tea](https://github.com/charmbracelet/bubbletea), with streaming text, inline diff rendering, syntax highlighting, thinking indicators, and permission dialogs.
+- **Interactive TUI** — Rich terminal UI built with [Bubble Tea](https://github.com/charmbracelet/bubbletea), with streaming text, inline diff rendering, syntax highlighting, timestamps, thinking indicators, and permission dialogs.
+- **Persistent sessions** — Reload saved conversation history with its original message timestamps.
 - **Batch mode** — Run one-shot prompts non-interactively via `-prompt`.
 - **Multi-model support** — Configure multiple LLM providers and models, switch at runtime with `/model`.
 - **20+ built-in tools** — Bash, Edit, Write, View, ViewImage, Grep, Glob, LS, Diff, Patch, Fetch, WebSearch, LSP, MCP, TodoWrite, AskUser, Task (sub-agents), and more.
@@ -97,6 +98,10 @@ Type `/` in the input to access commands:
 | `/mcp` | Browse MCP servers and toggle enabled/disabled |
 | `/[skill] [args]` | Invoke a loaded skill by name |
 
+### Saved-session timestamps
+
+Each saved message has a persisted timestamp. Reloading a session displays these original times rather than the time the TUI was reopened. Sessions created before per-message timestamps were available use their saved session update time as a stable fallback.
+
 ## Configuration
 
 All configuration lives in a JSON file. Example:
@@ -111,6 +116,10 @@ All configuration lives in a JSON file. Example:
   "thinking_text": false,
   "effort": "high",
   "permission_mode": "auto",
+  "tui": {
+    "theme": "dark",
+    "background": "#101820"
+  },
   "providers": [
     {
       "name": "anthropic",
@@ -172,6 +181,10 @@ All configuration lives in a JSON file. Example:
 | `skills.paths` | array | Directories to scan for skill files |
 | `mcp_servers` | array | MCP server definitions |
 | `hooks.events` | map | Event → matcher+command mappings |
+| `tui.theme` | string | Initial palette: `dark` (default) or `light` |
+| `tui.background` | string | TUI background color (hex or ANSI color index) |
+
+`ViewImage` supplies an image data URL to the model; the standard terminal TUI does not render inline images, so it has no image-background setting.
 
 ## Built-in Tools
 

@@ -50,6 +50,7 @@ func (s *FileStore) Save(ctx context.Context, session *Session) error {
 	if session.Metadata.ID == "" {
 		session.Metadata.ID = "main"
 	}
+	session.EnsureMessageTimestamps()
 	if err := os.MkdirAll(s.dir, 0o755); err != nil {
 		return fmt.Errorf("create sessions dir: %w", err)
 	}

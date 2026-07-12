@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
 	"github.com/solosw/solcode/internal/session"
@@ -32,6 +33,26 @@ func TestSessionFileStoreRoundTrip(t *testing.T) {
 	}
 	if len(loaded.Messages) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(loaded.Messages))
+	}
+}
+
+func TestSessionFileStorePreservesMessageTimestamps(t *testing.T) {
+	ctx := context.Background()
+	store := session.NewFileStore(t.TempDir())
+	stamp := time.Date(2024, time.January, 2, 3, 4, 5, 0, time.UTC)
+	s := session.NewSession("main", t.TempDir(), "test-model")
+	s.Messages = []sdk.MessageParam{sdk.NewUserMessage(sdk.NewTextBlock("hello"))}
+	s.MessageTimestamps = []time.Time{stamp}
+
+	if err := store.Save(ctx, s); err != nil {
+		t.Fatalf("save session: %v", err)
+	}
+	loaded, err := store.Load(ctx, "main")
+	if err != nil {
+		t.Fatalf("load session: %v", err)
+	}
+	if got := loaded.MessageTimestamp(0); !got.Equal(stamp) {
+		t.Fatalf("MessageTimestamp(0) = %s, want %s", got, stamp)
 	}
 }
 

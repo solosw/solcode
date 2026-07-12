@@ -37,6 +37,33 @@ func TestLoadEmptyConfigDefaults(t *testing.T) {
 	if cfg.PermissionMode != permission.ModeAuto {
 		t.Fatalf("expected default permission mode auto, got %q", cfg.PermissionMode)
 	}
+	if cfg.TUI.Theme != "dark" {
+		t.Fatalf("expected default TUI theme dark, got %q", cfg.TUI.Theme)
+	}
+	if cfg.TUI.Background != "#000000" {
+		t.Fatalf("expected default TUI background #000000, got %q", cfg.TUI.Background)
+	}
+}
+
+func TestLoadTUIThemeSettings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	writeFile(t, path, `{
+		"tui": {
+			"theme": "light",
+			"background": "#102030"
+		}
+	}`)
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load() = %v", err)
+	}
+	if cfg.TUI.Theme != "light" {
+		t.Fatalf("TUI.Theme = %q, want light", cfg.TUI.Theme)
+	}
+	if cfg.TUI.Background != "#102030" {
+		t.Fatalf("TUI.Background = %q, want #102030", cfg.TUI.Background)
+	}
 }
 
 func TestLoadCreatesDefaultSettingsOnFirstStart(t *testing.T) {
@@ -74,7 +101,7 @@ func TestLoadCreatesDefaultSettingsOnFirstStart(t *testing.T) {
 		t.Fatalf("read settings.json: %v", err)
 	}
 	text := string(data)
-	for _, want := range []string{"\"providers\"", anthropic.DefaultModel, "\"max_context_tokens\": 200000", "\"max_tokens\": 64000", "\"max_turns\": 0", "\"effort\": \"high\""} {
+	for _, want := range []string{"\"providers\"", anthropic.DefaultModel, "\"max_context_tokens\": 200000", "\"max_tokens\": 64000", "\"max_turns\": 0", "\"effort\": \"high\"", "\"theme\": \"dark\"", "\"background\": \"#000000\""} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected %q in initialized settings.json: %s", want, text)
 		}

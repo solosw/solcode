@@ -1306,11 +1306,13 @@ func (m *Model) stopSpinner() {
 }
 
 func (m *Model) toggleTheme() {
+	background := m.theme.BackgroundOverride
 	if m.theme.Name == "dark" {
 		m.theme = Light
 	} else {
 		m.theme = Dark
 	}
+	m.theme = m.theme.WithBackground(background)
 }
 
 func (m *Model) toggleLastToolCollapse() {
@@ -1408,7 +1410,7 @@ func (m Model) View() string {
 	if panel := m.renderActivityPanel(); panel != "" {
 		parts = append(parts, panel)
 	}
-	return lipgloss.JoinVertical(lipgloss.Left, parts...)
+	return lipgloss.NewStyle().Background(m.theme.Background).Width(m.width).Render(lipgloss.JoinVertical(lipgloss.Left, parts...))
 }
 
 func (m Model) renderViewportWithScrollbar() string {
@@ -1490,11 +1492,7 @@ func (m Model) renderInput() string {
 		BorderTop(true).BorderBottom(true).BorderLeft(true).BorderRight(true).
 		Padding(0, 1).
 		Width(max(1, m.width-2)).
-		Background(lipgloss.Color("#1a1a1a"))
-
-	if t.Name == "light" {
-		inputStyle = inputStyle.Background(lipgloss.Color("#f0f0f0"))
-	}
+		Background(t.Background)
 
 	// Compose the input without a prompt prefix.
 	line := inputView

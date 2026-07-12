@@ -54,7 +54,7 @@ func highlightCode(content, filePath string, t Theme, width int) string {
 	if result == "" {
 		return ""
 	}
-	return result
+	return normalizeANSIBackground(result, t.Background)
 }
 
 // highlightCodeBlock detects fenced code blocks with a language hint and highlights them.
@@ -121,7 +121,7 @@ func highlightCodeBlock(content string, t Theme, width int) string {
 	if result.Len() == 0 {
 		return ""
 	}
-	return result.String()
+	return normalizeANSIBackground(result.String(), t.Background)
 }
 
 // lexerForPath picks a chroma lexer based on file extension.
