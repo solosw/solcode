@@ -3,8 +3,6 @@ package unit_tests
 import (
 	"context"
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -26,14 +24,6 @@ func (m *recordingModel) Send(ctx context.Context, req engine.ModelRequest) (eng
 
 func TestEngine_RunAppliesUserPromptSubmitHookBeforeModelCall(t *testing.T) {
 	tmpDir := t.TempDir()
-	scriptPath := filepath.Join(tmpDir, "prompt-hook.sh")
-	script := `#!/usr/bin/env bash
-printf '{"decision":"modify","modified_prompt":"rewritten prompt"}'
-`
-	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
-		t.Fatalf("write prompt hook script: %v", err)
-	}
-
 	model := &recordingModel{
 		response: engine.ModelResponse{
 			Text: "model output",
@@ -47,7 +37,7 @@ printf '{"decision":"modify","modified_prompt":"rewritten prompt"}'
 					Hooks: []hook.CommandConfig{
 						{
 							Type:      "command",
-							Command:   "bash " + filepath.ToSlash(scriptPath),
+							Command:   hookResultCommand(t, `{"decision":"modify","modified_prompt":"rewritten prompt"}`),
 							TimeoutMS: 5000,
 						},
 					},
@@ -88,7 +78,7 @@ func TestEngine_RunBlocksWhenUserPromptSubmitBlocks(t *testing.T) {
 					Hooks: []hook.CommandConfig{
 						{
 							Type:      "command",
-							Command:   `printf '{"decision":"block","message":"prompt blocked"}'`,
+							Command:   hookResultCommand(t, `{"decision":"block","message":"prompt blocked"}`),
 							TimeoutMS: 5000,
 						},
 					},

@@ -5,21 +5,47 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/solosw/solcode/internal/hook"
 )
 
-func TestHookRuntime_PreToolUseCommandCanModifyToolInput(t *testing.T) {
-	tmpDir := t.TempDir()
-	scriptPath := filepath.Join(tmpDir, "rewrite.sh")
-	script := `#!/usr/bin/env bash
-printf '{"decision":"modify","modified_input":{"command":"rtk git status"},"message":"rewritten through rtk"}'
-`
-	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+func hookResultCommand(t *testing.T, result string) string {
+	t.Helper()
+	dir := t.TempDir()
+	if runtime.GOOS == "windows" {
+		path := filepath.Join(dir, "hook.cmd")
+		if err := os.WriteFile(path, []byte("@echo off\r\necho "+result+"\r\n"), 0o755); err != nil {
+			t.Fatalf("write hook script: %v", err)
+		}
+		return path
+	}
+	path := filepath.Join(dir, "hook.sh")
+	if err := os.WriteFile(path, []byte("#!/usr/bin/env bash\nprintf '"+result+"'\n"), 0o755); err != nil {
 		t.Fatalf("write hook script: %v", err)
 	}
+	return "bash \"" + filepath.ToSlash(path) + "\""
+}
 
+func hookMarkerCommand(t *testing.T, path string) string {
+	t.Helper()
+	dir := t.TempDir()
+	if runtime.GOOS == "windows" {
+		script := filepath.Join(dir, "marker.cmd")
+		if err := os.WriteFile(script, []byte("@echo off\r\ntype nul > \""+path+"\"\r\n"), 0o755); err != nil {
+			t.Fatalf("write marker script: %v", err)
+		}
+		return script
+	}
+	script := filepath.Join(dir, "marker.sh")
+	if err := os.WriteFile(script, []byte("#!/usr/bin/env bash\ntouch \""+path+"\"\n"), 0o755); err != nil {
+		t.Fatalf("write marker script: %v", err)
+	}
+	return "bash \"" + filepath.ToSlash(script) + "\""
+}
+
+func TestHookRuntime_PreToolUseCommandCanModifyToolInput(t *testing.T) {
 	runtime := hook.NewRuntime(hook.Config{
 		Events: map[hook.EventName][]hook.MatcherConfig{
 			hook.EventPreToolUse: {
@@ -28,7 +54,7 @@ printf '{"decision":"modify","modified_input":{"command":"rtk git status"},"mess
 					Hooks: []hook.CommandConfig{
 						{
 							Type:      "command",
-							Command:   "bash " + filepath.ToSlash(scriptPath),
+							Command:   hookResultCommand(t, `{"decision":"modify","modified_input":{"command":"rtk git status"},"message":"rewritten through rtk"}`),
 							TimeoutMS: 5000,
 						},
 					},
@@ -102,12 +128,12 @@ func TestHookRuntime_BlockStopsLaterHooks(t *testing.T) {
 					Hooks: []hook.CommandConfig{
 						{
 							Type:      "command",
-							Command:   `printf '{"decision":"block","message":"blocked by policy"}'`,
+							Command:   hookResultCommand(t, `{"decision":"block","message":"blocked by policy"}`),
 							TimeoutMS: 5000,
 						},
 						{
 							Type:      "command",
-							Command:   "touch " + filepath.ToSlash(markerPath),
+							Command:   hookMarkerCommand(t, markerPath),
 							TimeoutMS: 5000,
 						},
 					},

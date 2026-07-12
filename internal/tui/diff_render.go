@@ -1,12 +1,17 @@
 package tui
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+
+	"github.com/charmbracelet/lipgloss"
+)
 
 const sideBySideDiffMinWidth = 60
 
-// renderInlineDiff detects diff content within output and renders it with colors.
-// Defaults to a side-by-side diff when there is enough room, and falls back to
-// a unified inline diff on narrow terminals.
+// renderInlineDiff detects unified diff content. Wider terminals use a compact
+// review layout with line-number gutters and old/new columns; narrow terminals
+// retain the unified representation.
 func renderInlineDiff(output string, t Theme, width int) string {
 	if !containsDiffMarkers(output) {
 		return ""
@@ -27,58 +32,40 @@ func renderUnifiedInlineDiff(output string, t Theme, contentWidth int) string {
 	addedCount := 0
 	deletedCount := 0
 
-	for _, line := range lines {
-		trimmed := strings.TrimRight(line, "\r")
-
-		// Detect diff header
-		if strings.HasPrefix(trimmed, "--- ") || strings.HasPrefix(trimmed, "+++ ") {
-			if !inDiff {
-				inDiff = true
-				b.WriteString(t.Dim.Render("│") + "\n")
-			}
-			b.WriteString(t.DiffHdr.Render(truncateLine(trimmed, contentWidth)) + "\n")
+	for _, rawLine := range lines {
+		line := strings.TrimRight(rawLine, "\r")
+		switch {
+		case strings.HasPrefix(line, "--- ") || strings.HasPrefix(line, "+++ "):
+			inDiff = true
+			b.WriteString(t.DiffHdr.Bold(true).Render(truncateLine(line, contentWidth)) + "\n")
+		case strings.HasPrefix(line, "@@"):
+			inDiff = true
+			b.WriteString(t.DiffHdr.Render(truncateLine(line, contentWidth)) + "\n")
+		case !inDiff:
 			continue
-		}
-		if strings.HasPrefix(trimmed, "@@") {
-			if !inDiff {
-				inDiff = true
-			}
-			b.WriteString(t.Dim.Render("│") + "\n")
-			b.WriteString(t.DiffHdr.Render(truncateLine(trimmed, contentWidth)) + "\n")
-			continue
-		}
-		if !inDiff {
-			continue
-		}
-
-		if strings.HasPrefix(trimmed, "+") && !strings.HasPrefix(trimmed, "+++") {
+		case strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++"):
 			addedCount++
-			b.WriteString(t.DiffAdd.Bold(true).Render(truncateLine(trimmed, contentWidth)) + "\n")
-		} else if strings.HasPrefix(trimmed, "-") && !strings.HasPrefix(trimmed, "---") {
+			b.WriteString(renderUnifiedDiffLine(line, diffLineAdd, t, contentWidth) + "\n")
+		case strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---"):
 			deletedCount++
-			b.WriteString(t.DiffDel.Bold(true).Render(truncateLine(trimmed, contentWidth)) + "\n")
-		} else if strings.HasPrefix(trimmed, " ") || trimmed == "" {
-			b.WriteString(t.Dim.Render(truncateLine(trimmed, contentWidth)) + "\n")
-		} else {
-			// context line without prefix
-			b.WriteString(t.Dim.Render(truncateLine(trimmed, contentWidth)) + "\n")
+			b.WriteString(renderUnifiedDiffLine(line, diffLineDel, t, contentWidth) + "\n")
+		default:
+			b.WriteString(t.DiffCtx.Render(truncateLine(line, contentWidth)) + "\n")
 		}
 	}
-
-	if inDiff {
-		b.WriteString(renderDiffSummary(addedCount, deletedCount, t))
-		return b.String()
+	if !inDiff {
+		return ""
 	}
-	return ""
+	b.WriteString(renderDiffSummary(addedCount, deletedCount, t))
+	return b.String()
 }
 
 type sideDiffRow struct {
-	left      string
-	right     string
-	leftKind  diffLineKind
-	rightKind diffLineKind
-	full      string
-	fullKind  diffLineKind
+	left, right         string
+	leftKind, rightKind diffLineKind
+	leftLine, rightLine int
+	full                string
+	fullKind            diffLineKind
 }
 
 type diffLineKind int
@@ -93,99 +80,174 @@ const (
 
 func renderSideBySideDiff(output string, t Theme, contentWidth int) string {
 	lines := strings.Split(output, "\n")
-	var rows []sideDiffRow
+	rows := make([]sideDiffRow, 0, len(lines))
 	inDiff := false
-	oldFile := "OLD"
-	newFile := "NEW"
-	addedCount := 0
-	deletedCount := 0
+	oldFile, newFile := "OLD", "NEW"
+	oldLine, newLine := 0, 0
+	addedCount, deletedCount := 0, 0
 
-	for _, line := range lines {
-		line = strings.TrimRight(line, "\r")
+	for _, rawLine := range lines {
+		line := strings.TrimRight(rawLine, "\r")
 		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(line, "--- ") {
+		switch {
+		case strings.HasPrefix(line, "--- "):
 			inDiff = true
 			oldFile = strings.TrimSpace(strings.TrimPrefix(line, "--- "))
-			continue
-		}
-		if strings.HasPrefix(line, "+++ ") {
+		case strings.HasPrefix(line, "+++ "):
 			inDiff = true
 			newFile = strings.TrimSpace(strings.TrimPrefix(line, "+++ "))
-			rows = append(rows, sideDiffRow{left: "--- " + oldFile, right: "+++ " + newFile, leftKind: diffLineHeader, rightKind: diffLineHeader})
-			continue
-		}
-		if strings.HasPrefix(line, "@@") {
+			rows = append(rows, sideDiffRow{
+				left: "--- " + oldFile, right: "+++ " + newFile,
+				leftKind: diffLineHeader, rightKind: diffLineHeader,
+			})
+		case strings.HasPrefix(line, "@@"):
 			inDiff = true
+			oldLine, newLine = parseDiffHunkLines(line)
 			rows = append(rows, sideDiffRow{full: line, fullKind: diffLineHeader})
-			continue
-		}
-		if !inDiff {
+		case !inDiff:
 			if trimmed != "" && !strings.HasPrefix(trimmed, "<") {
 				rows = append(rows, sideDiffRow{full: trimmed, fullKind: diffLineMeta})
 			}
-			continue
-		}
-		if strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---") {
+		case strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---"):
 			deletedCount++
-			rows = append(rows, sideDiffRow{left: line, leftKind: diffLineDel})
-			continue
-		}
-		if strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++") {
+			rows = append(rows, sideDiffRow{left: line, leftKind: diffLineDel, leftLine: oldLine})
+			oldLine++
+		case strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++"):
 			addedCount++
 			if len(rows) > 0 && rows[len(rows)-1].leftKind == diffLineDel && rows[len(rows)-1].right == "" && rows[len(rows)-1].full == "" {
 				rows[len(rows)-1].right = line
 				rows[len(rows)-1].rightKind = diffLineAdd
+				rows[len(rows)-1].rightLine = newLine
 			} else {
-				rows = append(rows, sideDiffRow{right: line, rightKind: diffLineAdd})
+				rows = append(rows, sideDiffRow{right: line, rightKind: diffLineAdd, rightLine: newLine})
 			}
-			continue
-		}
-		if strings.HasPrefix(line, " ") {
-			rows = append(rows, sideDiffRow{left: line, right: line, leftKind: diffLineContext, rightKind: diffLineContext})
-			continue
-		}
-		if trimmed != "" {
-			rows = append(rows, sideDiffRow{left: line, right: line, leftKind: diffLineContext, rightKind: diffLineContext})
+			newLine++
+		case strings.HasPrefix(line, " "):
+			rows = append(rows, sideDiffRow{
+				left: line, right: line,
+				leftKind: diffLineContext, rightKind: diffLineContext,
+				leftLine: oldLine, rightLine: newLine,
+			})
+			oldLine++
+			newLine++
+		case trimmed != "":
+			rows = append(rows, sideDiffRow{
+				left: line, right: line,
+				leftKind: diffLineContext, rightKind: diffLineContext,
+				leftLine: oldLine, rightLine: newLine,
+			})
+			oldLine++
+			newLine++
 		}
 	}
-
 	if len(rows) == 0 {
 		return ""
 	}
 
-	sep := " │ "
-	colWidth := max(10, (contentWidth-len(sep))/2)
+	separator := " │ "
+	columnWidth := max(20, (contentWidth-lipgloss.Width(separator))/2)
 	var b strings.Builder
 	for _, row := range rows {
 		if row.full != "" {
-			b.WriteString(renderDiffLine(row.full, row.fullKind, t, contentWidth))
+			b.WriteString(renderDiffFullRow(row.full, row.fullKind, t, contentWidth))
 			b.WriteString("\n")
 			continue
 		}
-		left := padRight(truncateLine(row.left, colWidth), colWidth)
-		right := padRight(truncateLine(row.right, colWidth), colWidth)
-		b.WriteString(renderDiffLine(left, row.leftKind, t, colWidth))
-		b.WriteString(t.Dim.Render(sep))
-		b.WriteString(renderDiffLine(right, row.rightKind, t, colWidth))
+		b.WriteString(renderDiffCell(row.left, row.leftLine, row.leftKind, t, columnWidth))
+		b.WriteString(t.Dim.Render(separator))
+		b.WriteString(renderDiffCell(row.right, row.rightLine, row.rightKind, t, columnWidth))
 		b.WriteString("\n")
 	}
 	b.WriteString(renderDiffSummary(addedCount, deletedCount, t))
 	return b.String()
 }
 
-func renderDiffLine(line string, kind diffLineKind, t Theme, width int) string {
+func parseDiffHunkLines(header string) (int, int) {
+	fields := strings.Fields(header)
+	if len(fields) < 3 {
+		return 0, 0
+	}
+	return parseDiffRange(fields[1]), parseDiffRange(fields[2])
+}
+
+func parseDiffRange(value string) int {
+	value = strings.TrimLeft(value, "+-")
+	if comma := strings.IndexByte(value, ','); comma >= 0 {
+		value = value[:comma]
+	}
+	line, err := strconv.Atoi(value)
+	if err != nil {
+		return 0
+	}
+	return line
+}
+
+func renderUnifiedDiffLine(line string, kind diffLineKind, t Theme, width int) string {
 	line = truncateLine(line, width)
 	switch kind {
 	case diffLineAdd:
-		return t.DiffAdd.Bold(true).Render(line)
+		return t.DiffAdd.Background(diffBackground(t, kind)).Bold(true).Width(width).Render(line)
 	case diffLineDel:
-		return t.DiffDel.Bold(true).Render(line)
-	case diffLineHeader:
-		return t.DiffHdr.Render(line)
-	case diffLineMeta:
-		return t.ToolResult.Render(line)
+		return t.DiffDel.Background(diffBackground(t, kind)).Bold(true).Width(width).Render(line)
 	default:
-		return t.Dim.Render(line)
+		return t.DiffCtx.Render(line)
+	}
+}
+
+func renderDiffCell(line string, lineNumber int, kind diffLineKind, t Theme, width int) string {
+	gutter := strings.Repeat(" ", 4)
+	if lineNumber > 0 {
+		gutter = padLeft(strconv.Itoa(lineNumber), 4)
+	}
+	content := truncateLine(" "+line, max(1, width-lipgloss.Width(gutter)))
+	cell := gutter + content
+
+	style := t.DiffCtx
+	switch kind {
+	case diffLineAdd:
+		style = t.DiffAdd.Bold(true)
+	case diffLineDel:
+		style = t.DiffDel.Bold(true)
+	case diffLineHeader:
+		style = t.DiffHdr.Bold(true)
+	}
+	return style.Background(diffBackground(t, kind)).Width(width).Render(cell)
+}
+
+func renderDiffFullRow(line string, kind diffLineKind, t Theme, width int) string {
+	line = truncateLine(line, width)
+	switch kind {
+	case diffLineHeader:
+		return t.DiffHdr.Background(diffBackground(t, kind)).Bold(true).Width(width).Render(line)
+	case diffLineMeta:
+		return t.ToolResult.Width(width).Render(line)
+	default:
+		return t.DiffCtx.Width(width).Render(line)
+	}
+}
+
+func diffBackground(t Theme, kind diffLineKind) lipgloss.Color {
+	if t.Name == "light" {
+		switch kind {
+		case diffLineAdd:
+			return lipgloss.Color("#dff5e5")
+		case diffLineDel:
+			return lipgloss.Color("#fbe1e5")
+		case diffLineHeader:
+			return lipgloss.Color("#e7edf7")
+		default:
+			return lipgloss.Color("#f3f3f3")
+		}
+	}
+	switch kind {
+	case diffLineAdd:
+		return lipgloss.Color("#123b2a")
+	case diffLineDel:
+		return lipgloss.Color("#482128")
+	case diffLineHeader:
+		return lipgloss.Color("#202c42")
+	default:
+		return lipgloss.Color("#1a1a1a")
 	}
 }
 
@@ -195,12 +257,12 @@ func renderDiffSummary(addedCount, deletedCount int, t Theme) string {
 	}
 	parts := []string{}
 	if addedCount > 0 {
-		parts = append(parts, t.DiffAdd.Render("+"+itoa(addedCount)))
+		parts = append(parts, t.DiffAdd.Bold(true).Render("+"+strconv.Itoa(addedCount)))
 	}
 	if deletedCount > 0 {
-		parts = append(parts, t.DiffDel.Render("-"+itoa(deletedCount)))
+		parts = append(parts, t.DiffDel.Bold(true).Render("-"+strconv.Itoa(deletedCount)))
 	}
-	return t.Dim.Render(" ── ") + strings.Join(parts, " ") + "\n"
+	return t.Dim.Render(" changes ") + strings.Join(parts, "  ") + "\n"
 }
 
 // containsDiffMarkers checks if output contains unified diff markers.
@@ -233,32 +295,29 @@ func truncateLine(line string, width int) string {
 	if width <= 1 {
 		return "…"
 	}
-	if len(line) <= width {
+	if lipgloss.Width(line) <= width {
 		return line
 	}
-	return line[:width-1] + "…"
+	var b strings.Builder
+	for _, r := range line {
+		if lipgloss.Width(b.String()+string(r)) >= width {
+			break
+		}
+		b.WriteRune(r)
+	}
+	return b.String() + "…"
+}
+
+func padLeft(line string, width int) string {
+	if lipgloss.Width(line) >= width {
+		return line
+	}
+	return strings.Repeat(" ", width-lipgloss.Width(line)) + line
 }
 
 func padRight(line string, width int) string {
-	if len(line) >= width {
+	if lipgloss.Width(line) >= width {
 		return line
 	}
-	return line + strings.Repeat(" ", width-len(line))
-}
-
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	sign := ""
-	if n < 0 {
-		sign = "-"
-		n = -n
-	}
-	digits := make([]byte, 0, 10)
-	for n > 0 {
-		digits = append([]byte{byte('0' + n%10)}, digits...)
-		n /= 10
-	}
-	return sign + string(digits)
+	return line + strings.Repeat(" ", width-lipgloss.Width(line))
 }

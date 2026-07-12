@@ -45,8 +45,8 @@ func TestTUIModelShowsToolStatus(t *testing.T) {
 	updated, _ := model.Update(tui.ToolStartMsg{Name: "Bash", Input: `{"command":"ls"}`})
 	model = updated.(tui.Model)
 	view := model.View()
-	if !strings.Contains(view, "Bash") || !strings.Contains(view, "ls") || !strings.Contains(view, "Running Bash") {
-		t.Fatalf("expected tool start in view: %s", view)
+	if !strings.Contains(view, "Bash") || !strings.Contains(view, "ls") || !strings.Contains(view, "正在运行 1 个 Shell") {
+		t.Fatalf("expected shell start status in view: %s", view)
 	}
 	if strings.Contains(view, "Tools") {
 		t.Fatalf("expected no bottom tools panel in view: %s", view)
@@ -504,6 +504,59 @@ func TestTUIModelAskUserDialogResponds(t *testing.T) {
 	}
 	if strings.Contains(model.View(), "Choose mode?") {
 		t.Fatalf("expected AskUser dialog cleared: %s", model.View())
+	}
+}
+
+func TestTUIModelAskUserCustomAnswer(t *testing.T) {
+	model := newTUI(t)
+	responseCh := make(chan map[string]string, 1)
+	question := "Choose mode?"
+	updated, _ := model.Update(tui.AskUserRequestMsg{
+		Questions: []tui.AskUserQuestion{{
+			Question: question,
+			Options:  []tui.AskUserOption{{Label: "Fast"}, {Label: "Safe"}},
+		}},
+		ResponseCh: responseCh,
+	})
+	model = updated.(tui.Model)
+	if !strings.Contains(model.View(), "Custom answer") || !strings.Contains(model.View(), "Type a custom answer") {
+		t.Fatalf("expected visible custom answer input: %s", model.View())
+	}
+
+	for range 2 {
+		updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+		model = updated.(tui.Model)
+	}
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(tui.Model)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("Custom mode")})
+	model = updated.(tui.Model)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(tui.Model)
+
+	select {
+	case answers := <-responseCh:
+		if answers[question] != "Custom mode" {
+			t.Fatalf("custom answer = %q, want %q", answers[question], "Custom mode")
+		}
+	default:
+		t.Fatal("expected custom AskUser answer on channel")
+	}
+}
+
+func TestTUIModelShowsActiveShellCount(t *testing.T) {
+	model := newTUI(t)
+	for range 2 {
+		updated, _ := model.Update(tui.ToolStartMsg{Name: "Bash", Input: `{"command":"sleep"}`})
+		model = updated.(tui.Model)
+	}
+	if !strings.Contains(model.View(), "正在运行 2 个 Shell") {
+		t.Fatalf("expected two active shells: %s", model.View())
+	}
+	updated, _ := model.Update(tui.ToolDoneMsg{Name: "Bash", Output: "done"})
+	model = updated.(tui.Model)
+	if !strings.Contains(model.View(), "正在运行 1 个 Shell") {
+		t.Fatalf("expected one active shell after completion: %s", model.View())
 	}
 }
 

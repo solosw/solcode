@@ -10,6 +10,7 @@ import (
 	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -107,12 +108,14 @@ type pendingConfirm struct {
 }
 
 type pendingAskUser struct {
-	questions  []AskUserQuestion
-	index      int
-	selected   int
-	checked    map[int]map[int]bool
-	answers    map[string]string
-	responseCh chan<- map[string]string
+	questions     []AskUserQuestion
+	index         int
+	selected      int
+	checked       map[int]map[int]bool
+	answers       map[string]string
+	responseCh    chan<- map[string]string
+	customInput   textinput.Model
+	editingCustom bool
 }
 
 type DialogKind int
@@ -228,6 +231,7 @@ type Model struct {
 	lastTick       time.Time
 	loadingStart   time.Time
 	activeToolName string
+	activeShells   int
 	cancelCurrent  func()
 
 	// Input history
@@ -438,7 +442,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleConfirmKey(msg.String())
 		}
 		if m.pendingAsk != nil {
-			return m.handleAskUserKey(msg.String())
+			return m.handleAskUserKey(msg)
 		}
 		if m.dialog != nil && m.dialog.Active != DialogNone {
 			return m.handleDialogKey(msg.String())
@@ -621,7 +625,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ToolStartMsg:
 		m.startToolActivity(msg)
 		m.activeToolName = msg.Name
-		m.status = "Running " + msg.Name
+		if isShellTool(msg.Name) {
+			m.activeShells++
+			m.status = runningShellsStatus(m.activeShells)
+		} else {
+			m.status = "Running " + msg.Name
+		}
 		if m.loadingStart.IsZero() {
 			m.loadingStart = time.Now()
 		}
@@ -630,10 +639,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case ToolDoneMsg:
 		m.finishToolActivity(msg)
+		if isShellTool(msg.Name) && m.activeShells > 0 {
+			m.activeShells--
+		}
 		if m.activeToolName == msg.Name {
 			m.activeToolName = ""
 		}
-		m.status = "Ready"
+		if m.activeShells > 0 {
+			m.status = runningShellsStatus(m.activeShells)
+		} else {
+			m.status = "Ready"
+		}
 		m.resize()
 		m.refreshViewport()
 		return m, nil
@@ -648,11 +664,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshViewport()
 		return m, nil
 	case AskUserRequestMsg:
+		customInput := textinput.New()
+		customInput.Placeholder = "Type a custom answer"
+		customInput.CharLimit = 1000
+		customInput.Width = max(20, m.width-12)
 		m.pendingAsk = &pendingAskUser{
-			questions:  append([]AskUserQuestion(nil), msg.Questions...),
-			checked:    map[int]map[int]bool{},
-			answers:    map[string]string{},
-			responseCh: msg.ResponseCh,
+			questions:   append([]AskUserQuestion(nil), msg.Questions...),
+			checked:     map[int]map[int]bool{},
+			answers:     map[string]string{},
+			responseCh:  msg.ResponseCh,
+			customInput: customInput,
 		}
 		m.status = "Input required"
 		m.resize()
@@ -1027,7 +1048,7 @@ func (m *Model) updateAutocomplete() tea.Cmd {
 		return nil
 	}
 	prefix := strings.TrimPrefix(value, "/")
-	commands := []string{"help", "clear", "model", "provider", "effort", "sessions", "compact", "new-session", "skills", "mcp"}
+	commands := []string{"help", "clear", "model", "provider", "effort", "sessions", "compact", "fix-session", "new-session", "skills", "mcp"}
 	if m.skillNamesFn != nil {
 		commands = append(commands, m.skillNamesFn()...)
 	}
@@ -1055,8 +1076,21 @@ func (m *Model) finishStream(status string) {
 	m.status = status
 	m.thinking = ""
 	m.activeToolName = ""
+	m.activeShells = 0
 	m.cancelCurrent = nil
 	m.stopSpinner()
+}
+
+func isShellTool(name string) bool {
+	name = strings.ToLower(strings.TrimSpace(name))
+	return name == "bash" || name == "shell" || strings.HasSuffix(name, ".bash")
+}
+
+func runningShellsStatus(count int) string {
+	if count <= 0 {
+		return "Ready"
+	}
+	return fmt.Sprintf("正在运行 %d 个 Shell", count)
 }
 
 func (m Model) handlePermissionKey(key string) (tea.Model, tea.Cmd) {
@@ -1132,30 +1166,62 @@ func (m *Model) ShowConfirm(question string, resolve func(bool) SelectResult) {
 	m.refreshViewport()
 }
 
-func (m Model) handleAskUserKey(key string) (tea.Model, tea.Cmd) {
+func (m Model) handleAskUserKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	task := m.pendingAsk
 	if task == nil || len(task.questions) == 0 {
 		return m, nil
 	}
 	q := task.questions[task.index]
-	switch strings.ToLower(key) {
+	key := strings.ToLower(msg.String())
+	customIndex := len(q.Options)
+
+	if task.editingCustom {
+		switch key {
+		case "esc":
+			task.editingCustom = false
+			task.customInput.Blur()
+		case "ctrl+c":
+			m.resolveAskUser(nil)
+			m.status = "Ready"
+		case "enter":
+			if strings.TrimSpace(task.customInput.Value()) != "" {
+				m.acceptAskUserAnswer()
+			}
+		default:
+			var cmd tea.Cmd
+			task.customInput, cmd = task.customInput.Update(msg)
+			m.resize()
+			m.refreshViewport()
+			return m, cmd
+		}
+		m.resize()
+		m.refreshViewport()
+		return m, nil
+	}
+
+	switch key {
 	case "up", "k":
 		if task.selected > 0 {
 			task.selected--
 		}
 	case "down", "j":
-		if task.selected < len(q.Options)-1 {
+		if task.selected < customIndex {
 			task.selected++
 		}
 	case " ", "spacebar":
-		if q.MultiSelect && len(q.Options) > 0 {
+		if q.MultiSelect && task.selected < customIndex {
 			if task.checked[task.index] == nil {
 				task.checked[task.index] = map[int]bool{}
 			}
 			task.checked[task.index][task.selected] = !task.checked[task.index][task.selected]
 		}
 	case "enter":
-		m.acceptAskUserAnswer()
+		if task.selected == customIndex {
+			task.editingCustom = true
+			task.customInput.Focus()
+		} else {
+			m.acceptAskUserAnswer()
+		}
 	case "esc", "ctrl+c":
 		m.resolveAskUser(nil)
 		m.status = "Ready"
@@ -1172,7 +1238,9 @@ func (m *Model) acceptAskUserAnswer() {
 	}
 	q := task.questions[task.index]
 	answer := ""
-	if q.MultiSelect {
+	if task.selected == len(q.Options) {
+		answer = strings.TrimSpace(task.customInput.Value())
+	} else if q.MultiSelect {
 		labels := []string{}
 		for i, opt := range q.Options {
 			if task.checked[task.index] != nil && task.checked[task.index][i] {
@@ -1196,6 +1264,9 @@ func (m *Model) acceptAskUserAnswer() {
 	}
 	task.index++
 	task.selected = 0
+	task.editingCustom = false
+	task.customInput.Reset()
+	task.customInput.Blur()
 	m.status = "Input required"
 }
 
@@ -1741,9 +1812,17 @@ func (m Model) renderAskUserDialog() string {
 			lines = append(lines, "    "+t.Dim.Render(truncate(oneLine(opt.Preview), max(20, m.width-8))))
 		}
 	}
-	hint := "[↑/↓] Navigate  [Enter] Select  [Esc] Cancel"
+	customMarker := "  "
+	if ask.selected == len(q.Options) {
+		customMarker = t.ClaudeStyle.Render("❯ ")
+	}
+	lines = append(lines, customMarker+"Custom answer", "    "+ask.customInput.View())
+	hint := "[↑/↓] Navigate  [Enter] Select or enter custom answer  [Esc] Cancel"
 	if q.MultiSelect {
-		hint = "[↑/↓] Navigate  [Space] Toggle  [Enter] Submit  [Esc] Cancel"
+		hint = "[↑/↓] Navigate  [Space] Toggle  [Enter] Submit or enter custom answer  [Esc] Cancel"
+	}
+	if ask.editingCustom {
+		hint = "[Enter] Submit custom answer  [Esc] Back to choices  [Ctrl+C] Cancel"
 	}
 	lines = append(lines, "", t.PermHint.Render(hint))
 	body := strings.Join(lines, "\n")
@@ -1831,6 +1910,9 @@ func (m *Model) resize() {
 	m.viewport.Height = layout.viewportHeight
 	m.input.SetWidth(layout.inputWidth)
 	m.input.SetHeight(layout.inputHeight)
+	if m.pendingAsk != nil {
+		m.pendingAsk.customInput.Width = max(20, m.width-12)
+	}
 }
 
 func (m Model) layout() tuiLayout {

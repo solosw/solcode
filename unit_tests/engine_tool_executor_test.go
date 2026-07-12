@@ -3,8 +3,6 @@ package unit_tests
 import (
 	"context"
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/solosw/solcode/internal/engine"
@@ -46,14 +44,6 @@ func (b *blockingTool) Invoke(ctx context.Context, uctx *tool.UseContext, input 
 
 func TestToolExecutor_AppliesPreToolUseModifiedInput(t *testing.T) {
 	tmpDir := t.TempDir()
-	scriptPath := filepath.Join(tmpDir, "rewrite.sh")
-	script := `#!/usr/bin/env bash
-printf '{"decision":"modify","modified_input":{"value":"rewritten"}}'
-`
-	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
-		t.Fatalf("write hook script: %v", err)
-	}
-
 	recorder := &recordingTool{}
 	registry := tool.NewRegistry()
 	registry.Register(recorder)
@@ -66,7 +56,7 @@ printf '{"decision":"modify","modified_input":{"value":"rewritten"}}'
 					Hooks: []hook.CommandConfig{
 						{
 							Type:      "command",
-							Command:   "bash " + filepath.ToSlash(scriptPath),
+							Command:   hookResultCommand(t, `{"decision":"modify","modified_input":{"value":"rewritten"}}`),
 							TimeoutMS: 5000,
 						},
 					},
@@ -96,14 +86,6 @@ printf '{"decision":"modify","modified_input":{"value":"rewritten"}}'
 
 func TestToolExecutor_AppliesPostToolUseModifiedResult(t *testing.T) {
 	tmpDir := t.TempDir()
-	scriptPath := filepath.Join(tmpDir, "annotate.sh")
-	script := `#!/usr/bin/env bash
-printf '{"decision":"modify","modified_result":{"type":"text","text":"annotated result"}}'
-`
-	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
-		t.Fatalf("write hook script: %v", err)
-	}
-
 	registry := tool.NewRegistry()
 	registry.Register(&recordingTool{})
 
@@ -115,7 +97,7 @@ printf '{"decision":"modify","modified_result":{"type":"text","text":"annotated 
 					Hooks: []hook.CommandConfig{
 						{
 							Type:      "command",
-							Command:   "bash " + filepath.ToSlash(scriptPath),
+							Command:   hookResultCommand(t, `{"decision":"modify","modified_result":{"type":"text","text":"annotated result"}}`),
 							TimeoutMS: 5000,
 						},
 					},

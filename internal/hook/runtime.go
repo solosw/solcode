@@ -144,7 +144,7 @@ func runCommandHook(ctx context.Context, config CommandConfig, event Event) (Res
 		return Result{}, err
 	}
 
-	cmd := exec.CommandContext(execCtx, shellBin(), "-c", config.Command)
+	cmd := exec.CommandContext(execCtx, shellBin(), shellCommandArg(), config.Command)
 	cmd.Stdin = strings.NewReader(string(payload))
 	if event.WorkDir != "" {
 		cmd.Dir = event.WorkDir
@@ -178,4 +178,11 @@ func shellBin() string {
 		return "cmd"
 	}
 	return "bash"
+}
+
+func shellCommandArg() string {
+	if runtime.GOOS == "windows" {
+		return "/c"
+	}
+	return "-c"
 }
