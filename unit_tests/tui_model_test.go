@@ -17,6 +17,41 @@ func newTUI(t *testing.T) tui.Model {
 	return updated.(tui.Model)
 }
 
+func TestTUIModelQueuesMessageWhileStreaming(t *testing.T) {
+	var queued []string
+	model := tui.NewWith(func(string) (tea.Cmd, func()) {
+		return func() tea.Msg { return nil }, nil
+	}, tui.Dark, "", "", true)
+	model.SetQueueFunc(func(prompt string) { queued = append(queued, prompt) })
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	model = updated.(tui.Model)
+
+	for _, text := range []string{"i", "n"} {
+		updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(text)})
+		model = updated.(tui.Model)
+	}
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(tui.Model)
+	if cmd == nil {
+		t.Fatal("expected initial prompt to start a stream")
+	}
+	for _, text := range []string{"f", "o", "l", "l", "o", "w", " ", "u", "p"} {
+		updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(text)})
+		model = updated.(tui.Model)
+	}
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(tui.Model)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(tui.Model)
+
+	if len(queued) != 1 || queued[0] != "follow up" {
+		t.Fatalf("queued prompts = %#v, want [follow up] (view: %s)", queued, model.View())
+	}
+	if !strings.Contains(model.View(), "follow up") {
+		t.Fatalf("expected queued message in view: %s", model.View())
+	}
+}
+
 func TestTUIModelStreamsAssistantText(t *testing.T) {
 	model := newTUI(t)
 	updated, _ := model.Update(tui.StreamTextMsg{Text: "hello"})

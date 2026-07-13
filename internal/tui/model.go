@@ -203,6 +203,7 @@ type Model struct {
 	viewport viewport.Model
 	input    textarea.Model
 	submit   SubmitFunc
+	queue    func(string)
 
 	messages        []ChatMessage
 	status          string
@@ -303,6 +304,12 @@ func NewWith(submit SubmitFunc, theme Theme, modelName, cwd string, showTimestam
 		showTimestamp: showTimestamp,
 		messages:      []ChatMessage{{Role: "welcome", Content: "Welcome to solcode", TimeStamp: time.Now()}},
 	}
+}
+
+// SetQueueFunc configures delivery of messages submitted while a run is active.
+// The callback must return quickly because it is called from the TUI update loop.
+func (m *Model) SetQueueFunc(queue func(string)) {
+	m.queue = queue
 }
 
 func (m *Model) SetSlashCommandHandler(handler SlashCommandHandler) {
@@ -515,7 +522,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m.handleHistoryDown()
 			}
 		case "enter":
-			if !msg.Alt && !msg.Paste && !m.streaming {
+			if !msg.Alt && !msg.Paste {
 				if m.suppressNextPasteEnter && time.Since(m.lastPasteAt) <= pasteEnterGuardWindow {
 					m.suppressNextPasteEnter = false
 					return m, nil
@@ -529,6 +536,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.pastedInputLines = 0
 				m.saveToHistory(prompt)
 				m.input.Reset()
+				if m.streaming {
+					m.messages = append(m.messages, ChatMessage{Role: "user", Content: prompt, DisplayContent: displayContent, TimeStamp: time.Now()})
+					m.status = "Message queued"
+					m.refreshViewport()
+					if m.queue != nil {
+						m.queue(prompt)
+					}
+					return m, nil
+				}
 				if handled, cmd := m.handleSlashCommand(prompt); handled {
 					return m, cmd
 				}

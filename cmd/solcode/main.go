@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
@@ -100,6 +101,26 @@ func runBatch(cfg config.Config, prompt string, timeout time.Duration, maxTurns 
 
 func runInteractive(cfg config.Config, configPath string, timeout time.Duration, maxTurns int) error {
 	var program *tea.Program
+	var queuedPrompts struct {
+		sync.Mutex
+		items []string
+	}
+	queuePrompt := func(prompt string) {
+		prompt = strings.TrimSpace(prompt)
+		if prompt == "" {
+			return
+		}
+		queuedPrompts.Lock()
+		queuedPrompts.items = append(queuedPrompts.items, prompt)
+		queuedPrompts.Unlock()
+	}
+	drainQueuedPrompts := func() []string {
+		queuedPrompts.Lock()
+		defer queuedPrompts.Unlock()
+		items := append([]string(nil), queuedPrompts.items...)
+		queuedPrompts.items = nil
+		return items
+	}
 	persistencePath := config.PersistencePath(configPath, cfg.WorkDir)
 
 	onTextDelta := func(text string) {
@@ -166,6 +187,7 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 		app.WithUsageCallback(onUsage),
 		app.WithStatusCallback(onStatus),
 		app.WithAskUserCallback(onAskUser),
+		app.WithQueuedPrompts(drainQueuedPrompts),
 	)
 	if err != nil {
 		return fmt.Errorf("create app: %w", err)
@@ -250,6 +272,7 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 
 	theme := tui.ThemeByName(cfg.TUI.Theme).WithBackground(cfg.TUI.Background)
 	model := tui.NewWith(submit, theme, cfg.Model, cfg.WorkDir, true)
+	model.SetQueueFunc(queuePrompt)
 	if application.Sessions != nil {
 		sessionName := cfg.Session.DefaultSession
 		if sessionName == "" {

@@ -48,6 +48,7 @@ type App struct {
 	onUsage         func(engine.Usage)
 	onStatus        func(string)
 	onAskUser       func(ctx context.Context, params tool.AskUserParams) (map[string]string, error)
+	queuedPrompts   func() []string
 }
 
 type Option func(*options)
@@ -61,6 +62,7 @@ type options struct {
 	onUsage         func(engine.Usage)
 	onStatus        func(string)
 	onAskUser       func(ctx context.Context, params tool.AskUserParams) (map[string]string, error)
+	queuedPrompts   func() []string
 }
 
 func buildToolState(cfg config.Config, mcpFactory mcp.ClientFactory) (*tool.Registry, *skill.Registry, *mcp.Registry, error) {
@@ -123,6 +125,14 @@ func WithAskUserCallback(onAskUser func(ctx context.Context, params tool.AskUser
 	}
 }
 
+// WithQueuedPrompts supplies messages submitted while the main agent is working.
+// The callback is consumed after the active batch of tool calls completes.
+func WithQueuedPrompts(queuedPrompts func() []string) Option {
+	return func(o *options) {
+		o.queuedPrompts = queuedPrompts
+	}
+}
+
 func New(cfg config.Config, opts ...Option) (*App, error) {
 	var options options
 	for _, opt := range opts {
@@ -143,7 +153,7 @@ func New(cfg config.Config, opts ...Option) (*App, error) {
 		BaseURL: cfg.BaseURL,
 	})
 
-	eng := engine.NewEngine(engineConfig(cfg, client, runtime, registry, permissions, options.onTextDelta, options.onThinkingDelta, options.onToolStart, options.onToolDone, options.onUsage, options.onAskUser))
+	eng := engine.NewEngine(engineConfig(cfg, client, runtime, registry, permissions, options.onTextDelta, options.onThinkingDelta, options.onToolStart, options.onToolDone, options.onUsage, options.onAskUser, options.queuedPrompts))
 	coordinator := agent.NewCoordinator(eng)
 	registry.Register(tool.NewTaskTool(coordinator))
 
@@ -190,6 +200,7 @@ func New(cfg config.Config, opts ...Option) (*App, error) {
 		onUsage:         options.onUsage,
 		onStatus:        options.onStatus,
 		onAskUser:       options.onAskUser,
+		queuedPrompts:   options.queuedPrompts,
 	}, nil
 }
 
@@ -224,7 +235,7 @@ func (a *App) SwitchModel(cfg config.Config) error {
 			PromotionConfidence:      cfg.Memory.PromotionConfidence,
 		}}).WithRetrievalBudget(cfg.Memory.RetrievalM2Limit, cfg.Memory.RetrievalM3Limit, cfg.Memory.RetrievalM4Limit, cfg.Memory.RetrievalM5Limit)
 	}
-	a.Engine.UpdateConfig(engineConfig(cfg, client, a.Hooks, a.Tools, a.Permissions, a.onTextDelta, a.onThinkingDelta, a.onToolStart, a.onToolDone, a.onUsage, a.onAskUser))
+	a.Engine.UpdateConfig(engineConfig(cfg, client, a.Hooks, a.Tools, a.Permissions, a.onTextDelta, a.onThinkingDelta, a.onToolStart, a.onToolDone, a.onUsage, a.onAskUser, a.queuedPrompts))
 	return nil
 }
 
@@ -266,7 +277,7 @@ func (a *App) ReloadFeatures(cfg config.Config, mcpFactory mcp.ClientFactory) er
 	} else {
 		a.MemoryManager = nil
 	}
-	a.Engine.UpdateConfig(engineConfig(cfg, a.Client, a.Hooks, a.Tools, a.Permissions, a.onTextDelta, a.onThinkingDelta, a.onToolStart, a.onToolDone, a.onUsage, a.onAskUser))
+	a.Engine.UpdateConfig(engineConfig(cfg, a.Client, a.Hooks, a.Tools, a.Permissions, a.onTextDelta, a.onThinkingDelta, a.onToolStart, a.onToolDone, a.onUsage, a.onAskUser, a.queuedPrompts))
 	return nil
 }
 
@@ -1999,7 +2010,7 @@ func memoryModelName(cfg config.Config) string {
 	return cfg.Model
 }
 
-func engineConfig(cfg config.Config, client *cpanthropic.Client, runtime *hook.Runtime, registry *tool.Registry, permissions *permission.Service, onTextDelta, onThinkingDelta func(string), onToolStart func(name string, input json.RawMessage), onToolDone func(name string, output string, isError bool), onUsage func(engine.Usage), onAskUser func(ctx context.Context, params tool.AskUserParams) (map[string]string, error)) engine.Config {
+func engineConfig(cfg config.Config, client *cpanthropic.Client, runtime *hook.Runtime, registry *tool.Registry, permissions *permission.Service, onTextDelta, onThinkingDelta func(string), onToolStart func(name string, input json.RawMessage), onToolDone func(name string, output string, isError bool), onUsage func(engine.Usage), onAskUser func(ctx context.Context, params tool.AskUserParams) (map[string]string, error), queuedPrompts func() []string) engine.Config {
 	skillRegistry := loadSkills(cfg)
 	return engine.Config{
 		Client:           client,
@@ -2024,6 +2035,7 @@ func engineConfig(cfg config.Config, client *cpanthropic.Client, runtime *hook.R
 		OnToolDone:       onToolDone,
 		OnUsage:          onUsage,
 		OnAskUser:        onAskUser,
+		QueuedPrompts:    queuedPrompts,
 	}
 }
 

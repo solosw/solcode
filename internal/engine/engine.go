@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
 	"github.com/solosw/solcode/internal/agent"
@@ -60,6 +61,7 @@ type Config struct {
 	OnToolDone       func(name string, output string, isError bool)
 	OnUsage          func(Usage)
 	OnAskUser        func(ctx context.Context, params tool.AskUserParams) (map[string]string, error)
+	QueuedPrompts    func() []string
 }
 
 type Engine struct {
@@ -269,6 +271,14 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 			results = append(results, cpanthropic.ToolResult{ToolUseID: use.ID, Text: text, IsError: isError})
 		}
 		messages = append(messages, sdk.NewUserMessage(cpanthropic.ToolResultBlocks(results)...))
+		if isMain && e.config.QueuedPrompts != nil {
+			for _, prompt := range e.config.QueuedPrompts() {
+				prompt = strings.TrimSpace(prompt)
+				if prompt != "" {
+					messages = append(messages, sdk.NewUserMessage(sdk.NewTextBlock(prompt)))
+				}
+			}
+		}
 	}
 
 	e.runStopHook(ctx, cfg)
