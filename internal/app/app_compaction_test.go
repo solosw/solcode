@@ -74,26 +74,19 @@ func TestMemorySummaryTriggerRunsOncePerCycle(t *testing.T) {
 	}
 }
 
-func TestMemoryMaintenanceCycleResetsAfterDroppingBelowSummaryThreshold(t *testing.T) {
+func TestMemorySummaryMaintenanceIsNotPartOfCompaction(t *testing.T) {
 	cfg := config.Default()
-	cfg.MaxContextTokens = 0
-	cfg.Memory.SummaryThresholdTokens = 100000
+	cfg.MaxContextTokens = 100
+	cfg.Memory.SummaryTriggerPercent = 1
 	application := &App{Config: cfg}
 	current := session.NewSession("named", t.TempDir(), cfg.Model)
-	current.Append(sdk.NewUserMessage(sdk.NewTextBlock(strings.Repeat("memory ", 5000))))
-	current.Metadata.MemorySummaryCompleted = true
-	current.Metadata.MemoryCompactionCompleted = true
+	current.Append(sdk.NewUserMessage(sdk.NewTextBlock(strings.Repeat("memory ", 100))))
 
-	application.resetMemoryMaintenanceCycleIfBelowThreshold(context.Background(), current)
-	if !current.Metadata.MemorySummaryCompleted || !current.Metadata.MemoryCompactionCompleted {
-		t.Fatal("expected cycle flags to remain set while session is still above threshold")
+	if !application.shouldRefreshMemorySummary(context.Background(), current) {
+		t.Fatal("expected legacy summary threshold helper to identify a large history")
 	}
-
-	current.Summary = ""
-	current.ReplaceMessages(nil)
-	application.resetMemoryMaintenanceCycleIfBelowThreshold(context.Background(), current)
-	if current.Metadata.MemorySummaryCompleted || current.Metadata.MemoryCompactionCompleted {
-		t.Fatalf("expected cycle flags to reset after compaction drops below summary threshold, summary=%t compaction=%t", current.Metadata.MemorySummaryCompleted, current.Metadata.MemoryCompactionCompleted)
+	if current.Metadata.MemorySummaryCompleted {
+		t.Fatal("ordinary compaction must not mark memory-summary maintenance complete")
 	}
 }
 
@@ -131,6 +124,57 @@ func TestMemoryRetrievalBudgetCapsAtTenPercent(t *testing.T) {
 	application.Config = cfg
 	if got := application.memoryRetrievalTokenBudget(); got != 50_000 {
 		t.Fatalf("expected 50k retrieval budget cap for 1M context, got %d", got)
+	}
+}
+
+func TestCompactSessionPersistsOnlyConciseSummary(t *testing.T) {
+	cfg := config.Default()
+	cfg.MaxContextTokens = 100
+	cfg.Memory.CompactionTriggerPercent = 1
+	cfg.Memory.CompactionTargetPercent = 1
+	application := &App{Config: cfg}
+	current := session.NewSession("named", t.TempDir(), cfg.Model)
+	current.Append(
+		sdk.NewUserMessage(sdk.NewTextBlock("implement token validation")),
+		sdk.NewAssistantMessage(sdk.NewTextBlock("implemented validation in auth.go")),
+	)
+
+	changed, err := application.compactSession(context.Background(), current)
+	if err != nil {
+		t.Fatalf("compactSession() = %v", err)
+	}
+	if !changed {
+		t.Fatal("expected compaction to change session")
+	}
+	if len(current.Messages) != 0 {
+		t.Fatalf("messages after compaction = %#v, want no old history", current.Messages)
+	}
+	if !strings.HasPrefix(current.Summary, "Recent session state:\n") {
+		t.Fatalf("summary = %q, want concise session state", current.Summary)
+	}
+	if strings.Contains(current.Summary, "Files and Code Sections") || strings.Contains(current.Summary, "Retrieved memory") {
+		t.Fatalf("summary should not contain legacy sections: %q", current.Summary)
+	}
+}
+
+func TestNewSessionMemoryRetrievalGate(t *testing.T) {
+	current := session.NewSession("named", t.TempDir(), "test-model")
+	allowed := true
+	current.Metadata.CrossSessionMemory = &allowed
+	if !shouldRetrieveNewSessionMemory(current, true) {
+		t.Fatal("expected a new opted-in session to retrieve cross-session memory")
+	}
+	if shouldRetrieveNewSessionMemory(current, false) {
+		t.Fatal("did not expect an established session to retrieve memory")
+	}
+	current.Metadata.MemoryBootstrapPending = true
+	if !shouldRetrieveNewSessionMemory(current, false) {
+		t.Fatal("expected pending bootstrap to retrieve memory once")
+	}
+	denied := false
+	current.Metadata.CrossSessionMemory = &denied
+	if shouldRetrieveNewSessionMemory(current, true) {
+		t.Fatal("did not expect a denied session to retrieve memory")
 	}
 }
 

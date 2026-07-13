@@ -14,6 +14,7 @@ import (
 	sdk "github.com/anthropics/anthropic-sdk-go"
 	"github.com/solosw/solcode/internal/agent"
 	cpanthropic "github.com/solosw/solcode/internal/anthropic"
+	"github.com/solosw/solcode/internal/changegraph"
 	"github.com/solosw/solcode/internal/config"
 	"github.com/solosw/solcode/internal/engine"
 	"github.com/solosw/solcode/internal/hook"
@@ -39,6 +40,7 @@ type App struct {
 	MemoryManager *memory.Manager
 	SkillRegistry *skill.Registry
 	MCPRegistry   *mcp.Registry
+	ChangeGraph   *changegraph.Store
 	mcpFactory    mcp.ClientFactory
 
 	onTextDelta     func(string)
@@ -145,6 +147,11 @@ func New(cfg config.Config, opts ...Option) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
+	graphStore, err := openChangeGraph(cfg)
+	if err != nil {
+		_ = mcpRegistry.Close()
+		return nil, err
+	}
 
 	runtime := hook.NewRuntime(cfg.Hooks)
 	permissions := permission.NewServiceWithConfig(cfg.Permissions)
@@ -153,7 +160,8 @@ func New(cfg config.Config, opts ...Option) (*App, error) {
 		BaseURL: cfg.BaseURL,
 	})
 
-	eng := engine.NewEngine(engineConfig(cfg, client, runtime, registry, permissions, options.onTextDelta, options.onThinkingDelta, options.onToolStart, options.onToolDone, options.onUsage, options.onAskUser, options.queuedPrompts))
+	recordFileChange := newFileChangeRecorder(graphStore)
+	eng := engine.NewEngine(engineConfig(cfg, client, runtime, registry, permissions, options.onTextDelta, options.onThinkingDelta, options.onToolStart, options.onToolDone, options.onUsage, options.onAskUser, options.queuedPrompts, recordFileChange))
 	coordinator := agent.NewCoordinator(eng)
 	registry.Register(tool.NewTaskTool(coordinator))
 
@@ -192,6 +200,7 @@ func New(cfg config.Config, opts ...Option) (*App, error) {
 		MemoryManager:   memoryManager,
 		SkillRegistry:   skillRegistry,
 		MCPRegistry:     mcpRegistry,
+		ChangeGraph:     graphStore,
 		mcpFactory:      options.mcpFactory,
 		onTextDelta:     options.onTextDelta,
 		onThinkingDelta: options.onThinkingDelta,
@@ -204,11 +213,41 @@ func New(cfg config.Config, opts ...Option) (*App, error) {
 	}, nil
 }
 
+func openChangeGraph(cfg config.Config) (*changegraph.Store, error) {
+	if !cfg.KnowledgeGraph.Enabled {
+		return nil, nil
+	}
+	graphPath := strings.TrimSpace(cfg.KnowledgeGraph.Dir)
+	if graphPath == "" {
+		graphPath = config.DefaultKnowledgeGraphPath(cfg.WorkDir)
+	} else {
+		graphPath = filepath.Join(graphPath, "knowledge.db")
+	}
+	store, err := changegraph.OpenWithOptions(graphPath, changegraph.Options{
+		RetentionDays: cfg.KnowledgeGraph.RetentionDays,
+		MaxEvents:     cfg.KnowledgeGraph.MaxEvents,
+		MaxDatabaseMB: cfg.KnowledgeGraph.MaxDatabaseMB,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("open knowledge graph: %w", err)
+	}
+	return store, nil
+}
+
 func (a *App) Close() error {
-	if a == nil || a.MCPRegistry == nil {
+	if a == nil {
 		return nil
 	}
-	return a.MCPRegistry.Close()
+	var firstErr error
+	if a.MCPRegistry != nil {
+		firstErr = a.MCPRegistry.Close()
+	}
+	if a.ChangeGraph != nil {
+		if err := a.ChangeGraph.Close(); firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
 }
 
 func (a *App) SwitchModel(cfg config.Config) error {
@@ -235,7 +274,7 @@ func (a *App) SwitchModel(cfg config.Config) error {
 			PromotionConfidence:      cfg.Memory.PromotionConfidence,
 		}}).WithRetrievalBudget(cfg.Memory.RetrievalM2Limit, cfg.Memory.RetrievalM3Limit, cfg.Memory.RetrievalM4Limit, cfg.Memory.RetrievalM5Limit)
 	}
-	a.Engine.UpdateConfig(engineConfig(cfg, client, a.Hooks, a.Tools, a.Permissions, a.onTextDelta, a.onThinkingDelta, a.onToolStart, a.onToolDone, a.onUsage, a.onAskUser, a.queuedPrompts))
+	a.Engine.UpdateConfig(engineConfig(cfg, client, a.Hooks, a.Tools, a.Permissions, a.onTextDelta, a.onThinkingDelta, a.onToolStart, a.onToolDone, a.onUsage, a.onAskUser, a.queuedPrompts, newFileChangeRecorder(a.ChangeGraph)))
 	return nil
 }
 
@@ -250,13 +289,22 @@ func (a *App) ReloadFeatures(cfg config.Config, mcpFactory mcp.ClientFactory) er
 	if err != nil {
 		return err
 	}
+	graphStore, err := openChangeGraph(cfg)
+	if err != nil {
+		_ = mcpRegistry.Close()
+		return err
+	}
 	if a.MCPRegistry != nil {
 		_ = a.MCPRegistry.Close()
+	}
+	if a.ChangeGraph != nil {
+		_ = a.ChangeGraph.Close()
 	}
 	a.Config = cfg
 	a.Tools = registry
 	a.SkillRegistry = skillRegistry
 	a.MCPRegistry = mcpRegistry
+	a.ChangeGraph = graphStore
 	registry.Register(tool.NewTaskTool(a.Coordinator))
 	if cfg.Memory.Enabled {
 		if a.MemoryStore == nil {
@@ -277,7 +325,7 @@ func (a *App) ReloadFeatures(cfg config.Config, mcpFactory mcp.ClientFactory) er
 	} else {
 		a.MemoryManager = nil
 	}
-	a.Engine.UpdateConfig(engineConfig(cfg, a.Client, a.Hooks, a.Tools, a.Permissions, a.onTextDelta, a.onThinkingDelta, a.onToolStart, a.onToolDone, a.onUsage, a.onAskUser, a.queuedPrompts))
+	a.Engine.UpdateConfig(engineConfig(cfg, a.Client, a.Hooks, a.Tools, a.Permissions, a.onTextDelta, a.onThinkingDelta, a.onToolStart, a.onToolDone, a.onUsage, a.onAskUser, a.queuedPrompts, newFileChangeRecorder(a.ChangeGraph)))
 	return nil
 }
 
@@ -379,38 +427,24 @@ func (a *App) RunPromptWithSession(ctx context.Context, sessionID, prompt, workD
 	if a.Sessions == nil {
 		return a.RunPrompt(ctx, prompt, workDir, maxTurns)
 	}
-	current, err := a.Sessions.LoadOrCreate(ctx, session.SessionID(sessionID), workDir, a.Config.Model)
+	current, newSession, err := a.Sessions.LoadOrCreateWithStatus(ctx, session.SessionID(sessionID), workDir, a.Config.Model)
 	if err != nil {
 		return agent.AgentResult{}, fmt.Errorf("load session: %w", err)
 	}
 	sessionStateChanged := a.SanitizeLoadedSession(current)
-	if a.Config.Memory.Enabled {
-		a.resetMemoryMaintenanceCycleIfBelowThreshold(ctx, current)
-		memoryStateChanged := sessionStateChanged
-		if a.shouldRefreshMemorySummary(ctx, current) {
-			if _, err := a.extractSessionMemories(ctx, current, "background_summary"); err == nil {
-				current.Metadata.MemorySummaryCompleted = true
-				memoryStateChanged = true
-			}
-		}
-		if a.shouldCompact(ctx, current) {
-			if changed, err := a.compactSession(ctx, current); err == nil && changed {
-				current.Metadata.MemoryCompactionCompleted = true
-				current.Metadata.MemoryCompactionMessageCount = len(current.Messages)
-				memoryStateChanged = true
-			}
-		}
-		if memoryStateChanged {
-			if err := a.Sessions.Save(context.WithoutCancel(ctx), current); err != nil {
-				return agent.AgentResult{}, fmt.Errorf("save session after memory maintenance: %w", err)
-			}
-		}
-	} else if sessionStateChanged {
-		if err := a.Sessions.Save(context.WithoutCancel(ctx), current); err != nil {
-			return agent.AgentResult{}, fmt.Errorf("save sanitized session: %w", err)
+	if a.shouldCompact(ctx, current) {
+		if changed, err := a.compactSession(ctx, current); err == nil && changed {
+			current.Metadata.MemoryCompactionCompleted = true
+			current.Metadata.MemoryCompactionMessageCount = len(current.Messages)
+			sessionStateChanged = true
 		}
 	}
-	memoryContext, err := a.retrieveMemoryContext(ctx, prompt, current)
+	if sessionStateChanged {
+		if err := a.Sessions.Save(context.WithoutCancel(ctx), current); err != nil {
+			return agent.AgentResult{}, fmt.Errorf("save session after compaction: %w", err)
+		}
+	}
+	memoryContext, err := a.retrieveNewSessionMemoryContext(ctx, prompt, current, newSession)
 	if err != nil {
 		current.Append(sdk.NewUserMessage(sdk.NewTextBlock(prompt)))
 		saveCtx := context.WithoutCancel(ctx)
@@ -427,12 +461,14 @@ func (a *App) RunPromptWithSession(ctx context.Context, sessionID, prompt, workD
 		AllowedTools: []string{},
 		MaxTurns:     maxTurns,
 	}
+	projectKnowledge := a.projectKnowledgeContext(ctx, current, prompt)
 	result := a.Engine.RunWithHistory(ctx, engine.RunRequest{
-		AgentConfig:    cfg,
-		SessionID:      sessionID,
-		Messages:       current.CopyMessages(),
-		SessionSummary: sanitizeLoadedSessionSummary(current.Summary),
-		MemoryContext:  memoryContext,
+		AgentConfig:      cfg,
+		SessionID:        sessionID,
+		Messages:         current.CopyMessages(),
+		SessionSummary:   sanitizeLoadedSessionSummary(current.Summary),
+		MemoryContext:    memoryContext,
+		ProjectKnowledge: projectKnowledge,
 	})
 	current.Metadata.WorkDir = workDir
 	current.Metadata.Model = a.Config.Model
@@ -449,19 +485,99 @@ func (a *App) RunPromptWithSession(ctx context.Context, sessionID, prompt, workD
 	return result.AgentResult, nil
 }
 
-func (a *App) retrieveMemoryContext(ctx context.Context, prompt string, current *session.Session) ([]engine.ContextItem, error) {
-	if a == nil || a.MemoryManager == nil || !a.Config.Memory.Enabled {
+func (a *App) projectKnowledgeContext(ctx context.Context, current *session.Session, prompt string) string {
+	if a == nil || a.ChangeGraph == nil || current == nil || !a.Config.KnowledgeGraph.Enabled {
+		return ""
+	}
+	maxTokens := a.Config.KnowledgeGraph.ContextMaxTokens
+	if maxTokens <= 0 {
+		maxTokens = 4000
+	}
+	maxCharacters := maxTokens * 4
+	var parts []string
+	if todos := activeTodos(config.DefaultTodoPath(current.Metadata.WorkDir)); len(todos) > 0 {
+		var b strings.Builder
+		b.WriteString("## Active tasks\n")
+		for _, todo := range todos {
+			b.WriteString(fmt.Sprintf("- [%s] %s\n", todo.Status, todo.Content))
+		}
+		parts = append(parts, strings.TrimSpace(b.String()))
+	}
+	graphContext, err := a.ChangeGraph.BuildRelevantContext(ctx, string(current.Metadata.ID), prompt, maxCharacters)
+	if err == nil && graphContext != "" {
+		parts = append(parts, graphContext)
+	}
+	contextText := strings.Join(parts, "\n\n")
+	if len([]rune(contextText)) <= maxCharacters {
+		return contextText
+	}
+	if compacted, err := a.compactProjectKnowledge(ctx, contextText, maxTokens); err == nil && compacted != "" {
+		return compacted
+	}
+	// Preserve active Todo items first when model compaction is unavailable.
+	return string([]rune(contextText)[:maxCharacters])
+}
+
+func (a *App) compactProjectKnowledge(ctx context.Context, contextText string, maxTokens int) (string, error) {
+	if a == nil || a.Client == nil {
+		return "", fmt.Errorf("knowledge context compactor is unavailable")
+	}
+	model := strings.TrimSpace(a.Config.FastModel)
+	if model == "" {
+		model = a.Config.Model
+	}
+	message, err := a.Client.Create(ctx, cpanthropic.MessageRequest{
+		Model:     model,
+		MaxTokens: int64(maxTokens),
+		System:    "Compress project knowledge context for a coding agent. Preserve all in-progress Todo items, pending Todo items, latest described file changes, file paths, symbols, and timestamps. Remove duplication and return only concise Markdown.",
+		Messages:  []sdk.MessageParam{sdk.NewUserMessage(sdk.NewTextBlock(contextText))},
+		Thinking:  false,
+		Stream:    false,
+	})
+	if err != nil {
+		return "", err
+	}
+	compacted := strings.TrimSpace(cpanthropic.TextFromMessage(message))
+	maxCharacters := maxTokens * 4
+	if len([]rune(compacted)) > maxCharacters {
+		compacted = string([]rune(compacted)[:maxCharacters])
+	}
+	return compacted, nil
+}
+
+func activeTodos(path string) []tool.TodoItem {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var todos []tool.TodoItem
+	if json.Unmarshal(data, &todos) != nil {
+		return nil
+	}
+	out := make([]tool.TodoItem, 0, len(todos))
+	for _, todo := range todos {
+		if todo.Status == "in_progress" || todo.Status == "pending" {
+			out = append(out, todo)
+		}
+	}
+	return out
+}
+
+// retrieveNewSessionMemoryContext injects retrieved memory only once when a
+// newly opened session explicitly opted into cross-session memory. Continuing
+// sessions rely on their compact summary and the durable project graph instead.
+func (a *App) retrieveNewSessionMemoryContext(ctx context.Context, prompt string, current *session.Session, newSession bool) ([]engine.ContextItem, error) {
+	if a == nil || a.MemoryManager == nil || !a.Config.Memory.Enabled || !shouldRetrieveNewSessionMemory(current, newSession) {
 		return nil, nil
 	}
-	allowCrossSession := sessionAllowsCrossSessionMemory(current)
-	currentSessionID := ""
-	if current != nil {
-		currentSessionID = string(current.Metadata.ID)
+	if current == nil {
+		return nil, nil
 	}
-	selected, err := a.MemoryManager.Retrieve(ctx, prompt, currentSessionID, allowCrossSession, 0)
+	selected, err := a.MemoryManager.Retrieve(ctx, prompt, string(current.Metadata.ID), true, 0)
 	if err != nil {
 		return nil, err
 	}
+	current.Metadata.MemoryBootstrapPending = false
 	return a.memoryContextFromItems(ctx, selected), nil
 }
 
@@ -616,35 +732,23 @@ func (a *App) estimateSessionContextTokens(ctx context.Context, current *session
 		return 0
 	}
 	messages := session.StripEphemeralContextMessages(current.CopyMessages())
-	memoryContext := []engine.ContextItem(nil)
-	if a.MemoryManager != nil {
-		allowCrossSession := sessionAllowsCrossSessionMemory(current)
-		query := strings.TrimSpace(sanitizeLoadedSessionSummary(current.Summary))
-		if query == "" {
-			query = session.Transcript(messages)
-		}
-		items, err := a.MemoryManager.Retrieve(ctx, query, string(current.Metadata.ID), allowCrossSession, 0)
-		if err == nil {
-			memoryContext = a.memoryContextFromItems(ctx, items)
-		}
-	}
 	builder := engine.ContextBuilder{SystemPrompt: a.Config.SystemPrompt, SkillNames: skillNames(a.SkillRegistry)}
 	tools := []tool.Tool(nil)
 	if a.Tools != nil {
 		tools = a.Tools.All()
 	}
 	return int(builder.EstimateContextTokens(engine.BuildRequest{
-		Model:          a.Config.Model,
-		MaxTokens:      a.Config.MaxTokens,
-		WorkDir:        current.Metadata.WorkDir,
-		Messages:       messages,
-		Tools:          tools,
-		Thinking:       a.Config.Thinking,
-		ThinkingText:   a.Config.ThinkingText,
-		Effort:         a.Config.Effort,
-		Stream:         a.Config.Stream,
-		SessionSummary: sanitizeLoadedSessionSummary(current.Summary),
-		MemoryContext:  memoryContext,
+		Model:            a.Config.Model,
+		MaxTokens:        a.Config.MaxTokens,
+		WorkDir:          current.Metadata.WorkDir,
+		Messages:         messages,
+		Tools:            tools,
+		Thinking:         a.Config.Thinking,
+		ThinkingText:     a.Config.ThinkingText,
+		Effort:           a.Config.Effort,
+		Stream:           a.Config.Stream,
+		SessionSummary:   sanitizeLoadedSessionSummary(current.Summary),
+		ProjectKnowledge: a.projectKnowledgeContext(ctx, current, current.Summary),
 	}))
 }
 
@@ -654,9 +758,6 @@ func (a *App) CompactSession(ctx context.Context, sessionID, workDir string) (*s
 	}
 	if a.Sessions == nil {
 		return nil, false, fmt.Errorf("sessions are not enabled")
-	}
-	if !a.Config.Memory.Enabled {
-		return nil, false, fmt.Errorf("memory is not enabled")
 	}
 	if sessionID == "" {
 		sessionID = a.Config.Session.DefaultSession
@@ -686,7 +787,7 @@ func (a *App) CompactSession(ctx context.Context, sessionID, workDir string) (*s
 }
 
 func (a *App) compactSession(ctx context.Context, current *session.Session) (bool, error) {
-	if a == nil || current == nil || !a.Config.Memory.Enabled {
+	if a == nil || current == nil {
 		return false, nil
 	}
 	cleanedMessages := session.StripEphemeralContextMessages(current.CopyMessages())
@@ -730,25 +831,25 @@ func (a *App) compactSession(ctx context.Context, current *session.Session) (boo
 		})
 		return false, err
 	}
+	previousSummary := sanitizeLoadedSessionSummary(current.Summary)
 	if !result.Changed {
 		a.recordCompactEvent("compact_skipped", map[string]any{"session_id": string(current.Metadata.ID)})
-		if cleanedHistory || strings.TrimSpace(current.Summary) != "" {
-			current.Summary = summarizeForContext(session.Transcript(cleanedMessages), "", nil)
-			return true, nil
+		if !cleanedHistory && previousSummary == "" {
+			return false, nil
 		}
-		return false, nil
+		current.Summary = conciseSessionSummary(session.Transcript(cleanedMessages), previousSummary)
+		current.ReplaceMessages(nil)
+		return true, nil
 	}
-	previousSummary := sanitizeLoadedSessionSummary(current.Summary)
-	current.Summary = previousSummary
 	beforeMessages := len(current.Messages)
-	current.Summary = ""
-	current.ReplaceMessages(result.Messages)
+	current.Summary = conciseSessionSummary(result.CompactedTranscript, previousSummary)
+	current.ReplaceMessages(nil)
 	retainedTokens := a.estimateSessionContextTokens(ctx, current)
 	a.recordCompactEvent("compact_succeeded", map[string]any{
 		"session_id":          string(current.Metadata.ID),
 		"messages_before":     beforeMessages,
-		"messages_after":      len(result.Messages),
-		"summary_runes":       len([]rune(result.Summary)),
+		"messages_after":      len(current.Messages),
+		"summary_runes":       len([]rune(current.Summary)),
 		"original_runes":      len([]rune(result.OriginalTranscript)),
 		"compacted_runes":     len([]rune(result.CompactedTranscript)),
 		"retained_runes":      len([]rune(result.RetainedTranscript)),
@@ -756,15 +857,24 @@ func (a *App) compactSession(ctx context.Context, current *session.Session) (boo
 		"retained_tokens":     retainedTokens,
 		"used_local_fallback": false,
 	})
-	current.Summary = summarizeForContext(result.CompactedTranscript, previousSummary, nil)
-	if _, err := a.extractSessionMemories(ctx, current, "post_compaction"); err != nil {
-		a.recordCompactEvent("memory_extract_failed", map[string]any{
-			"session_id": string(current.Metadata.ID),
-			"error":      err.Error(),
-		})
-	}
-	_ = previousSummary
 	return true, nil
+}
+
+// conciseSessionSummary preserves only the recent conversational outcome. File
+// change details and active work remain in the durable project graph and Todo
+// store, so duplicating them into every compressed session is unnecessary.
+func conciseSessionSummary(transcript, previous string) string {
+	lines := sanitizeTranscriptSummaryLines(nonEmptySummaryLines(strings.Split(transcript, "\n")))
+	lines = filterSummaryLines(lines, func(line string) bool {
+		return isSubstantiveSummaryLine(line) && !isAssistantMetaSummaryLine(line)
+	})
+	prior := compactPreviousSummaryLines(previous)
+	combined := dedupeSummaryLines(append(limitSummaryLines(prior, 3), tailSummaryLines(lines, 4)...))
+	combined = sanitizeSummaryOutputLines(limitSummaryLines(combined, 6), true, false)
+	if len(combined) == 0 {
+		return ""
+	}
+	return "Recent session state:\n" + bulletSection(combined)
 }
 
 func (a *App) extractSessionMemories(ctx context.Context, current *session.Session, reason string) ([]memory.Item, error) {
@@ -1057,6 +1167,14 @@ func sanitizeCompactionModification(part string) string {
 	if part == "" {
 		return ""
 	}
+	// Legacy compaction summaries store file facts as "path: edited". Accept
+	// that narrow, normalized form before generic code/path detection rejects it.
+	if strings.Contains(strings.ToLower(part), ": edited") {
+		if idx := strings.Index(part, " ("); idx >= 0 {
+			part = part[:idx]
+		}
+		return summaryExcerpt(part, 140)
+	}
 	if looksLikeSummaryCodeLine(part) || isAssistantMetaSummaryLine(part) || isTrivialContinuationSummaryLine(part) {
 		return ""
 	}
@@ -1289,7 +1407,23 @@ func compactPreviousSummaryLines(previous string) []string {
 		line = strings.TrimSpace(line)
 		line = strings.TrimPrefix(line, "- ")
 		line = strings.TrimSpace(line)
-		if line == "" || isSummarySectionHeader(line) || isNoisySummaryLine(line) || isDiscardablePriorSummaryLine(line) {
+		if line == "" || isSummarySectionHeader(line) {
+			continue
+		}
+		if isSafeLegacySourcePath(line) {
+			out = append(out, line)
+			continue
+		}
+		legacyFileFact := strings.Contains(strings.ToLower(line), "compacted session file modifications:")
+		// Normalize legacy compaction facts before generic path/code filters;
+		// otherwise their embedded file paths make useful history look like
+		// source-code noise.
+		line = sanitizeCompactionMemoryText(line)
+		if line == "" || isNoisySummaryLine(line) || (!legacyFileFact && isDiscardablePriorSummaryLine(line)) {
+			continue
+		}
+		if legacyFileFact {
+			out = append(out, line)
 			continue
 		}
 		line = sanitizeSummaryOutputLine(line, false, false)
@@ -1605,6 +1739,23 @@ func looksLikeSummaryCodeLine(line string) bool {
 	}
 	for _, marker := range codeMarkers {
 		if strings.Contains(strings.ToLower(line), strings.ToLower(marker)) {
+			return true
+		}
+	}
+	return false
+}
+
+func isSafeLegacySourcePath(line string) bool {
+	line = strings.TrimSpace(strings.Trim(line, "`\"'"))
+	if line == "" || strings.ContainsAny(line, " \\:") || strings.Contains(line, "..") {
+		return false
+	}
+	lower := strings.ToLower(line)
+	if !(strings.HasPrefix(lower, "internal/") || strings.HasPrefix(lower, "cmd/") || strings.HasPrefix(lower, "unit_tests/")) {
+		return false
+	}
+	for _, ext := range []string{".go", ".json", ".md", ".yaml", ".yml"} {
+		if strings.HasSuffix(lower, ext) {
 			return true
 		}
 	}
@@ -1959,6 +2110,13 @@ func sessionAllowsCrossSessionMemory(current *session.Session) bool {
 	return *current.Metadata.CrossSessionMemory
 }
 
+func shouldRetrieveNewSessionMemory(current *session.Session, newSession bool) bool {
+	if !sessionAllowsCrossSessionMemory(current) {
+		return false
+	}
+	return newSession || current.Metadata.MemoryBootstrapPending
+}
+
 func (a *App) recordCompactEvent(kind string, fields map[string]any) {
 	if a == nil {
 		return
@@ -2010,7 +2168,7 @@ func memoryModelName(cfg config.Config) string {
 	return cfg.Model
 }
 
-func engineConfig(cfg config.Config, client *cpanthropic.Client, runtime *hook.Runtime, registry *tool.Registry, permissions *permission.Service, onTextDelta, onThinkingDelta func(string), onToolStart func(name string, input json.RawMessage), onToolDone func(name string, output string, isError bool), onUsage func(engine.Usage), onAskUser func(ctx context.Context, params tool.AskUserParams) (map[string]string, error), queuedPrompts func() []string) engine.Config {
+func engineConfig(cfg config.Config, client *cpanthropic.Client, runtime *hook.Runtime, registry *tool.Registry, permissions *permission.Service, onTextDelta, onThinkingDelta func(string), onToolStart func(name string, input json.RawMessage), onToolDone func(name string, output string, isError bool), onUsage func(engine.Usage), onAskUser func(ctx context.Context, params tool.AskUserParams) (map[string]string, error), queuedPrompts func() []string, recordFileChange func(ctx context.Context, uctx *tool.UseContext, change tool.FileChange)) engine.Config {
 	skillRegistry := loadSkills(cfg)
 	return engine.Config{
 		Client:           client,
@@ -2036,6 +2194,35 @@ func engineConfig(cfg config.Config, client *cpanthropic.Client, runtime *hook.R
 		OnUsage:          onUsage,
 		OnAskUser:        onAskUser,
 		QueuedPrompts:    queuedPrompts,
+		RecordFileChange: recordFileChange,
+	}
+}
+
+func newFileChangeRecorder(store *changegraph.Store) func(context.Context, *tool.UseContext, tool.FileChange) {
+	if store == nil {
+		return nil
+	}
+	return func(ctx context.Context, uctx *tool.UseContext, change tool.FileChange) {
+		workDir := ""
+		sessionID := ""
+		if uctx != nil {
+			workDir = uctx.WorkDir
+			sessionID = uctx.SessionID
+		}
+		path := change.Path
+		if rel, err := filepath.Rel(workDir, path); err == nil {
+			path = rel
+		}
+		// Recording is intentionally fail-open: a successful user edit must not
+		// fail because optional project knowledge could not be persisted.
+		_ = store.RecordFileChange(ctx, changegraph.FileChange{
+			SessionID:   sessionID,
+			ToolName:    change.ToolName,
+			Path:        path,
+			Description: change.Description,
+			Before:      change.Before,
+			After:       change.After,
+		})
 	}
 }
 

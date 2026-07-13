@@ -12,6 +12,25 @@ import (
 	"github.com/solosw/solcode/internal/session"
 )
 
+func TestConversationContextWithoutTimeoutHasNoDeadline(t *testing.T) {
+	ctx, cancel := conversationContext(0)
+	defer cancel()
+	if _, ok := ctx.Deadline(); ok {
+		t.Fatal("timeout=0 should create a context without a deadline")
+	}
+	if err := ctx.Err(); err != nil {
+		t.Fatalf("new context error = %v", err)
+	}
+}
+
+func TestConversationContextWithTimeoutHasDeadline(t *testing.T) {
+	ctx, cancel := conversationContext(time.Minute)
+	defer cancel()
+	if _, ok := ctx.Deadline(); !ok {
+		t.Fatal("positive timeout should create a context with a deadline")
+	}
+}
+
 func TestChatMessagesFromSessionUsesPersistedMessageTimes(t *testing.T) {
 	first := time.Date(2024, time.January, 2, 3, 4, 0, 0, time.UTC)
 	second := first.Add(5 * time.Minute)

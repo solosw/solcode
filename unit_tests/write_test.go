@@ -1,6 +1,9 @@
 package unit_tests
 
 import (
+	"context"
+	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -11,6 +14,24 @@ func TestWriteTool_IsDestructive(t *testing.T) {
 	w := tool.NewWriteTool()
 	if !w.IsDestructive(nil) {
 		t.Fatal("Write should be destructive")
+	}
+}
+
+func TestWriteToolRecordsDescribedChange(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "notes.txt")
+	var recorded tool.FileChange
+	w := tool.NewWriteTool()
+	content, err := w.Invoke(context.Background(), &tool.UseContext{
+		WorkDir: filepath.Dir(path),
+		RecordFileChange: func(_ context.Context, change tool.FileChange) {
+			recorded = change
+		},
+	}, json.RawMessage(`{"file_path":"notes.txt","content":"hello","desc":"add notes"}`))
+	if err != nil || content.IsError {
+		t.Fatalf("Invoke() = %#v, %v", content, err)
+	}
+	if recorded.ToolName != tool.WriteToolName || recorded.Description != "add notes" || recorded.After != "hello" {
+		t.Fatalf("recorded change = %#v", recorded)
 	}
 }
 

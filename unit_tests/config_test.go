@@ -40,8 +40,8 @@ func TestLoadEmptyConfigDefaults(t *testing.T) {
 	if cfg.TUI.Theme != "dark" {
 		t.Fatalf("expected default TUI theme dark, got %q", cfg.TUI.Theme)
 	}
-	if cfg.TUI.Background != "#000000" {
-		t.Fatalf("expected default TUI background #000000, got %q", cfg.TUI.Background)
+	if cfg.TUI.Background != "dark" {
+		t.Fatalf("expected default TUI background dark, got %q", cfg.TUI.Background)
 	}
 }
 
@@ -101,13 +101,37 @@ func TestLoadCreatesDefaultSettingsOnFirstStart(t *testing.T) {
 		t.Fatalf("read settings.json: %v", err)
 	}
 	text := string(data)
-	for _, want := range []string{"\"providers\"", anthropic.DefaultModel, "\"max_context_tokens\": 200000", "\"max_tokens\": 64000", "\"max_turns\": 0", "\"effort\": \"high\"", "\"theme\": \"dark\"", "\"background\": \"#000000\""} {
+	for _, want := range []string{"\"providers\"", anthropic.DefaultModel, "\"max_context_tokens\": 200000", "\"max_tokens\": 20000", "\"theme\": \"dark\"", "\"background\": \"dark\""} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected %q in initialized settings.json: %s", want, text)
 		}
 	}
+	if strings.Contains(text, "\"type\"") {
+		t.Fatalf("initialized settings must not contain provider type: %s", text)
+	}
 	if cfg.Model != anthropic.DefaultModel {
 		t.Fatalf("expected initialized config model %s, got %q", anthropic.DefaultModel, cfg.Model)
+	}
+}
+
+func TestLoadFallsBackToFirstModelWhenConfiguredModelIsMissing(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	writeFile(t, path, `{
+		"providers": [{
+			"name": "anthropic",
+			"models": [
+				{"name": "first", "id": "model-first"},
+				{"name": "second", "id": "model-second"}
+			]
+		}]
+	}`)
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load() = %v", err)
+	}
+	if cfg.Model != "model-first" {
+		t.Fatalf("Model = %q, want first configured model", cfg.Model)
 	}
 }
 

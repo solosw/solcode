@@ -10,13 +10,24 @@ import (
 
 // UseContext carries contextual information for a tool invocation.
 type UseContext struct {
-	SessionID string
-	MessageID string
-	WorkDir   string
-	AgentID   string
-	TodoPath  string
-	FastModel string
-	AskUser   func(ctx context.Context, params AskUserParams) (map[string]string, error)
+	SessionID        string
+	MessageID        string
+	WorkDir          string
+	AgentID          string
+	TodoPath         string
+	FastModel        string
+	RecordFileChange func(ctx context.Context, change FileChange)
+	AskUser          func(ctx context.Context, params AskUserParams) (map[string]string, error)
+}
+
+// FileChange describes a successful file mutation for optional project-level
+// knowledge recording. It deliberately excludes full diffs from persistence.
+type FileChange struct {
+	ToolName    string
+	Path        string
+	Description string
+	Before      string
+	After       string
 }
 
 // ContentBlock represents a content block in Anthropic's message format.

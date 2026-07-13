@@ -89,29 +89,39 @@ func DefaultTodoPath(workDir string) string {
 	return filepath.Join(UserStateDir(), "todos.json")
 }
 
+// DefaultKnowledgeGraphPath returns the SQLite database used for durable,
+// project-scoped file-change knowledge.
+func DefaultKnowledgeGraphPath(workDir string) string {
+	if sub := projectSubDir(workDir); sub != "" {
+		return filepath.Join(UserStateDir(), sub, "knowledge.db")
+	}
+	return filepath.Join(UserStateDir(), "knowledge.db")
+}
+
 type Config struct {
-	APIKey           string            `json:"api_key"`
-	BaseURL          string            `json:"base_url"`
-	Model            string            `json:"model"`
-	FastModel        string            `json:"fast_model,omitempty"`
-	MaxContextTokens int64             `json:"max_context_tokens,omitempty"`
-	MaxTokens        int64             `json:"max_tokens"`
-	SystemPrompt     string            `json:"system_prompt"`
-	WorkDir          string            `json:"work_dir"`
-	MaxTurns         int               `json:"max_turns"`
-	Stream           bool              `json:"stream"`
-	Thinking         bool              `json:"thinking"`
-	ThinkingText     bool              `json:"thinking_text"`
-	Effort           string            `json:"effort"`
-	PermissionMode   permission.Mode   `json:"permission_mode"`
-	Permissions      permission.Config `json:"permissions,omitempty"`
-	Hooks            hook.Config       `json:"hooks,omitempty"`
-	TUI              TUIConfig         `json:"tui,omitempty"`
-	Skills           SkillsConfig      `json:"skills,omitempty"`
-	MCP              MCPConfig         `json:"mcp,omitempty"`
-	MCPServers       []MCPServerConfig `json:"mcp_servers,omitempty"`
-	Session          SessionConfig     `json:"session,omitempty"`
-	Memory           MemoryConfig      `json:"memory,omitempty"`
+	APIKey           string               `json:"api_key"`
+	BaseURL          string               `json:"base_url"`
+	Model            string               `json:"model"`
+	FastModel        string               `json:"fast_model,omitempty"`
+	MaxContextTokens int64                `json:"max_context_tokens,omitempty"`
+	MaxTokens        int64                `json:"max_tokens"`
+	SystemPrompt     string               `json:"system_prompt"`
+	WorkDir          string               `json:"work_dir"`
+	MaxTurns         int                  `json:"max_turns"`
+	Stream           bool                 `json:"stream"`
+	Thinking         bool                 `json:"thinking"`
+	ThinkingText     bool                 `json:"thinking_text"`
+	Effort           string               `json:"effort"`
+	PermissionMode   permission.Mode      `json:"permission_mode"`
+	Permissions      permission.Config    `json:"permissions,omitempty"`
+	Hooks            hook.Config          `json:"hooks,omitempty"`
+	TUI              TUIConfig            `json:"tui,omitempty"`
+	Skills           SkillsConfig         `json:"skills,omitempty"`
+	MCP              MCPConfig            `json:"mcp,omitempty"`
+	MCPServers       []MCPServerConfig    `json:"mcp_servers,omitempty"`
+	Session          SessionConfig        `json:"session,omitempty"`
+	Memory           MemoryConfig         `json:"memory,omitempty"`
+	KnowledgeGraph   KnowledgeGraphConfig `json:"knowledge_graph,omitempty"`
 
 	Provider  string           `json:"provider,omitempty"`
 	Providers []ProviderConfig `json:"providers,omitempty"`
@@ -139,6 +149,17 @@ type SessionConfig struct {
 	Persist        bool   `json:"persist,omitempty"`
 	Dir            string `json:"dir,omitempty"`
 	DefaultSession string `json:"default_session,omitempty"`
+}
+
+// KnowledgeGraphConfig controls durable project knowledge collected from
+// described file mutations.
+type KnowledgeGraphConfig struct {
+	Enabled          bool   `json:"enabled,omitempty"`
+	Dir              string `json:"dir,omitempty"`
+	ContextMaxTokens int    `json:"context_max_tokens,omitempty"`
+	RetentionDays    int    `json:"retention_days,omitempty"`
+	MaxEvents        int    `json:"max_events,omitempty"`
+	MaxDatabaseMB    int    `json:"max_database_mb,omitempty"`
 }
 
 type MemoryConfig struct {
@@ -177,7 +198,6 @@ type MCPServerConfig struct {
 
 type ProviderConfig struct {
 	Name       string        `json:"name"`
-	Type       string        `json:"type"`
 	APIKey     string        `json:"api_key,omitempty"`
 	APIKeyEnv  string        `json:"api_key_env,omitempty"`
 	BaseURL    string        `json:"base_url,omitempty"`
@@ -187,7 +207,6 @@ type ProviderConfig struct {
 
 type ResolvedProvider struct {
 	Name    string
-	Type    string
 	APIKey  string
 	BaseURL string
 }
@@ -235,6 +254,13 @@ func Default() Config {
 			Enabled:        true,
 			Persist:        true,
 			DefaultSession: "main",
+		},
+		KnowledgeGraph: KnowledgeGraphConfig{
+			Enabled:          true,
+			ContextMaxTokens: 4000,
+			RetentionDays:    90,
+			MaxEvents:        10000,
+			MaxDatabaseMB:    50,
 		},
 		Memory: MemoryConfig{
 			Enabled:                  true,
@@ -309,24 +335,17 @@ func initializeDefaultSettingsFile(workDir string) error {
 }
 
 func defaultSettingsPayload(workDir string) map[string]any {
-	maxTokens := int64(64_000)
-	maxTurns := 0
+	maxTokens := int64(20_000)
 	return map[string]any{
 		"provider": "anthropic",
 		"providers": []ProviderConfig{{
 			Name:      "anthropic",
-			Type:      "anthropic",
 			APIKeyEnv: "ANTHROPIC_API_KEY",
 			Models: []ModelConfig{{
 				Name:             "default",
 				ID:               anthropic.DefaultModel,
-				DisplayName:      anthropic.DefaultModel,
-				Default:          true,
-				Fast:             true,
 				MaxContextTokens: 200_000,
 				MaxTokens:        &maxTokens,
-				MaxTurns:         &maxTurns,
-				Effort:           "high",
 			}},
 		}},
 		"work_dir": workDir,
@@ -364,9 +383,6 @@ func (cfg *Config) Normalize() error {
 
 	for i := range cfg.Providers {
 		p := &cfg.Providers[i]
-		if p.Type == "" {
-			p.Type = p.Name
-		}
 		if p.APIKeyEnv != "" {
 			if v := os.Getenv(p.APIKeyEnv); v != "" {
 				p.APIKey = v
@@ -396,10 +412,6 @@ func (cfg *Config) Normalize() error {
 	prov, mdl, err := cfg.resolveActive()
 	if err != nil {
 		return err
-	}
-
-	if !isSupportedProvider(prov.Type) {
-		return fmt.Errorf("provider %q has unsupported type %q (currently supported: anthropic)", prov.Name, prov.Type)
 	}
 
 	cfg.APIKey = prov.APIKey
@@ -510,7 +522,7 @@ func (cfg Config) resolveActive() (ResolvedProvider, ModelConfig, error) {
 		found := false
 		for _, p := range cfg.Providers {
 			if p.Name == cfg.Provider {
-				prov = ResolvedProvider{Name: p.Name, Type: p.Type, APIKey: p.APIKey, BaseURL: p.BaseURL}
+				prov = ResolvedProvider{Name: p.Name, APIKey: p.APIKey, BaseURL: p.BaseURL}
 				found = true
 				break
 			}
@@ -524,7 +536,15 @@ func (cfg Config) resolveActive() (ResolvedProvider, ModelConfig, error) {
 			candidates = collectDefaultProviders(cfg.Providers)
 		}
 		if len(candidates) == 0 {
-			return ResolvedProvider{}, ModelConfig{}, fmt.Errorf("no provider selected and no default model configured")
+			for _, p := range cfg.Providers {
+				if len(p.Models) > 0 {
+					candidates = []ResolvedProvider{{Name: p.Name, APIKey: p.APIKey, BaseURL: p.BaseURL}}
+					break
+				}
+			}
+		}
+		if len(candidates) == 0 {
+			return ResolvedProvider{}, ModelConfig{}, fmt.Errorf("no provider with configured models")
 		}
 		if len(candidates) > 1 {
 			names := make([]string, len(candidates))
@@ -542,15 +562,23 @@ func (cfg Config) resolveActive() (ResolvedProvider, ModelConfig, error) {
 				return prov, m, nil
 			}
 		}
-		return prov, ModelConfig{}, fmt.Errorf("no default model configured in provider %q", prov.Name)
+		models := cfg.modelsOf(prov.Name)
+		if len(models) > 0 {
+			return prov, models[0], nil
+		}
+		return prov, ModelConfig{}, fmt.Errorf("provider %q has no models configured", prov.Name)
 	}
 
-	for _, m := range cfg.modelsOf(prov.Name) {
+	models := cfg.modelsOf(prov.Name)
+	for _, m := range models {
 		if m.Name == cfg.Model || m.ID == cfg.Model {
 			return prov, m, nil
 		}
 	}
-	return prov, ModelConfig{}, fmt.Errorf("model %q not found in provider %q", cfg.Model, prov.Name)
+	if len(models) > 0 {
+		return prov, models[0], nil
+	}
+	return prov, ModelConfig{}, fmt.Errorf("provider %q has no models configured", prov.Name)
 }
 
 func collectProvidersForModel(providers []ProviderConfig, model string) []ResolvedProvider {
@@ -561,7 +589,7 @@ func collectProvidersForModel(providers []ProviderConfig, model string) []Resolv
 	for _, p := range providers {
 		for _, m := range p.Models {
 			if m.Name == model || m.ID == model {
-				out = append(out, ResolvedProvider{Name: p.Name, Type: p.Type, APIKey: p.APIKey, BaseURL: p.BaseURL})
+				out = append(out, ResolvedProvider{Name: p.Name, APIKey: p.APIKey, BaseURL: p.BaseURL})
 				break
 			}
 		}
@@ -574,7 +602,7 @@ func collectDefaultProviders(providers []ProviderConfig) []ResolvedProvider {
 	for _, p := range providers {
 		for _, m := range p.Models {
 			if m.Default {
-				out = append(out, ResolvedProvider{Name: p.Name, Type: p.Type, APIKey: p.APIKey, BaseURL: p.BaseURL})
+				out = append(out, ResolvedProvider{Name: p.Name, APIKey: p.APIKey, BaseURL: p.BaseURL})
 				break
 			}
 		}
@@ -601,7 +629,6 @@ func (cfg Config) resolveFastModelName(providerName string) string {
 }
 
 func (cfg Config) validateProviders() error {
-	defaultCount := 0
 	for _, p := range cfg.Providers {
 		if p.Name == "" {
 			return fmt.Errorf("provider name is required")
@@ -613,19 +640,9 @@ func (cfg Config) validateProviders() error {
 			if m.ID == "" {
 				return fmt.Errorf("model id is required (provider %q, model %q)", p.Name, m.Name)
 			}
-			if m.Default {
-				defaultCount++
-			}
 		}
 	}
-	if defaultCount > 1 {
-		return fmt.Errorf("multiple models have default: true — exactly one model may be the default")
-	}
 	return nil
-}
-
-func isSupportedProvider(providerType string) bool {
-	return providerType == "anthropic"
 }
 
 func applyEnvLegacy(cfg *Config) {

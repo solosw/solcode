@@ -37,7 +37,7 @@ func (b ContextBuilder) Build(req BuildRequest) cpanthropic.MessageRequest {
 		Model:        req.Model,
 		MaxTokens:    req.MaxTokens,
 		System:       b.systemPrompt(req.WorkDir),
-		Messages:     b.withContextMessages(req.Messages, req.SessionSummary, req.MemoryContext),
+		Messages:     b.withContextMessages(req.Messages, req.SessionSummary, req.MemoryContext, req.ProjectKnowledge),
 		Tools:        convertTools(tools),
 		Thinking:     req.Thinking,
 		ThinkingText: req.ThinkingText,
@@ -51,8 +51,8 @@ func (b ContextBuilder) Build(req BuildRequest) cpanthropic.MessageRequest {
 // present. They stay in the messages stream rather than in the system prompt,
 // and placing them before the newest prompt avoids letting dynamic memory
 // override the user's latest request.
-func (b ContextBuilder) withContextMessages(messages []sdk.MessageParam, sessionSummary string, memoryContext []ContextItem) []sdk.MessageParam {
-	contextBlock := b.contextBlock(sessionSummary, memoryContext)
+func (b ContextBuilder) withContextMessages(messages []sdk.MessageParam, sessionSummary string, memoryContext []ContextItem, projectKnowledge string) []sdk.MessageParam {
+	contextBlock := b.contextBlock(sessionSummary, memoryContext, projectKnowledge)
 	if contextBlock == "" {
 		return messages
 	}
@@ -74,10 +74,13 @@ func (b ContextBuilder) withContextMessages(messages []sdk.MessageParam, session
 	return out
 }
 
-func (b ContextBuilder) contextBlock(sessionSummary string, memoryContext []ContextItem) string {
+func (b ContextBuilder) contextBlock(sessionSummary string, memoryContext []ContextItem, projectKnowledge string) string {
 	var parts []string
 	if cleaned := sanitizeContextSessionSummary(sessionSummary); cleaned != "" {
 		parts = append(parts, "Session summary:\n"+cleaned)
+	}
+	if knowledge := strings.TrimSpace(projectKnowledge); knowledge != "" {
+		parts = append(parts, "Project knowledge context:\n"+knowledge)
 	}
 	if len(memoryContext) > 0 {
 		parts = append(parts, "Retrieved memory:\n"+formatMemoryContext(memoryContext))
@@ -303,18 +306,19 @@ func sanitizeContextCompactionSummaryLine(line string) (string, bool) {
 }
 
 type BuildRequest struct {
-	Model          string
-	MaxTokens      int64
-	WorkDir        string
-	Messages       []sdk.MessageParam
-	Tools          []tool.Tool
-	Thinking       bool
-	ThinkingText   bool
-	Effort         string
-	Stream         bool
-	SessionSummary string
-	MemoryContext  []ContextItem
-	ContextBudget  ContextBudget
+	Model            string
+	MaxTokens        int64
+	WorkDir          string
+	Messages         []sdk.MessageParam
+	Tools            []tool.Tool
+	Thinking         bool
+	ThinkingText     bool
+	Effort           string
+	Stream           bool
+	SessionSummary   string
+	MemoryContext    []ContextItem
+	ProjectKnowledge string
+	ContextBudget    ContextBudget
 }
 
 func (b ContextBuilder) systemPrompt(workDir string) string {
@@ -436,7 +440,7 @@ func convertTools(tools []tool.Tool) []sdk.ToolUnionParam {
 
 func (b ContextBuilder) EstimateContextTokens(req BuildRequest) int64 {
 	system := strings.TrimSpace(b.systemPrompt(req.WorkDir))
-	messages := b.withContextMessages(req.Messages, req.SessionSummary, req.MemoryContext)
+	messages := b.withContextMessages(req.Messages, req.SessionSummary, req.MemoryContext, req.ProjectKnowledge)
 	approx := tokenest.Request(system, messages, convertTools(req.Tools))
 	if approx < 0 {
 		return 0

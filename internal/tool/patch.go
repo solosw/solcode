@@ -15,6 +15,7 @@ import (
 type PatchParams struct {
 	FilePath  string `json:"file_path"`
 	PatchText string `json:"patch_text"`
+	Desc      string `json:"desc,omitempty"`
 }
 
 const PatchToolName = "Patch"
@@ -32,10 +33,23 @@ func (p *patchTool) Name() string                         { return PatchToolName
 func (p *patchTool) IsDestructive(_ json.RawMessage) bool { return true }
 func (p *patchTool) IsReadOnly(_ json.RawMessage) bool    { return false }
 
+func (p *patchTool) ValidateInput(_ context.Context, input json.RawMessage) error {
+	var params PatchParams
+	if err := json.Unmarshal(input, &params); err != nil {
+		return err
+	}
+	_, errText := validateChangeDescription(params.Desc)
+	if errText != "" {
+		return fmt.Errorf("%s", errText)
+	}
+	return nil
+}
+
 func (p *patchTool) Description() string {
 	return `Applies a unified diff patch to a file.
 - Provide file_path (absolute or relative to work dir).
 - Provide the patch in unified diff format.
+- Optionally provide desc, a change description of up to 30 Chinese characters.
 - The file must exist before applying the patch.
 - Use the Diff tool first to preview changes.`
 }
@@ -51,6 +65,11 @@ func (p *patchTool) InputSchema() map[string]any {
 			"patch_text": map[string]any{
 				"type":        "string",
 				"description": "The patch in unified diff format to apply",
+			},
+			"desc": map[string]any{
+				"type":        "string",
+				"description": "Optional description of this change (up to 30 Chinese characters)",
+				"maxLength":   maxChangeDescriptionRunes,
 			},
 		},
 		"required": []string{"file_path", "patch_text"},
@@ -68,6 +87,10 @@ func (p *patchTool) Invoke(ctx context.Context, uctx *UseContext, input json.Raw
 	}
 	if params.PatchText == "" {
 		return ErrorResult("patch_text is required"), nil
+	}
+	desc, errText := validateChangeDescription(params.Desc)
+	if errText != "" {
+		return ErrorResult(errText), nil
 	}
 
 	filePath := params.FilePath
@@ -99,6 +122,7 @@ func (p *patchTool) Invoke(ctx context.Context, uctx *UseContext, input json.Raw
 	if err := os.WriteFile(filePath, []byte(newContent), 0o644); err != nil {
 		return ErrorResult(fmt.Sprintf("error writing file: %v", err)), nil
 	}
+	recordFileChange(ctx, uctx, PatchToolName, filePath, desc, oldContent, newContent)
 
 	oldLines := strings.Count(oldContent, "\n") + 1
 	newLines := strings.Count(newContent, "\n") + 1

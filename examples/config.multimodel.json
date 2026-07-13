@@ -6,7 +6,6 @@
   "providers": [
     {
       "name": "anthropic",
-      "type": "anthropic",
       "api_key_env": "ANTHROPIC_API_KEY",
       "base_url_env": "ANTHROPIC_BASE_URL",
       "models": [

@@ -27,7 +27,7 @@ type ToolResult struct {
 
 const (
 	defaultToolTimeout = 2 * time.Minute
-	taskToolTimeout    = 10 * time.Minute
+	taskToolTimeout    = 30 * time.Minute
 )
 
 type ToolExecutor struct {
@@ -88,6 +88,11 @@ func (x *ToolExecutor) Execute(ctx context.Context, call ToolCall, env ToolEnv) 
 			content := tool.ErrorResult(decision.Reason)
 			return ToolResult{Content: content, IsError: true}
 		}
+	}
+
+	if err := selected.ValidateInput(ctx, input); err != nil {
+		content := tool.ErrorResult("invalid parameters: " + err.Error())
+		return ToolResult{Content: content, IsError: true}
 	}
 
 	toolCtx, cancel := context.WithTimeout(ctx, timeoutForTool(selected))

@@ -15,6 +15,7 @@ import (
 type WriteParams struct {
 	FilePath string `json:"file_path"`
 	Content  string `json:"content"`
+	Desc     string `json:"desc,omitempty"`
 }
 
 const WriteToolName = "Write"
@@ -32,10 +33,23 @@ func (w *writeTool) Name() string                         { return WriteToolName
 func (w *writeTool) IsDestructive(_ json.RawMessage) bool { return true }
 func (w *writeTool) IsReadOnly(_ json.RawMessage) bool    { return false }
 
+func (w *writeTool) ValidateInput(_ context.Context, input json.RawMessage) error {
+	var params WriteParams
+	if err := json.Unmarshal(input, &params); err != nil {
+		return err
+	}
+	_, errText := validateChangeDescription(params.Desc)
+	if errText != "" {
+		return fmt.Errorf("%s", errText)
+	}
+	return nil
+}
+
 func (w *writeTool) Description() string {
 	return `File writing tool that creates or completely overwrites files.
 - Provide file_path (absolute or relative to work dir).
 - Provide the full content to write.
+- Optionally provide desc, a change description of up to 30 Chinese characters.
 - Creates parent directories automatically.
 - Checks if file has been modified since last read.
 - For small targeted edits, prefer the Edit tool instead.`
@@ -53,6 +67,11 @@ func (w *writeTool) InputSchema() map[string]any {
 				"type":        "string",
 				"description": "The content to write to the file",
 			},
+			"desc": map[string]any{
+				"type":        "string",
+				"description": "Optional description of this change (up to 30 Chinese characters)",
+				"maxLength":   maxChangeDescriptionRunes,
+			},
 		},
 		"required": []string{"file_path", "content"},
 	}
@@ -66,6 +85,10 @@ func (w *writeTool) Invoke(ctx context.Context, uctx *UseContext, input json.Raw
 
 	if params.FilePath == "" {
 		return ErrorResult("file_path is required"), nil
+	}
+	desc, errText := validateChangeDescription(params.Desc)
+	if errText != "" {
+		return ErrorResult(errText), nil
 	}
 
 	filePath := params.FilePath
@@ -98,6 +121,7 @@ func (w *writeTool) Invoke(ctx context.Context, uctx *UseContext, input json.Raw
 	if err := os.WriteFile(filePath, []byte(params.Content), 0o644); err != nil {
 		return ErrorResult(fmt.Sprintf("error writing file: %v", err)), nil
 	}
+	recordFileChange(ctx, uctx, WriteToolName, filePath, desc, oldContent, params.Content)
 
 	// Generate simple diff stats
 	oldLines := strings.Count(oldContent, "\n") + 1

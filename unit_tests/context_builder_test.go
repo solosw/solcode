@@ -69,6 +69,33 @@ func TestContextBuilderSystemPromptIsStable(t *testing.T) {
 	}
 }
 
+func TestContextBuilderInjectsProjectKnowledgeOutsideSystemPrompt(t *testing.T) {
+	builder := engine.ContextBuilder{}
+	req := builder.Build(engine.BuildRequest{
+		Messages:         []sdk.MessageParam{sdk.NewUserMessage(sdk.NewTextBlock("continue"))},
+		ProjectKnowledge: "## Active tasks\n- [in_progress] Finish graph\n\n## Recent tracked changes\n- api.go — add endpoint",
+	})
+	if strings.Contains(req.System, "Finish graph") || strings.Contains(req.System, "add endpoint") {
+		t.Fatalf("project knowledge must not enter stable system prompt: %q", req.System)
+	}
+	if len(req.Messages) < 2 {
+		t.Fatalf("expected injected project knowledge messages, got %#v", req.Messages)
+	}
+	var rendered strings.Builder
+	for _, message := range req.Messages {
+		for _, block := range message.Content {
+			if block.OfText != nil {
+				rendered.WriteString(block.OfText.Text)
+			}
+		}
+	}
+	for _, want := range []string{"Finish graph", "add endpoint"} {
+		if !strings.Contains(rendered.String(), want) {
+			t.Fatalf("project knowledge message missing %q: %q", want, rendered.String())
+		}
+	}
+}
+
 func TestContextBuilderSanitizesPollutedSessionSummaryBlock(t *testing.T) {
 	builder := engine.ContextBuilder{}
 	req := builder.Build(engine.BuildRequest{

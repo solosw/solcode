@@ -55,7 +55,7 @@ solcode [flags]
 | `-prompt` | (none) | Prompt to run; when omitted, launches TUI |
 | `-workdir` | `$PWD` | Working directory for tool execution |
 | `-max-turns` | from config | Maximum model/tool loop turns |
-| `-timeout` | `30m` | Maximum run duration |
+| `-timeout` | `0` (disabled) | Maximum run duration; `0` disables the per-conversation deadline |
 | `-model` | from config | Override model (name or ID) |
 
 Config auto-discovery looks for `~/.solcode/settings.json`, `~/.solcode/settings.local.json`, `./.solcode/settings.json`, and `./.solcode/settings.local.json` in order; later files merge on top.
@@ -123,7 +123,6 @@ All configuration lives in a JSON file. Example:
   "providers": [
     {
       "name": "anthropic",
-      "type": "anthropic",
       "api_key_env": "ANTHROPIC_API_KEY",
       "base_url_env": "ANTHROPIC_BASE_URL",
       "models": [

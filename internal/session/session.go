@@ -18,6 +18,7 @@ type Metadata struct {
 	WorkDir                      string    `json:"work_dir,omitempty"`
 	Model                        string    `json:"model,omitempty"`
 	CrossSessionMemory           *bool     `json:"cross_session_memory,omitempty"`
+	MemoryBootstrapPending       bool      `json:"memory_bootstrap_pending,omitempty"`
 	MemorySummaryCompleted       bool      `json:"memory_summary_completed,omitempty"`
 	MemoryCompactionCompleted    bool      `json:"memory_compaction_completed,omitempty"`
 	MemoryCompactionMessageCount int       `json:"memory_compaction_message_count,omitempty"`
@@ -59,8 +60,16 @@ func (m *Manager) DefaultID() SessionID {
 }
 
 func (m *Manager) LoadOrCreate(ctx context.Context, id SessionID, workDir, model string) (*Session, error) {
+	s, _, err := m.LoadOrCreateWithStatus(ctx, id, workDir, model)
+	return s, err
+}
+
+// LoadOrCreateWithStatus returns whether the session was created for this
+// request. Callers use this to distinguish a new-session bootstrap from a
+// normal continuation without inferring it from an empty message list.
+func (m *Manager) LoadOrCreateWithStatus(ctx context.Context, id SessionID, workDir, model string) (*Session, bool, error) {
 	if m == nil || m.store == nil {
-		return NewSession(nonEmptyID(id, "main"), workDir, model), nil
+		return NewSession(nonEmptyID(id, "main"), workDir, model), true, nil
 	}
 	id = nonEmptyID(id, m.DefaultID())
 	s, err := m.store.Load(ctx, id)
@@ -71,12 +80,12 @@ func (m *Manager) LoadOrCreate(ctx context.Context, id SessionID, workDir, model
 		if model != "" {
 			s.Metadata.Model = model
 		}
-		return s, nil
+		return s, false, nil
 	}
 	if !IsNotFound(err) {
-		return nil, err
+		return nil, false, err
 	}
-	return NewSession(id, workDir, model), nil
+	return NewSession(id, workDir, model), true, nil
 }
 
 func (m *Manager) Save(ctx context.Context, s *Session) error {

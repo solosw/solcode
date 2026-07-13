@@ -37,7 +37,7 @@ func main() {
 	flag.StringVar(&prompt, "prompt", "", "Prompt to run non-interactively")
 	flag.StringVar(&workDir, "workdir", "", "Working directory for tool execution")
 	flag.IntVar(&maxTurns, "max-turns", 0, "Maximum model/tool loop turns")
-	flag.DurationVar(&timeout, "timeout", 30*time.Minute, "Maximum run duration")
+	flag.DurationVar(&timeout, "timeout", 0, "Maximum run duration (0 disables the timeout)")
 	flag.StringVar(&modelOverride, "model", "", "Override model (name or ID from config)")
 	flag.Parse()
 
@@ -75,6 +75,16 @@ func main() {
 	}
 }
 
+// conversationContext creates a cancelable context. A non-positive timeout
+// intentionally means no deadline, so long-running conversations continue
+// until they finish or the user cancels them.
+func conversationContext(timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout <= 0 {
+		return context.WithCancel(context.Background())
+	}
+	return context.WithTimeout(context.Background(), timeout)
+}
+
 func runBatch(cfg config.Config, prompt string, timeout time.Duration, maxTurns int) error {
 	application, err := app.New(cfg)
 	if err != nil {
@@ -82,7 +92,7 @@ func runBatch(cfg config.Config, prompt string, timeout time.Duration, maxTurns 
 	}
 	defer func() { _ = application.Close() }()
 
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := conversationContext(timeout)
 	defer cancel()
 
 	result, err := application.RunPrompt(ctx, prompt, cfg.WorkDir, maxTurns)
@@ -234,7 +244,7 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 	})
 
 	submit := func(prompt string) (tea.Cmd, func()) {
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		ctx, cancel := conversationContext(timeout)
 		cmd := func() tea.Msg {
 			defer cancel()
 			currentSessionID := cfg.Session.DefaultSession
@@ -381,10 +391,7 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 			providers := make([]tui.DialogItem, 0, len(cfg.Providers))
 			for _, p := range cfg.Providers {
 				current := cfg.Provider == p.Name
-				subtitle := p.Type
-				if p.BaseURL != "" {
-					subtitle += " · " + p.BaseURL
-				}
+				subtitle := p.BaseURL
 				providers = append(providers, tui.DialogItem{
 					Label:    p.Name,
 					Subtitle: subtitle,
@@ -825,6 +832,7 @@ func handleNewSessionCommand(cfg *config.Config, application *app.App, args, per
 	}
 	s.Metadata.Title = name
 	s.Metadata.CrossSessionMemory = &crossSessionMemory
+	s.Metadata.MemoryBootstrapPending = crossSessionMemory
 	if err := application.Sessions.Save(context.Background(), s); err != nil {
 		return tui.SelectResult{Message: fmt.Sprintf("Could not save session %q: %v", name, err)}
 	}

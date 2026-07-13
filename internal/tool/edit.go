@@ -14,6 +14,7 @@ type EditParams struct {
 	FilePath  string `json:"file_path"`
 	OldString string `json:"old_string"`
 	NewString string `json:"new_string"`
+	Desc      string `json:"desc,omitempty"`
 }
 
 const EditToolName = "Edit"
@@ -31,6 +32,18 @@ func (e *editTool) Name() string                         { return EditToolName }
 func (e *editTool) IsDestructive(_ json.RawMessage) bool { return true }
 func (e *editTool) IsReadOnly(_ json.RawMessage) bool    { return false }
 
+func (e *editTool) ValidateInput(_ context.Context, input json.RawMessage) error {
+	var params EditParams
+	if err := json.Unmarshal(input, &params); err != nil {
+		return err
+	}
+	_, errText := validateChangeDescription(params.Desc)
+	if errText != "" {
+		return fmt.Errorf("%s", errText)
+	}
+	return nil
+}
+
 func (e *editTool) Description() string {
 	return `Edits files by replacing text with exact string matching.
 Use this for small, precise changes. For larger edits, use the Write tool.
@@ -39,6 +52,7 @@ Requirements:
 1. file_path: Absolute or relative path to the file
 2. old_string: The text to replace (must be UNIQUE in the file, must match exactly)
 3. new_string: The replacement text
+4. desc (optional): A change description of up to 30 Chinese characters
 
 Special cases:
 - To create a new file: provide file_path and new_string, leave old_string empty
@@ -67,6 +81,11 @@ func (e *editTool) InputSchema() map[string]any {
 				"type":        "string",
 				"description": "The text to replace it with",
 			},
+			"desc": map[string]any{
+				"type":        "string",
+				"description": "Optional description of this change (up to 30 Chinese characters)",
+				"maxLength":   maxChangeDescriptionRunes,
+			},
 		},
 		"required": []string{"file_path", "old_string", "new_string"},
 	}
@@ -81,6 +100,10 @@ func (e *editTool) Invoke(ctx context.Context, uctx *UseContext, input json.RawM
 	if params.FilePath == "" {
 		return ErrorResult("file_path is required"), nil
 	}
+	desc, errText := validateChangeDescription(params.Desc)
+	if errText != "" {
+		return ErrorResult(errText), nil
+	}
 
 	filePath := params.FilePath
 	if !filepath.IsAbs(filePath) {
@@ -89,19 +112,19 @@ func (e *editTool) Invoke(ctx context.Context, uctx *UseContext, input json.RawM
 
 	// Case 1: Create new file
 	if params.OldString == "" {
-		return e.createFile(filePath, params.NewString)
+		return e.createFile(ctx, uctx, filePath, params.NewString, desc)
 	}
 
 	// Case 2: Delete content
 	if params.NewString == "" {
-		return e.deleteContent(filePath, params.OldString)
+		return e.deleteContent(ctx, uctx, filePath, params.OldString, desc)
 	}
 
 	// Case 3: Replace content
-	return e.replaceContent(filePath, params.OldString, params.NewString)
+	return e.replaceContent(ctx, uctx, filePath, params.OldString, params.NewString, desc)
 }
 
-func (e *editTool) createFile(filePath, content string) (*ContentBlock, error) {
+func (e *editTool) createFile(ctx context.Context, uctx *UseContext, filePath, content, desc string) (*ContentBlock, error) {
 	if info, err := os.Stat(filePath); err == nil {
 		if info.IsDir() {
 			return ErrorResult(fmt.Sprintf("path is a directory, not a file: %s", filePath)), nil
@@ -117,6 +140,7 @@ func (e *editTool) createFile(filePath, content string) (*ContentBlock, error) {
 	if err := os.WriteFile(filePath, []byte(content), 0o644); err != nil {
 		return ErrorResult(fmt.Sprintf("error writing file: %v", err)), nil
 	}
+	recordFileChange(ctx, uctx, EditToolName, filePath, desc, "", content)
 
 	diff := GenerateSimpleDiff("", content, filePath)
 	additions, removals := CountDiffChanges(diff)
@@ -130,7 +154,7 @@ func (e *editTool) createFile(filePath, content string) (*ContentBlock, error) {
 	return Result(result.String()), nil
 }
 
-func (e *editTool) deleteContent(filePath, oldString string) (*ContentBlock, error) {
+func (e *editTool) deleteContent(ctx context.Context, uctx *UseContext, filePath, oldString, desc string) (*ContentBlock, error) {
 	info, err := os.Stat(filePath)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("file not found: %s", filePath)), nil
@@ -160,6 +184,7 @@ func (e *editTool) deleteContent(filePath, oldString string) (*ContentBlock, err
 	if err := os.WriteFile(filePath, []byte(newContent), 0o644); err != nil {
 		return ErrorResult(fmt.Sprintf("error writing file: %v", err)), nil
 	}
+	recordFileChange(ctx, uctx, EditToolName, filePath, desc, content, newContent)
 
 	diff := GenerateSimpleDiff(content, newContent, filePath)
 	additions, removals := CountDiffChanges(diff)
@@ -173,7 +198,7 @@ func (e *editTool) deleteContent(filePath, oldString string) (*ContentBlock, err
 	return Result(result.String()), nil
 }
 
-func (e *editTool) replaceContent(filePath, oldString, newString string) (*ContentBlock, error) {
+func (e *editTool) replaceContent(ctx context.Context, uctx *UseContext, filePath, oldString, newString, desc string) (*ContentBlock, error) {
 	info, err := os.Stat(filePath)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("file not found: %s", filePath)), nil
@@ -207,6 +232,7 @@ func (e *editTool) replaceContent(filePath, oldString, newString string) (*Conte
 	if err := os.WriteFile(filePath, []byte(newContent), 0o644); err != nil {
 		return ErrorResult(fmt.Sprintf("error writing file: %v", err)), nil
 	}
+	recordFileChange(ctx, uctx, EditToolName, filePath, desc, content, newContent)
 
 	// Generate diff for display
 	diff := GenerateSimpleDiff(content, newContent, filePath)

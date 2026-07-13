@@ -62,6 +62,7 @@ type Config struct {
 	OnUsage          func(Usage)
 	OnAskUser        func(ctx context.Context, params tool.AskUserParams) (map[string]string, error)
 	QueuedPrompts    func() []string
+	RecordFileChange func(ctx context.Context, uctx *tool.UseContext, change tool.FileChange)
 }
 
 type Engine struct {
@@ -77,11 +78,12 @@ func (e *Engine) UpdateConfig(config Config) {
 }
 
 type RunRequest struct {
-	AgentConfig    agent.AgentConfig
-	SessionID      string
-	Messages       []sdk.MessageParam
-	SessionSummary string
-	MemoryContext  []ContextItem
+	AgentConfig      agent.AgentConfig
+	SessionID        string
+	Messages         []sdk.MessageParam
+	SessionSummary   string
+	MemoryContext    []ContextItem
+	ProjectKnowledge string
 }
 
 type RunResult struct {
@@ -165,17 +167,18 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 			modelName = e.config.ModelName
 		}
 		req := builder.Build(BuildRequest{
-			Model:          modelName,
-			MaxTokens:      e.config.MaxTokens,
-			WorkDir:        cfg.WorkDir,
-			Messages:       messages,
-			Tools:          tools,
-			Thinking:       e.config.Thinking,
-			ThinkingText:   e.config.ThinkingText,
-			Effort:         e.config.Effort,
-			Stream:         e.config.Stream,
-			SessionSummary: runReq.SessionSummary,
-			MemoryContext:  runReq.MemoryContext,
+			Model:            modelName,
+			ProjectKnowledge: runReq.ProjectKnowledge,
+			MaxTokens:        e.config.MaxTokens,
+			WorkDir:          cfg.WorkDir,
+			Messages:         messages,
+			Tools:            tools,
+			Thinking:         e.config.Thinking,
+			ThinkingText:     e.config.ThinkingText,
+			Effort:           e.config.Effort,
+			Stream:           e.config.Stream,
+			SessionSummary:   runReq.SessionSummary,
+			MemoryContext:    runReq.MemoryContext,
 		})
 		if isMain {
 			req.OnTextDelta = e.config.OnTextDelta
@@ -187,17 +190,18 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 			return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: err.Error()}, Messages: messages}
 		}
 		estimatedContextTokens := builder.EstimateContextTokens(BuildRequest{
-			Model:          modelName,
-			MaxTokens:      e.config.MaxTokens,
-			WorkDir:        cfg.WorkDir,
-			Messages:       messages[:len(messages)-1],
-			Tools:          tools,
-			Thinking:       e.config.Thinking,
-			ThinkingText:   e.config.ThinkingText,
-			Effort:         e.config.Effort,
-			Stream:         e.config.Stream,
-			SessionSummary: runReq.SessionSummary,
-			MemoryContext:  runReq.MemoryContext,
+			Model:            modelName,
+			ProjectKnowledge: runReq.ProjectKnowledge,
+			MaxTokens:        e.config.MaxTokens,
+			WorkDir:          cfg.WorkDir,
+			Messages:         messages[:len(messages)-1],
+			Tools:            tools,
+			Thinking:         e.config.Thinking,
+			ThinkingText:     e.config.ThinkingText,
+			Effort:           e.config.Effort,
+			Stream:           e.config.Stream,
+			SessionSummary:   runReq.SessionSummary,
+			MemoryContext:    runReq.MemoryContext,
 		}) + int64(tokenest.Text(prompt))
 		if isMain && e.config.OnUsage != nil {
 			e.config.OnUsage(Usage{
@@ -241,7 +245,12 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 					AgentID:   string(cfg.ID),
 					TodoPath:  e.config.TodoPath,
 					FastModel: e.config.FastModelName,
-					AskUser:   e.config.OnAskUser,
+					RecordFileChange: func(changeCtx context.Context, change tool.FileChange) {
+						if e.config.RecordFileChange != nil {
+							e.config.RecordFileChange(changeCtx, &tool.UseContext{SessionID: nonEmpty(runReq.SessionID, string(cfg.ID)), WorkDir: cfg.WorkDir}, change)
+						}
+					},
+					AskUser: e.config.OnAskUser,
 				},
 			})
 			if err := ctx.Err(); err != nil {
