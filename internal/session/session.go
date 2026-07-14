@@ -26,11 +26,51 @@ type Metadata struct {
 	UpdatedAt                    time.Time `json:"updated_at"`
 }
 
+const (
+	CompactedSummaryPrefix          = "Compacted session summary:\n"
+	CompactedProjectKnowledgePrefix = "Compacted project knowledge:\n"
+)
+
 type Session struct {
 	Metadata          Metadata           `json:"metadata"`
 	Messages          []sdk.MessageParam `json:"messages,omitempty"`
 	MessageTimestamps []time.Time        `json:"message_timestamps,omitempty"`
 	Summary           string             `json:"summary,omitempty"`
+}
+
+// NewCompactedSummaryMessage creates the durable user message that represents
+// history removed by compaction. The summary is also stored in Session.Summary
+// for direct access and backwards-compatible session files.
+func NewCompactedSummaryMessage(summary string) sdk.MessageParam {
+	return sdk.NewUserMessage(sdk.NewTextBlock(CompactedSummaryPrefix + strings.TrimSpace(summary)))
+}
+
+// NewCompactedProjectKnowledgeMessage creates the durable project knowledge
+// message captured at the same time as a session compaction.
+func NewCompactedProjectKnowledgeMessage(knowledge string) sdk.MessageParam {
+	return sdk.NewUserMessage(sdk.NewTextBlock(CompactedProjectKnowledgePrefix + strings.TrimSpace(knowledge)))
+}
+
+// IsCompactedSummaryMessage identifies the durable summary message created by
+// NewCompactedSummaryMessage. It must not be treated as transient context.
+func IsCompactedSummaryMessage(message sdk.MessageParam) bool {
+	return isCompactedContextMessage(message, CompactedSummaryPrefix)
+}
+
+func IsCompactedProjectKnowledgeMessage(message sdk.MessageParam) bool {
+	return isCompactedContextMessage(message, CompactedProjectKnowledgePrefix)
+}
+
+func isCompactedContextMessage(message sdk.MessageParam, prefix string) bool {
+	if string(message.Role) != "user" {
+		return false
+	}
+	for _, block := range message.Content {
+		if block.OfText != nil && strings.HasPrefix(strings.TrimSpace(block.OfText.Text), prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 type Store interface {
@@ -194,6 +234,64 @@ func (s *Session) CopyMessages() []sdk.MessageParam {
 	}
 	out := make([]sdk.MessageParam, len(s.Messages))
 	copy(out, s.Messages)
+	return out
+}
+
+func (s *Session) HasCompactedSummaryMessage() bool {
+	return s.hasCompactedContextMessage(IsCompactedSummaryMessage)
+}
+
+func (s *Session) HasCompactedProjectKnowledgeMessage() bool {
+	return s.hasCompactedContextMessage(IsCompactedProjectKnowledgeMessage)
+}
+
+func (s *Session) hasCompactedContextMessage(matches func(sdk.MessageParam) bool) bool {
+	if s == nil {
+		return false
+	}
+	for _, message := range s.Messages {
+		if matches(message) {
+			return true
+		}
+	}
+	return false
+}
+
+// CompactedContextMessages builds the durable leading context messages created
+// by a compaction. Summary is first and project knowledge is second.
+func CompactedContextMessages(summary, projectKnowledge string) []sdk.MessageParam {
+	messages := make([]sdk.MessageParam, 0, 2)
+	if summary = strings.TrimSpace(summary); summary != "" {
+		messages = append(messages, NewCompactedSummaryMessage(summary))
+	}
+	if projectKnowledge = strings.TrimSpace(projectKnowledge); projectKnowledge != "" {
+		messages = append(messages, NewCompactedProjectKnowledgeMessage(projectKnowledge))
+	}
+	return messages
+}
+
+// StripCompactedSummaryMessages removes the durable copy of a prior summary
+// before generating its replacement. Session.Summary is supplied to the
+// summary writer separately as the previous summary.
+func StripCompactedSummaryMessages(messages []sdk.MessageParam) []sdk.MessageParam {
+	out := make([]sdk.MessageParam, 0, len(messages))
+	for _, message := range messages {
+		if !IsCompactedSummaryMessage(message) {
+			out = append(out, message)
+		}
+	}
+	return out
+}
+
+// StripCompactedContextMessages removes durable compaction context before a
+// new compaction replaces it with the current summary and project knowledge.
+func StripCompactedContextMessages(messages []sdk.MessageParam) []sdk.MessageParam {
+	out := make([]sdk.MessageParam, 0, len(messages))
+	for _, message := range messages {
+		if !IsCompactedSummaryMessage(message) && !IsCompactedProjectKnowledgeMessage(message) {
+			out = append(out, message)
+		}
+	}
 	return out
 }
 

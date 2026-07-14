@@ -76,11 +76,11 @@ func (b ContextBuilder) withContextMessages(messages []sdk.MessageParam, session
 
 func (b ContextBuilder) contextBlock(sessionSummary string, memoryContext []ContextItem, projectKnowledge string) string {
 	var parts []string
-	if cleaned := sanitizeContextSessionSummary(sessionSummary); cleaned != "" {
-		parts = append(parts, "Session summary:\n"+cleaned)
-	}
 	if knowledge := strings.TrimSpace(projectKnowledge); knowledge != "" {
 		parts = append(parts, "Project knowledge context:\n"+knowledge)
+	}
+	if cleaned := sanitizeContextSessionSummary(sessionSummary); cleaned != "" {
+		parts = append(parts, "Session summary:\n"+cleaned)
 	}
 	if len(memoryContext) > 0 {
 		parts = append(parts, "Retrieved memory:\n"+formatMemoryContext(memoryContext))
@@ -96,6 +96,10 @@ var (
 )
 
 func sanitizeContextSessionSummary(summary string) string {
+	lower := strings.ToLower(strings.TrimSpace(summary))
+	if strings.Contains(lower, "文件变更图上下文") && strings.Contains(lower, "旧 session 对话压缩结果") {
+		return ""
+	}
 	lines := strings.Split(strings.TrimSpace(summary), "\n")
 	out := make([]string, 0, len(lines))
 	seen := map[string]bool{}
@@ -119,7 +123,11 @@ func sanitizeContextSessionSummaryLine(line string) string {
 		return ""
 	}
 	lower := strings.ToLower(line)
-	if strings.HasPrefix(lower, "session summary:") || strings.HasPrefix(lower, "retrieved memory:") || strings.HasPrefix(lower, "assistant: ") || strings.HasPrefix(lower, "user: ") {
+	if strings.HasPrefix(lower, "session summary:") ||
+		strings.HasPrefix(lower, "recent session state:") ||
+		strings.HasPrefix(lower, "retrieved memory:") ||
+		strings.HasPrefix(lower, "assistant: ") ||
+		strings.HasPrefix(lower, "user: ") {
 		return ""
 	}
 	if strings.HasPrefix(line, "```") || contextSummaryLineNumberPattern.MatchString(line) || contextSummaryNamedLineNumberPattern.MatchString(line) || contextSummaryDiffLinePattern.MatchString(line) || strings.HasPrefix(line, "@@") || strings.HasPrefix(line, "diff --git") || strings.HasPrefix(line, "+++") || strings.HasPrefix(line, "---") {
@@ -135,6 +143,8 @@ func sanitizeContextSessionSummaryLine(line string) string {
 		return ""
 	}
 	noiseMarkers := []string{
+		"(file has ",
+		"more lines. use 'offset' parameter",
 		`"old_string"`,
 		`"new_string"`,
 		`"patch_text"`,
@@ -159,6 +169,9 @@ func sanitizeContextSessionSummaryLine(line string) string {
 		"先把",
 		"这份 `session summary`",
 		"旧 session summary",
+		"文件变更图上下文",
+		"旧 session 对话压缩结果",
+		"用户最新 prompt",
 		"漏网噪声",
 		"漏网模式",
 		"prior summary context",

@@ -164,14 +164,28 @@ func TestTUIModelFileMutationOutputForcesExpandedEvenIfCollapsedStateIsSet(t *te
 	}
 }
 
-func TestTUIModelWelcomeRendersLogoStyle(t *testing.T) {
+func TestTUIModelWelcomeRendersCenteredLogo(t *testing.T) {
 	model := newTUI(t)
 	view := model.View()
-	if !strings.Contains(view, "✦ solcode") || !strings.Contains(view, "Welcome to solcode") {
-		t.Fatalf("expected logo-style welcome in view: %s", view)
+	if !strings.Contains(view, "☀") || !strings.Contains(view, "solcode") || !strings.Contains(view, "Welcome to solcode") {
+		t.Fatalf("expected centered logo-style welcome in view: %s", view)
 	}
-	if strings.Contains(view, "solcode TUI") {
-		t.Fatalf("expected old prose welcome to be replaced: %s", view)
+	if strings.Contains(view, "✦ solcode") || strings.Contains(view, "solcode TUI") {
+		t.Fatalf("expected old logo/prose welcome to be replaced: %s", view)
+	}
+
+	lines := strings.Split(view, "\n")
+	sunLine, wordLine := -1, -1
+	for i, line := range lines {
+		if sunLine < 0 && strings.Contains(line, "☀") {
+			sunLine = i
+		}
+		if wordLine < 0 && strings.Contains(line, "solcode") && !strings.Contains(line, "Welcome") {
+			wordLine = i
+		}
+	}
+	if sunLine < 0 || wordLine != sunLine+1 {
+		t.Fatalf("expected sun directly above solcode, got sun line %d and word line %d", sunLine, wordLine)
 	}
 }
 

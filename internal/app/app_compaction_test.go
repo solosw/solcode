@@ -2,10 +2,13 @@ package app
 
 import (
 	"context"
+	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
+	"github.com/solosw/solcode/internal/changegraph"
 	"github.com/solosw/solcode/internal/config"
 	"github.com/solosw/solcode/internal/session"
 )
@@ -127,6 +130,120 @@ func TestMemoryRetrievalBudgetCapsAtTenPercent(t *testing.T) {
 	}
 }
 
+type recordingSummaryWriter struct {
+	called     bool
+	previous   string
+	transcript string
+	summary    string
+	err        error
+}
+
+func (w *recordingSummaryWriter) Summarize(_ context.Context, previous, transcript string) (string, error) {
+	w.called = true
+	w.previous = previous
+	w.transcript = transcript
+	if w.err != nil {
+		return "", w.err
+	}
+	if w.summary != "" {
+		return w.summary, nil
+	}
+	return "AI-generated session summary", nil
+}
+
+func TestCompactSessionFailsWhenAISummaryFails(t *testing.T) {
+	cfg := config.Default()
+	cfg.MaxContextTokens = 100
+	cfg.Memory.CompactionTriggerPercent = 1
+	writer := &recordingSummaryWriter{err: errors.New("summary API unavailable")}
+	application := &App{Config: cfg, summaryWriter: writer}
+	current := session.NewSession("named", t.TempDir(), cfg.Model)
+	current.Append(sdk.NewUserMessage(sdk.NewTextBlock("preserve this history")))
+
+	changed, err := application.compactSession(context.Background(), current, false)
+	if err == nil || !strings.Contains(err.Error(), "summary API unavailable") {
+		t.Fatalf("compactSession() error = %v, want AI summary failure", err)
+	}
+	if changed {
+		t.Fatal("failed AI summary must not report a changed session")
+	}
+	if len(current.Messages) == 0 {
+		t.Fatal("failed AI summary must preserve session history")
+	}
+}
+
+func TestRefreshSessionSummaryUsesAIAndPersistsResult(t *testing.T) {
+	cfg := config.Default()
+	cfg.Session.Enabled = true
+	cfg.Session.Persist = true
+	cfg.Session.Dir = t.TempDir()
+	writer := &recordingSummaryWriter{summary: "background AI summary"}
+	application := &App{
+		Config:        cfg,
+		Sessions:      session.NewManager(session.NewFileStore(cfg.Session.Dir), "main"),
+		summaryWriter: writer,
+	}
+	current := session.NewSession("main", t.TempDir(), cfg.Model)
+	current.Summary = "previous summary"
+	current.Metadata.MemorySummaryCompleted = true
+	current.Append(
+		sdk.NewUserMessage(sdk.NewTextBlock("finish the session summary feature")),
+		sdk.NewAssistantMessage(sdk.NewTextBlock("implemented the AI summary request")),
+	)
+	if err := application.Sessions.Save(context.Background(), current); err != nil {
+		t.Fatalf("save setup session: %v", err)
+	}
+
+	if err := application.refreshSessionSummary(context.Background(), "main", current.Metadata.WorkDir); err != nil {
+		t.Fatalf("refreshSessionSummary() = %v", err)
+	}
+	if !writer.called || writer.previous != "previous summary" || !strings.Contains(writer.transcript, "finish the session summary feature") {
+		t.Fatalf("summary writer input = called %v, previous %q, transcript %q", writer.called, writer.previous, writer.transcript)
+	}
+	stored, err := application.Sessions.LoadOrCreate(context.Background(), "main", current.Metadata.WorkDir, cfg.Model)
+	if err != nil {
+		t.Fatalf("reload summarized session: %v", err)
+	}
+	if stored.Summary != "background AI summary" || !stored.Metadata.MemorySummaryCompleted {
+		t.Fatalf("stored summary state = summary %q, completed %v", stored.Summary, stored.Metadata.MemorySummaryCompleted)
+	}
+	if len(stored.Messages) != 2 {
+		t.Fatalf("background summary must preserve messages, got %d", len(stored.Messages))
+	}
+}
+
+func TestCompactSessionUsesAISummaryWriter(t *testing.T) {
+	cfg := config.Default()
+	cfg.MaxContextTokens = 100
+	cfg.Memory.CompactionTriggerPercent = 1
+	cfg.Memory.CompactionTargetPercent = 1
+	writer := &recordingSummaryWriter{}
+	application := &App{Config: cfg, summaryWriter: writer}
+	current := session.NewSession("named", t.TempDir(), cfg.Model)
+	current.Summary = "previous session context"
+	current.Append(
+		sdk.NewUserMessage(sdk.NewTextBlock("implement token validation")),
+		sdk.NewAssistantMessage(sdk.NewTextBlock("implemented validation in auth.go")),
+	)
+
+	changed, err := application.compactSession(context.Background(), current, false)
+	if err != nil {
+		t.Fatalf("compactSession() = %v", err)
+	}
+	if !changed {
+		t.Fatal("expected compaction to change session")
+	}
+	if !writer.called {
+		t.Fatal("expected compaction to invoke the AI summary writer")
+	}
+	if writer.previous != "previous session context" || !strings.Contains(writer.transcript, "implement token validation") {
+		t.Fatalf("summary writer input = previous %q, transcript %q", writer.previous, writer.transcript)
+	}
+	if current.Summary != "AI-generated session summary" {
+		t.Fatalf("summary = %q, want AI-generated summary", current.Summary)
+	}
+}
+
 func TestCompactSessionPersistsOnlyConciseSummary(t *testing.T) {
 	cfg := config.Default()
 	cfg.MaxContextTokens = 100
@@ -139,21 +256,192 @@ func TestCompactSessionPersistsOnlyConciseSummary(t *testing.T) {
 		sdk.NewAssistantMessage(sdk.NewTextBlock("implemented validation in auth.go")),
 	)
 
-	changed, err := application.compactSession(context.Background(), current)
+	changed, err := application.compactSession(context.Background(), current, false)
 	if err != nil {
 		t.Fatalf("compactSession() = %v", err)
 	}
 	if !changed {
 		t.Fatal("expected compaction to change session")
 	}
-	if len(current.Messages) != 0 {
-		t.Fatalf("messages after compaction = %#v, want no old history", current.Messages)
+	if len(current.Messages) != 1 || !session.IsCompactedSummaryMessage(current.Messages[0]) {
+		t.Fatalf("messages after compaction = %#v, want one durable summary message", current.Messages)
 	}
 	if !strings.HasPrefix(current.Summary, "Recent session state:\n") {
 		t.Fatalf("summary = %q, want concise session state", current.Summary)
 	}
 	if strings.Contains(current.Summary, "Files and Code Sections") || strings.Contains(current.Summary, "Retrieved memory") {
 		t.Fatalf("summary should not contain legacy sections: %q", current.Summary)
+	}
+}
+
+func TestManualCompactSessionPersistsSummaryAndUserMessage(t *testing.T) {
+	cfg := config.Default()
+	cfg.Session.Enabled = true
+	cfg.Session.Persist = true
+	cfg.Session.Dir = t.TempDir()
+	cfg.MaxContextTokens = 100_000
+	graph, err := changegraph.Open(filepath.Join(t.TempDir(), "knowledge.db"))
+	if err != nil {
+		t.Fatalf("open change graph: %v", err)
+	}
+	defer func() { _ = graph.Close() }()
+	if err := graph.Record(context.Background(), changegraph.Change{
+		SessionID:   "main",
+		Path:        "internal/session/session.go",
+		Language:    "go",
+		Description: "add durable compacted context messages",
+	}); err != nil {
+		t.Fatalf("record change graph event: %v", err)
+	}
+	application := &App{
+		Config:      cfg,
+		Sessions:    session.NewManager(session.NewFileStore(cfg.Session.Dir), "main"),
+		ChangeGraph: graph,
+	}
+	current := session.NewSession("main", t.TempDir(), cfg.Model)
+	current.Append(
+		sdk.NewUserMessage(sdk.NewTextBlock("preserve the active implementation request")),
+		sdk.NewAssistantMessage(sdk.NewTextBlock("completed the initial investigation")),
+	)
+	if err := application.Sessions.Save(context.Background(), current); err != nil {
+		t.Fatalf("save setup session: %v", err)
+	}
+
+	compacted, changed, err := application.CompactSession(context.Background(), "main", current.Metadata.WorkDir)
+	if err != nil {
+		t.Fatalf("CompactSession() = %v", err)
+	}
+	if !changed || compacted == nil {
+		t.Fatalf("CompactSession() = (%#v, %v), want changed session", compacted, changed)
+	}
+	if strings.TrimSpace(compacted.Summary) == "" {
+		t.Fatal("manual compaction must persist a non-empty Summary field")
+	}
+	if len(compacted.Messages) != 2 || !session.IsCompactedSummaryMessage(compacted.Messages[0]) || !session.IsCompactedProjectKnowledgeMessage(compacted.Messages[1]) {
+		t.Fatalf("compacted messages = %#v, want durable summary then project knowledge user messages", compacted.Messages)
+	}
+	if got := sessionSummaryForRequest(compacted); got != "" {
+		t.Fatalf("sessionSummaryForRequest() = %q, want no duplicate ephemeral summary", got)
+	}
+
+	stored, err := application.Sessions.LoadOrCreate(context.Background(), "main", current.Metadata.WorkDir, cfg.Model)
+	if err != nil {
+		t.Fatalf("reload compacted session: %v", err)
+	}
+	if stored.Summary != compacted.Summary {
+		t.Fatalf("stored summary = %q, want %q", stored.Summary, compacted.Summary)
+	}
+	if len(stored.Messages) != 2 || !session.IsCompactedSummaryMessage(stored.Messages[0]) || !session.IsCompactedProjectKnowledgeMessage(stored.Messages[1]) {
+		t.Fatalf("stored messages = %#v, want durable summary then project knowledge messages", stored.Messages)
+	}
+	if got := application.projectKnowledgeForRequest(context.Background(), stored, "next user request"); got != "" {
+		t.Fatalf("projectKnowledgeForRequest() = %q, want no duplicate ephemeral project knowledge", got)
+	}
+	originalSummaryMessage := stored.Messages[0].Content[0].OfText.Text
+	stored.Append(
+		sdk.NewUserMessage(sdk.NewTextBlock("apply the follow-up change")),
+		sdk.NewAssistantMessage(sdk.NewTextBlock("follow-up change completed")),
+	)
+	if err := application.Sessions.Save(context.Background(), stored); err != nil {
+		t.Fatalf("save follow-up session: %v", err)
+	}
+	updated, changed, err := application.CompactSession(context.Background(), "main", current.Metadata.WorkDir)
+	if err != nil {
+		t.Fatalf("second CompactSession() = %v", err)
+	}
+	if !changed || len(updated.Messages) != 2 || !session.IsCompactedSummaryMessage(updated.Messages[0]) || !session.IsCompactedProjectKnowledgeMessage(updated.Messages[1]) {
+		t.Fatalf("updated messages = %#v, want replacement summary then project knowledge", updated.Messages)
+	}
+	if got := updated.Messages[0].Content[0].OfText.Text; got == originalSummaryMessage || !strings.Contains(got, "follow-up change completed") {
+		t.Fatalf("replacement summary = %q, want new follow-up state", got)
+	}
+}
+
+func TestCompactSessionCreatesSummaryWhenComposedContextTriggers(t *testing.T) {
+	cfg := config.Default()
+	cfg.MaxContextTokens = 100
+	cfg.Memory.CompactionTriggerPercent = 85
+	cfg.Memory.CompactionTargetPercent = 50
+	cfg.SystemPrompt = strings.Repeat("system context ", 80)
+	application := &App{Config: cfg}
+	current := session.NewSession("named", t.TempDir(), cfg.Model)
+	current.Append(
+		sdk.NewUserMessage(sdk.NewTextBlock("preserve this user request")),
+		sdk.NewAssistantMessage(sdk.NewTextBlock("preserve this completed outcome")),
+	)
+	if session.ApproxTokensFromMessages(current.Messages) >= application.compactionTriggerTokens() {
+		t.Fatal("test setup requires messages alone below the trigger")
+	}
+
+	changed, err := application.compactSession(context.Background(), current, false)
+	if err != nil {
+		t.Fatalf("compactSession() = %v", err)
+	}
+	if !changed {
+		t.Fatal("expected composed request threshold to create a session summary")
+	}
+	if len(current.Messages) != 1 || !session.IsCompactedSummaryMessage(current.Messages[0]) {
+		t.Fatalf("messages after compaction = %d, want one durable summary message", len(current.Messages))
+	}
+	for _, want := range []string{"preserve this user request", "preserve this completed outcome"} {
+		if !strings.Contains(current.Summary, want) {
+			t.Fatalf("summary = %q, want %q", current.Summary, want)
+		}
+	}
+}
+
+func TestConciseSessionSummaryKeepsUserIntentWithoutRolePrefix(t *testing.T) {
+	summary := conciseSessionSummary("user: Continue custom provider setup\nassistant: I will continue.", "")
+	if !strings.Contains(summary, "Continue custom provider setup") {
+		t.Fatalf("summary = %q, want user intent", summary)
+	}
+	if strings.Contains(strings.ToLower(summary), "user:") {
+		t.Fatalf("summary must not retain a user role prefix: %q", summary)
+	}
+}
+
+func TestConciseSessionSummaryDropsViewPaginationNoise(t *testing.T) {
+	transcript := strings.Join([]string{
+		"user: Fix session compaction",
+		"assistant: Investigated the compaction flow.",
+		"user: [tool result]",
+		"(File has 1038 more lines. Use 'offset' parameter to read beyond line 260)",
+		"assistant: Session compaction now preserves the prior conversation.",
+	}, "\n")
+	summary := conciseSessionSummary(transcript, "")
+	for _, want := range []string{"Fix session compaction", "Session compaction now preserves the prior conversation."} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("summary = %q, want %q", summary, want)
+		}
+	}
+	if strings.Contains(strings.ToLower(summary), "file has") || strings.Contains(strings.ToLower(summary), "offset") {
+		t.Fatalf("summary must not retain View pagination noise: %q", summary)
+	}
+}
+
+func TestSanitizeLoadedSessionSummaryRemovesViewPaginationNoise(t *testing.T) {
+	polluted := "Recent session state:\n- (File has 1038 more lines. Use 'offset' parameter to read beyond line 260)"
+	if got := sanitizeLoadedSessionSummary(polluted); got != "" {
+		t.Fatalf("sanitized pagination-only summary = %q, want empty", got)
+	}
+}
+
+func TestSanitizeLoadedSessionSummaryRemovesEmptyRecentSessionState(t *testing.T) {
+	if got := sanitizeLoadedSessionSummary("Recent session state:"); got != "" {
+		t.Fatalf("sanitized empty summary = %q, want empty", got)
+	}
+}
+
+func TestSanitizeLoadedSessionSummaryRemovesPlaceholderOutline(t *testing.T) {
+	polluted := strings.Join([]string{
+		"文件变更图上下文",
+		"旧 session 对话压缩结果",
+		"用户最新 prompt",
+		"go test ./internal/app ./internal/engine ./internal/session ./cmd/solcode",
+		"go build -o solcode.exe ./cmd/solcode",
+	}, "\n")
+	if got := sanitizeLoadedSessionSummary(polluted); got != "" {
+		t.Fatalf("sanitized placeholder summary = %q, want empty", got)
 	}
 }
 

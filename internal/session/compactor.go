@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
@@ -19,6 +20,9 @@ type CompactOptions struct {
 	SummaryThresholdTokens int
 	TargetTokens           int
 	EstimatedTokens        int
+	// Force compacts non-empty history even when it is below the automatic
+	// threshold. It is used by an explicit user /compact command.
+	Force bool
 }
 
 type CompactResult struct {
@@ -31,7 +35,7 @@ type CompactResult struct {
 	Changed             bool
 }
 
-func Compact(ctx context.Context, summary string, messages []sdk.MessageParam, _ SummaryWriter, opts CompactOptions) (CompactResult, error) {
+func Compact(ctx context.Context, summary string, messages []sdk.MessageParam, writer SummaryWriter, opts CompactOptions) (CompactResult, error) {
 	messages = StripEphemeralContextMessages(messages)
 	result := CompactResult{Summary: summary, Messages: append([]sdk.MessageParam(nil), messages...)}
 	if err := ctx.Err(); err != nil {
@@ -51,7 +55,7 @@ func Compact(ctx context.Context, summary string, messages []sdk.MessageParam, _
 	if estimated <= 0 {
 		estimated = ApproxTokensFromMessages(working)
 	}
-	if estimated < threshold {
+	if estimated < threshold && !opts.Force {
 		return result, nil
 	}
 	keep := opts.MaxRecentTurns
@@ -69,6 +73,19 @@ func Compact(ctx context.Context, summary string, messages []sdk.MessageParam, _
 	originalTranscript := Transcript(working)
 	if strings.TrimSpace(originalTranscript) == "" {
 		return result, nil
+	}
+	if writer != nil {
+		// Summary generation is intentionally delegated to the model. Headroom
+		// still handles message compaction, while the model preserves intent,
+		// decisions, file changes, and unresolved work in natural language.
+		generated, err := writer.Summarize(ctx, summary, originalTranscript)
+		if err != nil {
+			return result, fmt.Errorf("generate session summary with AI: %w", err)
+		}
+		result.Summary = strings.TrimSpace(generated)
+		if result.Summary == "" {
+			return result, fmt.Errorf("generate session summary with AI: empty response")
+		}
 	}
 	compressedMessages, err := compressMessagesWithHeadroom(working, target)
 	if err != nil {
@@ -95,7 +112,7 @@ func Compact(ctx context.Context, summary string, messages []sdk.MessageParam, _
 	changed := sessionTranscript(messages) != retainedTranscript
 	if !changed {
 		return CompactResult{
-			Summary:             summary,
+			Summary:             result.Summary,
 			Messages:            append([]sdk.MessageParam(nil), messages...),
 			OriginalTranscript:  originalTranscript,
 			CompactedTranscript: compactedTranscript,
@@ -105,7 +122,7 @@ func Compact(ctx context.Context, summary string, messages []sdk.MessageParam, _
 		}, nil
 	}
 	return CompactResult{
-		Summary:             "",
+		Summary:             result.Summary,
 		Messages:            retained,
 		OriginalTranscript:  originalTranscript,
 		CompactedTranscript: compactedTranscript,
@@ -228,8 +245,8 @@ func compactionMessages(_ string, messages []sdk.MessageParam) []sdk.MessagePara
 // history. This also cleans older sessions that accidentally saved them.
 func StripEphemeralContextMessages(messages []sdk.MessageParam) []sdk.MessageParam {
 	out := make([]sdk.MessageParam, 0, len(messages))
-	for _, message := range messages {
-		if isEphemeralContextMessage(message) {
+	for index, message := range messages {
+		if isEphemeralContextMessage(message) && !isLegacyCompactedProjectKnowledgeMessage(messages, index) {
 			continue
 		}
 		out = append(out, message)
@@ -237,8 +254,25 @@ func StripEphemeralContextMessages(messages []sdk.MessageParam) []sdk.MessagePar
 	return out
 }
 
+// isLegacyCompactedProjectKnowledgeMessage preserves the short-lived format
+// written before compacted project knowledge had its own prefix. It is only
+// accepted in the prescribed second position after a durable summary message;
+// all other project-knowledge context remains ephemeral.
+func isLegacyCompactedProjectKnowledgeMessage(messages []sdk.MessageParam, index int) bool {
+	if index != 1 || len(messages) < 2 || !IsCompactedSummaryMessage(messages[0]) {
+		return false
+	}
+	if string(messages[index].Role) != "user" {
+		return false
+	}
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(messageText(messages[index]))), "project knowledge context:\n")
+}
+
 func isEphemeralContextMessage(message sdk.MessageParam) bool {
 	if string(message.Role) != "user" || len(message.Content) == 0 {
+		return false
+	}
+	if IsCompactedProjectKnowledgeMessage(message) || IsCompactedSummaryMessage(message) {
 		return false
 	}
 	text := strings.TrimSpace(messageText(message))

@@ -85,6 +85,24 @@ func TestSessionManagerSaveStripsEphemeralContextMessages(t *testing.T) {
 	}
 }
 
+func TestSessionManagerPersistsCompactedProjectKnowledgeMessage(t *testing.T) {
+	ctx := context.Background()
+	manager := session.NewManager(session.NewFileStore(t.TempDir()), "main")
+	s := session.NewSession("main", t.TempDir(), "test-model")
+	s.ReplaceMessages(session.CompactedContextMessages("completed the compaction", "## Recent tracked changes\n- updated session persistence"))
+
+	if err := manager.Save(ctx, s); err != nil {
+		t.Fatalf("save session: %v", err)
+	}
+	loaded, err := manager.LoadOrCreate(ctx, "main", "", "")
+	if err != nil {
+		t.Fatalf("load session: %v", err)
+	}
+	if len(loaded.Messages) != 2 || !session.IsCompactedSummaryMessage(loaded.Messages[0]) || !session.IsCompactedProjectKnowledgeMessage(loaded.Messages[1]) {
+		t.Fatalf("persisted messages = %#v, want summary then project knowledge", loaded.Messages)
+	}
+}
+
 func TestSessionCompactStripsEphemeralContextMessages(t *testing.T) {
 	ctx := context.Background()
 	messages := []sdk.MessageParam{

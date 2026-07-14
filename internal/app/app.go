@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -28,20 +29,22 @@ import (
 )
 
 type App struct {
-	Config        config.Config
-	Client        *cpanthropic.Client
-	Tools         *tool.Registry
-	Hooks         *hook.Runtime
-	Permissions   *permission.Service
-	Engine        *engine.Engine
-	Coordinator   *agent.Coordinator
-	Sessions      *session.Manager
-	MemoryStore   *memory.FileStore
-	MemoryManager *memory.Manager
-	SkillRegistry *skill.Registry
-	MCPRegistry   *mcp.Registry
-	ChangeGraph   *changegraph.Store
-	mcpFactory    mcp.ClientFactory
+	Config         config.Config
+	Client         *cpanthropic.Client
+	Tools          *tool.Registry
+	Hooks          *hook.Runtime
+	Permissions    *permission.Service
+	Engine         *engine.Engine
+	Coordinator    *agent.Coordinator
+	Sessions       *session.Manager
+	MemoryStore    *memory.FileStore
+	MemoryManager  *memory.Manager
+	SkillRegistry  *skill.Registry
+	MCPRegistry    *mcp.Registry
+	ChangeGraph    *changegraph.Store
+	summaryWriter  session.SummaryWriter
+	summaryRefresh sync.Mutex
+	mcpFactory     mcp.ClientFactory
 
 	onTextDelta     func(string)
 	onThinkingDelta func(string)
@@ -433,7 +436,11 @@ func (a *App) RunPromptWithSession(ctx context.Context, sessionID, prompt, workD
 	}
 	sessionStateChanged := a.SanitizeLoadedSession(current)
 	if a.shouldCompact(ctx, current) {
-		if changed, err := a.compactSession(ctx, current); err == nil && changed {
+		changed, err := a.compactSession(ctx, current, false)
+		if err != nil {
+			return agent.AgentResult{}, fmt.Errorf("compact session with AI summary: %w", err)
+		}
+		if changed {
 			current.Metadata.MemoryCompactionCompleted = true
 			current.Metadata.MemoryCompactionMessageCount = len(current.Messages)
 			sessionStateChanged = true
@@ -461,12 +468,12 @@ func (a *App) RunPromptWithSession(ctx context.Context, sessionID, prompt, workD
 		AllowedTools: []string{},
 		MaxTurns:     maxTurns,
 	}
-	projectKnowledge := a.projectKnowledgeContext(ctx, current, prompt)
+	projectKnowledge := a.projectKnowledgeForRequest(ctx, current, prompt)
 	result := a.Engine.RunWithHistory(ctx, engine.RunRequest{
 		AgentConfig:      cfg,
 		SessionID:        sessionID,
 		Messages:         current.CopyMessages(),
-		SessionSummary:   sanitizeLoadedSessionSummary(current.Summary),
+		SessionSummary:   sessionSummaryForRequest(current),
 		MemoryContext:    memoryContext,
 		ProjectKnowledge: projectKnowledge,
 	})
@@ -478,9 +485,19 @@ func (a *App) RunPromptWithSession(ctx context.Context, sessionID, prompt, workD
 	if result.AgentResult.Error == "" && a.Config.Memory.Enabled {
 		a.rememberExplicitMemory(ctx, prompt, sessionID)
 	}
+	a.resetMemoryMaintenanceCycleIfBelowThreshold(ctx, current)
+	refreshSummary := result.AgentResult.Error == "" && a.Config.Memory.Enabled && a.shouldRefreshMemorySummary(ctx, current)
+	if refreshSummary {
+		// Persist the cycle marker before starting the detached request so another
+		// prompt cannot enqueue the same summary job again.
+		current.Metadata.MemorySummaryCompleted = true
+	}
 	saveCtx := context.WithoutCancel(ctx)
 	if err := a.Sessions.Save(saveCtx, current); err != nil {
 		return result.AgentResult, fmt.Errorf("save session: %w", err)
+	}
+	if refreshSummary {
+		a.refreshSessionSummaryInBackground(session.SessionID(sessionID), workDir)
 	}
 	return result.AgentResult, nil
 }
@@ -631,6 +648,79 @@ func (a *App) shouldRefreshMemorySummary(ctx context.Context, current *session.S
 	return trigger > 0 && estimated >= trigger
 }
 
+func (a *App) refreshSessionSummaryInBackground(sessionID session.SessionID, workDir string) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		if err := a.refreshSessionSummary(ctx, sessionID, workDir); err != nil {
+			a.recordCompactEvent("summary_refresh_failed", map[string]any{
+				"session_id": string(sessionID),
+				"error":      err.Error(),
+			})
+			a.resetSessionSummaryMarker(sessionID, workDir)
+		}
+	}()
+}
+
+func (a *App) refreshSessionSummary(ctx context.Context, sessionID session.SessionID, workDir string) error {
+	if a == nil || a.Sessions == nil {
+		return fmt.Errorf("sessions are not enabled")
+	}
+	a.summaryRefresh.Lock()
+	defer a.summaryRefresh.Unlock()
+	writer := a.sessionSummaryWriter()
+	if writer == nil {
+		return fmt.Errorf("session summary AI writer is unavailable")
+	}
+	current, err := a.Sessions.LoadOrCreate(ctx, sessionID, workDir, a.Config.Model)
+	if err != nil {
+		return fmt.Errorf("load session for summary refresh: %w", err)
+	}
+	transcript := session.Transcript(session.StripEphemeralContextMessages(current.CopyMessages()))
+	if strings.TrimSpace(transcript) == "" {
+		return fmt.Errorf("session summary transcript is empty")
+	}
+	summary, err := writer.Summarize(ctx, sanitizeLoadedSessionSummary(current.Summary), transcript)
+	if err != nil {
+		return fmt.Errorf("generate session summary with AI: %w", err)
+	}
+	summary = strings.TrimSpace(summary)
+	if summary == "" {
+		return fmt.Errorf("generate session summary with AI: empty response")
+	}
+
+	// Reload after the model call so a background refresh never overwrites
+	// messages written by a newer foreground turn.
+	latest, err := a.Sessions.LoadOrCreate(ctx, sessionID, workDir, a.Config.Model)
+	if err != nil {
+		return fmt.Errorf("reload session after summary refresh: %w", err)
+	}
+	latest.Summary = summary
+	latest.Metadata.MemorySummaryCompleted = true
+	if err := a.Sessions.Save(context.WithoutCancel(ctx), latest); err != nil {
+		return fmt.Errorf("save AI session summary: %w", err)
+	}
+	a.recordCompactEvent("summary_refresh_succeeded", map[string]any{
+		"session_id":    string(sessionID),
+		"summary_runes": len([]rune(summary)),
+	})
+	return nil
+}
+
+func (a *App) resetSessionSummaryMarker(sessionID session.SessionID, workDir string) {
+	if a == nil || a.Sessions == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	current, err := a.Sessions.LoadOrCreate(ctx, sessionID, workDir, a.Config.Model)
+	if err != nil {
+		return
+	}
+	current.Metadata.MemorySummaryCompleted = false
+	_ = a.Sessions.Save(ctx, current)
+}
+
 func (a *App) resetMemoryMaintenanceCycleIfBelowThreshold(ctx context.Context, current *session.Session) {
 	if current == nil || (!current.Metadata.MemorySummaryCompleted && !current.Metadata.MemoryCompactionCompleted) {
 		return
@@ -747,9 +837,43 @@ func (a *App) estimateSessionContextTokens(ctx context.Context, current *session
 		ThinkingText:     a.Config.ThinkingText,
 		Effort:           a.Config.Effort,
 		Stream:           a.Config.Stream,
-		SessionSummary:   sanitizeLoadedSessionSummary(current.Summary),
-		ProjectKnowledge: a.projectKnowledgeContext(ctx, current, current.Summary),
+		SessionSummary:   sessionSummaryForRequest(current),
+		ProjectKnowledge: a.projectKnowledgeForRequest(ctx, current, current.Summary),
 	}))
+}
+
+// sessionSummaryForRequest injects the legacy Summary field only for sessions
+// without its durable compacted-summary user message. This keeps old sessions
+// compatible while preventing the same summary from being sent twice.
+func sessionSummaryForRequest(current *session.Session) string {
+	if current == nil || current.HasCompactedSummaryMessage() {
+		return ""
+	}
+	return sanitizeLoadedSessionSummary(current.Summary)
+}
+
+// projectKnowledgeForRequest injects dynamic project knowledge only until it
+// has been captured by compaction as a durable leading user message.
+func (a *App) projectKnowledgeForRequest(ctx context.Context, current *session.Session, prompt string) string {
+	if current == nil || current.HasCompactedProjectKnowledgeMessage() {
+		return ""
+	}
+	return a.projectKnowledgeContext(ctx, current, prompt)
+}
+
+func persistCompactedContext(current *session.Session, summary, projectKnowledge string) {
+	if current == nil {
+		return
+	}
+	current.Summary = strings.TrimSpace(summary)
+	current.ReplaceMessages(session.CompactedContextMessages(current.Summary, projectKnowledge))
+}
+
+func (a *App) compactedProjectKnowledge(ctx context.Context, current *session.Session, summary string) string {
+	if current == nil {
+		return ""
+	}
+	return a.projectKnowledgeContext(ctx, current, summary)
 }
 
 func (a *App) CompactSession(ctx context.Context, sessionID, workDir string) (*session.Session, bool, error) {
@@ -773,7 +897,7 @@ func (a *App) CompactSession(ctx context.Context, sessionID, workDir string) (*s
 		return nil, false, fmt.Errorf("load session: %w", err)
 	}
 	preChanged := a.SanitizeLoadedSession(current)
-	changed, err := a.compactSession(ctx, current)
+	changed, err := a.compactSession(ctx, current, true)
 	changed = changed || preChanged
 	if err != nil {
 		return current, false, err
@@ -786,7 +910,53 @@ func (a *App) CompactSession(ctx context.Context, sessionID, workDir string) (*s
 	return current, changed, nil
 }
 
-func (a *App) compactSession(ctx context.Context, current *session.Session) (bool, error) {
+type aiSessionSummaryWriter struct {
+	client *cpanthropic.Client
+	model  string
+}
+
+func (w aiSessionSummaryWriter) Summarize(ctx context.Context, previous, transcript string) (string, error) {
+	if w.client == nil {
+		return "", fmt.Errorf("session summary client is unavailable")
+	}
+	input := strings.TrimSpace(transcript)
+	if previous = strings.TrimSpace(previous); previous != "" {
+		input = "Previous session summary:\n" + previous + "\n\nSession transcript to summarize:\n" + input
+	}
+	message, err := w.client.Create(ctx, cpanthropic.MessageRequest{
+		Model:     w.model,
+		MaxTokens: 2000,
+		System: strings.Join([]string{
+			"Summarize a coding-agent session for the next turn.",
+			"Return only the summary, with no preamble or analysis.",
+			"Preserve the user's active request, decisions, completed work, exact file paths and symbols when important, validation results, errors, and unresolved follow-up tasks.",
+			"Do not reproduce tool-call JSON, raw logs, code listings, or role prefixes.",
+			"Be concise and factual; do not invent details.",
+		}, " "),
+		Messages: []sdk.MessageParam{sdk.NewUserMessage(sdk.NewTextBlock(input))},
+		Thinking: false,
+		Stream:   false,
+	})
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(cpanthropic.TextFromMessage(message)), nil
+}
+
+func (a *App) sessionSummaryWriter() session.SummaryWriter {
+	if a == nil {
+		return nil
+	}
+	if a.summaryWriter != nil {
+		return a.summaryWriter
+	}
+	if a.Client == nil {
+		return nil
+	}
+	return aiSessionSummaryWriter{client: a.Client, model: memoryModelName(a.Config)}
+}
+
+func (a *App) compactSession(ctx context.Context, current *session.Session, force bool) (bool, error) {
 	if a == nil || current == nil {
 		return false, nil
 	}
@@ -795,6 +965,7 @@ func (a *App) compactSession(ctx context.Context, current *session.Session) (boo
 	if cleanedHistory {
 		current.ReplaceMessages(cleanedMessages)
 	}
+	messagesToCompact := session.StripCompactedContextMessages(cleanedMessages)
 	if a.onStatus != nil {
 		a.onStatus("Compacting...")
 		defer a.onStatus("Ready")
@@ -818,11 +989,12 @@ func (a *App) compactSession(ctx context.Context, current *session.Session) (boo
 	if target <= 0 {
 		target = trigger * 15 / 100
 	}
-	result, err := session.Compact(ctx, current.Summary, session.StripEphemeralContextMessages(current.CopyMessages()), nil, session.CompactOptions{
+	result, err := session.Compact(ctx, current.Summary, messagesToCompact, a.sessionSummaryWriter(), session.CompactOptions{
 		MaxRecentTurns:         a.Config.Memory.MaxRecentTurns,
 		SummaryThresholdTokens: trigger,
 		TargetTokens:           target,
 		EstimatedTokens:        estimated,
+		Force:                  force,
 	})
 	if err != nil {
 		a.recordCompactEvent("compact_failed", map[string]any{
@@ -833,17 +1005,53 @@ func (a *App) compactSession(ctx context.Context, current *session.Session) (boo
 	}
 	previousSummary := sanitizeLoadedSessionSummary(current.Summary)
 	if !result.Changed {
-		a.recordCompactEvent("compact_skipped", map[string]any{"session_id": string(current.Metadata.ID)})
-		if !cleanedHistory && previousSummary == "" {
-			return false, nil
+		if estimated < trigger && !force {
+			a.recordCompactEvent("compact_skipped", map[string]any{
+				"session_id":       string(current.Metadata.ID),
+				"estimated_tokens": estimated,
+				"trigger_tokens":   trigger,
+			})
+			return cleanedHistory, nil
 		}
-		current.Summary = conciseSessionSummary(session.Transcript(cleanedMessages), previousSummary)
-		current.ReplaceMessages(nil)
+		// The total request can cross the threshold because session history,
+		// project knowledge, tools, and the system prompt are composed together.
+		// Even when Headroom does not rewrite the message slice, fold the old
+		// session history into Summary so the next request is exactly:
+		// project knowledge + session summary + latest user prompt.
+		current.Summary = result.Summary
+		if force || strings.TrimSpace(current.Summary) == "" || (current.Summary == previousSummary && strings.TrimSpace(result.OriginalTranscript) != "") {
+			current.Summary = conciseSessionSummary(result.OriginalTranscript, previousSummary)
+		}
+		if strings.TrimSpace(current.Summary) == "" {
+			a.recordCompactEvent("compact_skipped", map[string]any{
+				"session_id": string(current.Metadata.ID),
+				"reason":     "no substantive session summary",
+			})
+			return cleanedHistory, nil
+		}
+		persistCompactedContext(current, current.Summary, a.compactedProjectKnowledge(ctx, current, current.Summary))
+		a.recordCompactEvent("compact_succeeded", map[string]any{
+			"session_id":      string(current.Metadata.ID),
+			"messages_before": len(cleanedMessages),
+			"messages_after":  0,
+			"summary_runes":   len([]rune(current.Summary)),
+			"trigger_source":  "composed_context",
+		})
 		return true, nil
 	}
 	beforeMessages := len(current.Messages)
-	current.Summary = conciseSessionSummary(result.CompactedTranscript, previousSummary)
-	current.ReplaceMessages(nil)
+	nextSummary := strings.TrimSpace(result.Summary)
+	if force || nextSummary == "" {
+		nextSummary = conciseSessionSummary(result.OriginalTranscript, previousSummary)
+	}
+	if strings.TrimSpace(nextSummary) == "" {
+		a.recordCompactEvent("compact_skipped", map[string]any{
+			"session_id": string(current.Metadata.ID),
+			"reason":     "no substantive session summary",
+		})
+		return cleanedHistory, nil
+	}
+	persistCompactedContext(current, nextSummary, a.compactedProjectKnowledge(ctx, current, nextSummary))
 	retainedTokens := a.estimateSessionContextTokens(ctx, current)
 	a.recordCompactEvent("compact_succeeded", map[string]any{
 		"session_id":          string(current.Metadata.ID),
@@ -860,21 +1068,67 @@ func (a *App) compactSession(ctx context.Context, current *session.Session) (boo
 	return true, nil
 }
 
-// conciseSessionSummary preserves only the recent conversational outcome. File
-// change details and active work remain in the durable project graph and Todo
-// store, so duplicating them into every compressed session is unnecessary.
+// conciseSessionSummary preserves the recent conversational outcome from old
+// session messages. Project knowledge remains a separate context block.
 func conciseSessionSummary(transcript, previous string) string {
-	lines := sanitizeTranscriptSummaryLines(nonEmptySummaryLines(strings.Split(transcript, "\n")))
-	lines = filterSummaryLines(lines, func(line string) bool {
-		return isSubstantiveSummaryLine(line) && !isAssistantMetaSummaryLine(line)
-	})
+	conversation := conciseConversationLines(transcript)
 	prior := compactPreviousSummaryLines(previous)
-	combined := dedupeSummaryLines(append(limitSummaryLines(prior, 3), tailSummaryLines(lines, 4)...))
-	combined = sanitizeSummaryOutputLines(limitSummaryLines(combined, 6), true, false)
+	combined := append(limitSummaryLines(prior, 3), tailSummaryLines(conversation, 6)...)
+	combined = dedupeSummaryLines(combined)
 	if len(combined) == 0 {
 		return ""
 	}
-	return "Recent session state:\n" + bulletSection(combined)
+	return "Recent session state:\n" + bulletSection(limitSummaryLines(combined, 6))
+}
+
+func conciseConversationLines(transcript string) []string {
+	lines := make([]string, 0, 8)
+	userFallback := make([]string, 0, 4)
+	skipToolBlock := false
+	currentRole := ""
+	for _, raw := range nonEmptySummaryLines(strings.Split(transcript, "\n")) {
+		line := stripSummaryBulletPrefix(raw)
+		lower := strings.ToLower(line)
+		content := line
+		switch {
+		case strings.HasPrefix(lower, "user: "):
+			currentRole = "user"
+			skipToolBlock = false
+			content = strings.TrimSpace(line[len("user: "):])
+		case strings.HasPrefix(lower, "assistant: "):
+			currentRole = "assistant"
+			skipToolBlock = false
+			content = strings.TrimSpace(line[len("assistant: "):])
+		}
+		contentLower := strings.ToLower(content)
+		if strings.HasPrefix(contentLower, "[tool use:") || strings.HasPrefix(contentLower, "[tool result]") {
+			skipToolBlock = true
+			continue
+		}
+		if skipToolBlock {
+			continue
+		}
+		if currentRole == "user" && content != "" && !isBareTrivialContinuationSummaryLine(content) {
+			userFallback = append(userFallback, summaryExcerpt(content, 240))
+		}
+		if currentRole == "assistant" && isAssistantMetaSummaryLine(content) {
+			continue
+		}
+		if content == "" || isBareTrivialContinuationSummaryLine(content) {
+			continue
+		}
+		if strings.Contains(contentLower, `"file_path"`) || strings.Contains(contentLower, `"old_string"`) || strings.Contains(contentLower, `"new_string"`) || strings.Contains(contentLower, `"patch_text"`) || strings.Contains(contentLower, `"tool_id"`) {
+			continue
+		}
+		if isNoisySummaryLine(content) || looksLikeSummaryCodeLine(content) {
+			continue
+		}
+		lines = append(lines, summaryExcerpt(content, 240))
+	}
+	if len(lines) == 0 {
+		return dedupeSummaryLines(userFallback)
+	}
+	return dedupeSummaryLines(lines)
 }
 
 func (a *App) extractSessionMemories(ctx context.Context, current *session.Session, reason string) ([]memory.Item, error) {
@@ -1320,7 +1574,6 @@ var (
 )
 
 func (a *App) SanitizeLoadedSession(current *session.Session) bool {
-	_ = a
 	if current == nil {
 		return false
 	}
@@ -1350,10 +1603,20 @@ func sanitizeLoadedSessionSummary(summary string) string {
 	if summary == "" {
 		return ""
 	}
+	if isPlaceholderSessionSummary(summary) {
+		return ""
+	}
 	if !summaryNeedsCleanup(summary) {
 		return summary
 	}
 	return compactPreviousSummary(summary)
+}
+
+func isPlaceholderSessionSummary(summary string) bool {
+	lower := strings.ToLower(strings.TrimSpace(summary))
+	return strings.Contains(lower, "文件变更图上下文") &&
+		strings.Contains(lower, "旧 session 对话压缩结果") &&
+		strings.Contains(lower, "用户最新 prompt")
 }
 
 func summaryNeedsCleanup(summary string) bool {
@@ -1362,6 +1625,9 @@ func summaryNeedsCleanup(summary string) bool {
 		return false
 	}
 	markers := []string{
+		"recent session state:",
+		"(file has ",
+		"more lines. use 'offset' parameter",
 		"compacted session file modifications:",
 		"compacted session tool usage:",
 		"compacted session tools used:",
@@ -1444,7 +1710,9 @@ func isSummarySectionHeader(line string) bool {
 		return true
 	}
 	lower := strings.ToLower(line)
-	return strings.HasPrefix(lower, "session summary:") || strings.HasPrefix(lower, "retrieved memory:")
+	return strings.HasPrefix(lower, "session summary:") ||
+		strings.HasPrefix(lower, "recent session state:") ||
+		strings.HasPrefix(lower, "retrieved memory:")
 }
 
 func isNoisySummaryLine(line string) bool {
@@ -1457,6 +1725,8 @@ func isNoisySummaryLine(line string) bool {
 		return true
 	}
 	noiseMarkers := []string{
+		"(file has ",
+		"more lines. use 'offset' parameter",
 		"retrieved memory:",
 		"session summary:",
 		"current todos:",
@@ -1494,6 +1764,9 @@ func isDiscardablePriorSummaryLine(line string) bool {
 	if line == "" {
 		return true
 	}
+	if isTrivialContinuationCandidateLine(line) {
+		return true
+	}
 	if summaryDiffLinePattern.MatchString(line) || summaryTodoLinePattern.MatchString(line) || summaryCodeLinePattern.MatchString(line) {
 		return true
 	}
@@ -1505,7 +1778,6 @@ func isDiscardablePriorSummaryLine(line string) bool {
 		return true
 	}
 	fragments := []string{
-		"continue",
 		"var ",
 		"func ",
 		":=",
@@ -1518,6 +1790,9 @@ func isDiscardablePriorSummaryLine(line string) bool {
 		"已完成：",
 		"已通过的定向测试：",
 		"旧 session summary",
+		"文件变更图上下文",
+		"旧 session 对话压缩结果",
+		"用户最新 prompt",
 		"prior summary context",
 		"漏网噪声",
 		"漏网模式",

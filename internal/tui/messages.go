@@ -46,19 +46,29 @@ func renderWelcomeMessage(b *strings.Builder, msg ChatMessage, t Theme, width in
 	if content == "" {
 		content = "Welcome to solcode"
 	}
+
+	// Keep the logo independent from the welcome copy so it stays centered even
+	// when the terminal is resized or the copy changes length.
+	logoWidth := max(1, width)
+	center := func(value string) string {
+		return lipgloss.NewStyle().Width(logoWidth).Align(lipgloss.Center).Render(value)
+	}
 	lines := []string{
-		t.ClaudeStyle.Render("✦ solcode"),
+		center(t.ClaudeStyle.Render("☀")),
+		center(t.ClaudeStyle.Render("solcode")),
+		"",
 		t.Dim.Render(content),
 		"",
 		t.Dim.Render("Ask a question, edit code, or run /help for commands."),
 	}
 	body := strings.Join(lines, "\n")
-	boxWidth := min(max(32, maxLineWidth(body)+4), max(32, width))
+	// width is the viewport width minus the border and horizontal padding. Use
+	// it directly so the welcome card occupies the full available terminal row.
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(t.Claude).
 		Padding(1, 2).
-		Width(boxWidth).
+		Width(logoWidth).
 		Render(body)
 	b.WriteString(box)
 	b.WriteString("\n")
