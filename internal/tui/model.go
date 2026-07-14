@@ -135,13 +135,18 @@ type DialogItem struct {
 	Subtitle string
 	Current  bool
 	Value    string
+	Custom   bool
 }
 
 type DialogState struct {
-	Active   DialogKind
-	Title    string
-	Items    []DialogItem
-	Selected int
+	Active       DialogKind
+	Title        string
+	Items        []DialogItem
+	Selected     int
+	Custom       bool
+	CustomStep   int
+	CustomValues []string
+	CustomInput  textinput.Model
 }
 
 type ModelItemsFunc func(kind DialogKind) []DialogItem
@@ -153,6 +158,7 @@ type SelectResult struct {
 }
 
 type SelectFunc func(kind DialogKind, value string) SelectResult
+type CustomSelectFunc func(kind DialogKind, values []string) SelectResult
 
 type AutocompleteState struct {
 	Items    []string
@@ -257,6 +263,7 @@ type Model struct {
 	newSessionHandler NewSessionHandler
 	itemsFunc         ModelItemsFunc
 	selectFunc        SelectFunc
+	customSelectFunc  CustomSelectFunc
 	skillNamesFn      func() []string
 	contextBaseFn     func() int64
 	contextLimitFn    func() int64
@@ -327,6 +334,10 @@ func (m *Model) SetNewSessionHandler(handler NewSessionHandler) {
 func (m *Model) SetDialogCallbacks(itemsFn ModelItemsFunc, selectFn SelectFunc) {
 	m.itemsFunc = itemsFn
 	m.selectFunc = selectFn
+}
+
+func (m *Model) SetCustomDialogCallback(fn CustomSelectFunc) {
+	m.customSelectFunc = fn
 }
 
 func (m *Model) SetModelName(name string) {
@@ -452,7 +463,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleAskUserKey(msg)
 		}
 		if m.dialog != nil && m.dialog.Active != DialogNone {
-			return m.handleDialogKey(msg.String())
+			return m.handleDialogKey(msg)
 		}
 		if m.autocomplete != nil {
 			return m.handleAutocompleteKey(msg)
@@ -963,47 +974,130 @@ func (m Model) handleCtrlC() (tea.Model, tea.Cmd) {
 	return m, tea.Quit
 }
 
-func (m Model) handleDialogKey(key string) (tea.Model, tea.Cmd) {
+func (m Model) handleDialogKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.dialog == nil {
+		return m, nil
+	}
+	key := strings.ToLower(msg.String())
+	if m.dialog.Custom {
+		return m.handleCustomDialogKey(msg, key)
+	}
 	switch key {
-	case "esc":
+	case "esc", "ctrl+c":
 		m.dialog = nil
-		m.refreshViewport()
-		return m, nil
-	case "ctrl+c":
-		m.dialog = nil
-		m.refreshViewport()
-		return m, nil
 	case "up", "k":
 		if m.dialog.Selected > 0 {
 			m.dialog.Selected--
 		}
-		return m, nil
 	case "down", "j":
 		if m.dialog.Selected < len(m.dialog.Items)-1 {
 			m.dialog.Selected++
 		}
-		return m, nil
 	case "enter":
 		if m.dialog.Selected >= 0 && m.dialog.Selected < len(m.dialog.Items) {
 			item := m.dialog.Items[m.dialog.Selected]
+			if item.Custom {
+				m.startCustomDialog()
+				return m, nil
+			}
 			kind := m.dialog.Active
 			m.dialog = nil
 			result := SelectResult{Message: fmt.Sprintf("Selected: %s", item.Label)}
 			if m.selectFunc != nil {
 				result = m.selectFunc(kind, item.Value)
 			}
-			if result.ReplaceMessages {
-				m.messages = result.Messages
-			}
-			if strings.TrimSpace(result.Message) != "" {
-				m.messages = append(m.messages, m.systemMessage(result.Message))
-			}
-			m.status = "Ready"
-			m.refreshViewport()
+			m.applySelectResult(result)
 		}
+	}
+	m.status = "Ready"
+	m.refreshViewport()
+	return m, nil
+}
+
+func (m *Model) startCustomDialog() {
+	if m.dialog == nil {
+		return
+	}
+	input := textinput.New()
+	input.Placeholder = customDialogFieldPlaceholder(m.dialog.Active, 0)
+	input.CharLimit = 1000
+	input.Width = max(20, m.width-12)
+	input.Focus()
+	m.dialog.Custom = true
+	m.dialog.CustomStep = 0
+	m.dialog.CustomValues = nil
+	m.dialog.CustomInput = input
+	m.status = "Input required"
+	m.resize()
+	m.refreshViewport()
+}
+
+func (m Model) handleCustomDialogKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) {
+	dialog := m.dialog
+	if dialog == nil {
 		return m, nil
 	}
+	switch key {
+	case "esc":
+		dialog.Custom = false
+		dialog.CustomInput.Blur()
+		m.status = "Ready"
+	case "ctrl+c":
+		m.dialog = nil
+		m.status = "Ready"
+	case "enter":
+		value := strings.TrimSpace(dialog.CustomInput.Value())
+		if value == "" {
+			return m, nil
+		}
+		dialog.CustomValues = append(dialog.CustomValues, value)
+		dialog.CustomInput.Reset()
+		dialog.CustomStep++
+		if dialog.CustomStep < customDialogFieldCount(dialog.Active) {
+			dialog.CustomInput.Placeholder = customDialogFieldPlaceholder(dialog.Active, dialog.CustomStep)
+			m.refreshViewport()
+			return m, nil
+		}
+		kind := dialog.Active
+		values := append([]string(nil), dialog.CustomValues...)
+		m.dialog = nil
+		result := SelectResult{Message: "Custom selection saved."}
+		if m.customSelectFunc != nil {
+			result = m.customSelectFunc(kind, values)
+		}
+		m.applySelectResult(result)
+		return m, nil
+	default:
+		var cmd tea.Cmd
+		dialog.CustomInput, cmd = dialog.CustomInput.Update(msg)
+		m.resize()
+		m.refreshViewport()
+		return m, cmd
+	}
+	m.resize()
+	m.refreshViewport()
 	return m, nil
+}
+
+func customDialogFieldCount(kind DialogKind) int {
+	if kind == DialogProvider {
+		return 3
+	}
+	return 1
+}
+
+func customDialogFieldPlaceholder(kind DialogKind, step int) string {
+	if kind == DialogProvider {
+		switch step {
+		case 0:
+			return "Provider name"
+		case 1:
+			return "API key"
+		default:
+			return "Base URL"
+		}
+	}
+	return "Model ID"
 }
 
 func (m *Model) handleAutocompleteKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -1709,6 +1803,9 @@ func (m Model) renderDialog() string {
 	t := m.theme
 	dialogWidth := min(60, m.width-4)
 	title := t.PermTitle.Render(m.dialog.Title)
+	if m.dialog.Custom {
+		return m.renderCustomDialog(title, dialogWidth)
+	}
 	var items strings.Builder
 	for i, item := range m.dialog.Items {
 		prefix := "  "
@@ -1730,11 +1827,36 @@ func (m Model) renderDialog() string {
 	return lipgloss.PlaceHorizontal(m.width, lipgloss.Center, t.DialogBorder.Width(dialogWidth).Render(body))
 }
 
+func (m Model) renderCustomDialog(title string, dialogWidth int) string {
+	dialog := m.dialog
+	field := customDialogFieldLabel(dialog.Active, dialog.CustomStep)
+	hint := m.theme.PermHint.Render("[Enter] Continue  [Esc] Back to choices  [Ctrl+C] Cancel")
+	body := strings.Join([]string{title, "", field, "", "  " + dialog.CustomInput.View(), "", hint}, "\n")
+	return lipgloss.PlaceHorizontal(m.width, lipgloss.Center, m.theme.DialogBorder.Width(dialogWidth).Render(body))
+}
+
+func customDialogFieldLabel(kind DialogKind, step int) string {
+	if kind == DialogProvider {
+		switch step {
+		case 0:
+			return "Provider name"
+		case 1:
+			return "API key"
+		default:
+			return "Base URL"
+		}
+	}
+	return "Model ID"
+}
+
 func (m *Model) ShowDialog(kind DialogKind) {
 	if m.itemsFunc == nil {
 		return
 	}
 	items := m.itemsFunc(kind)
+	if kind == DialogModel || kind == DialogProvider {
+		items = append(items, DialogItem{Label: "Custom…", Subtitle: "Add and save a custom entry", Custom: true})
+	}
 	if len(items) == 0 {
 		if kind == DialogSessions {
 			m.appendCommandResult("No saved sessions yet. Use /new-session [name] to create one.")
@@ -1926,6 +2048,9 @@ func (m *Model) resize() {
 	m.input.SetHeight(layout.inputHeight)
 	if m.pendingAsk != nil {
 		m.pendingAsk.customInput.Width = max(20, m.width-12)
+	}
+	if m.dialog != nil && m.dialog.Custom {
+		m.dialog.CustomInput.Width = max(20, m.width-12)
 	}
 }
 

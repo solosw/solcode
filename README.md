@@ -7,7 +7,7 @@ A terminal-based coding agent powered by Claude (Anthropic API) that can read, w
 - **Interactive TUI** — Rich terminal UI built with [Bubble Tea](https://github.com/charmbracelet/bubbletea), with streaming text, inline diff rendering, syntax highlighting, timestamps, thinking indicators, and permission dialogs.
 - **Persistent sessions** — Reload saved conversation history with its original message timestamps.
 - **Batch mode** — Run one-shot prompts non-interactively via `-prompt`.
-- **Multi-model support** — Configure multiple LLM providers and models, switch at runtime with `/model`.
+- **Multi-model support** — Configure multiple LLM providers and models, switch at runtime with `/model` and `/provider`, or add them directly from their dialogs.
 - **20+ built-in tools** — Bash, Edit, Write, View, ViewImage, Grep, Glob, LS, Diff, Patch, Fetch, WebSearch, LSP, MCP, TodoWrite, AskUser, Task (sub-agents), and more.
 - **MCP (Model Context Protocol)** — Connect to external MCP servers over stdio or HTTP.
 - **Custom skills** — Define reusable skill files loaded from configurable directories.
@@ -87,8 +87,8 @@ Type `/` in the input to access commands:
 |---------|-------------|
 | `/help` | Show available commands |
 | `/clear` | Clear the current TUI transcript |
-| `/model` | Select a model via dialog |
-| `/provider` | Select a provider via dialog |
+| `/model` | Select a configured model or add a custom model ID via dialog |
+| `/provider` | Select a configured provider or add a custom provider via dialog |
 | `/effort` | Select thinking effort (low/medium/high) |
 | `/sessions` | List and load saved sessions |
 | `/compact` | Compact the current session context |
@@ -97,6 +97,16 @@ Type `/` in the input to access commands:
 | `/skills` | Browse skills and toggle enabled/disabled |
 | `/mcp` | Browse MCP servers and toggle enabled/disabled |
 | `/[skill] [args]` | Invoke a loaded skill by name |
+
+### Add a provider or model from the TUI
+
+Both the `/provider` and `/model` dialogs include a **Custom…** entry.
+
+1. Run `/provider`, select **Custom…**, then enter the provider name, API key, and base URL in sequence.
+2. The provider is written to the runtime settings file and the configuration is reloaded. It is intentionally created without a model.
+3. Run `/model`, select **Custom…**, and enter the model ID. The model is saved with the same value for `name` and `id`, configuration is reloaded again, and future prompts use that model.
+
+The runtime settings file is `~/.solcode/settings.local.json` by default. When solcode is started with `-config`, that explicit file is updated instead. Custom provider credentials are stored as the provider's `api_key` in this file; protect it as you would any API-key-containing configuration file. Press `Esc` while entering a custom value to return to the dialog choices, or `Ctrl+C` to cancel the dialog.
 
 ### Saved-session timestamps
 

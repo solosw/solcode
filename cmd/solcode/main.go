@@ -366,7 +366,7 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 		switch kind {
 		case tui.DialogModel:
 			models := cfg.ListModels()
-			items := make([]tui.DialogItem, 0, len(models))
+			items := make([]tui.DialogItem, 0, len(models)+1)
 			for _, m := range models {
 				label := m.Name
 				if m.DisplayName != "" {
@@ -436,6 +436,16 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 		}
 		return tui.SelectResult{Message: fmt.Sprintf("Selected: %s", value)}
 	})
+	model.SetCustomDialogCallback(func(kind tui.DialogKind, values []string) tui.SelectResult {
+		switch kind {
+		case tui.DialogProvider:
+			return handleCustomProvider(&cfg, application, values, persistencePath, configPath)
+		case tui.DialogModel:
+			return handleCustomModel(&cfg, application, values, persistencePath, configPath)
+		default:
+			return tui.SelectResult{Message: "Custom selection is not supported for this dialog."}
+		}
+	})
 	model.SetSkillNamesFn(func() []string {
 		names := make([]string, 0)
 		if application.SkillRegistry != nil {
@@ -502,6 +512,131 @@ func handleProviderSwitch(cfg *config.Config, application *app.App, providerName
 		message += fmt.Sprintf("\nWarning: could not persist provider selection: %v", err)
 	}
 	return message
+}
+
+func handleCustomProvider(cfg *config.Config, application *app.App, values []string, persistencePath, configPath string) tui.SelectResult {
+	if len(values) != 3 {
+		return tui.SelectResult{Message: "Could not add custom provider: provider name, API key, and base URL are required."}
+	}
+	name := strings.TrimSpace(values[0])
+	apiKey := strings.TrimSpace(values[1])
+	baseURL := strings.TrimSpace(values[2])
+	if name == "" || apiKey == "" || baseURL == "" {
+		return tui.SelectResult{Message: "Could not add custom provider: provider name, API key, and base URL are required."}
+	}
+	for _, provider := range cfg.Providers {
+		if provider.Name == name {
+			return tui.SelectResult{Message: fmt.Sprintf("Could not add custom provider: %q already exists.", name)}
+		}
+	}
+
+	next := *cfg
+	next.Providers = append(append([]config.ProviderConfig(nil), cfg.Providers...), config.ProviderConfig{
+		Name:    name,
+		APIKey:  apiKey,
+		BaseURL: baseURL,
+		Models:  []config.ModelConfig{},
+	})
+	if err := next.Normalize(); err != nil {
+		return tui.SelectResult{Message: fmt.Sprintf("Could not add custom provider %q: %v", name, err)}
+	}
+	loaded, err := saveAndReloadConfig(next, persistencePath, configPath, map[string]any{"providers": next.Providers})
+	if err != nil {
+		return tui.SelectResult{Message: fmt.Sprintf("Could not save custom provider %q: %v", name, err)}
+	}
+	if err := application.SwitchModel(loaded); err != nil {
+		return tui.SelectResult{Message: fmt.Sprintf("Could not reload custom provider %q: %v", name, err)}
+	}
+	*cfg = loaded
+	return tui.SelectResult{Message: fmt.Sprintf("Added custom provider %s and reloaded settings. Add a model for it with /model.", name)}
+}
+
+func handleCustomModel(cfg *config.Config, application *app.App, values []string, persistencePath, configPath string) tui.SelectResult {
+	if len(values) != 1 || strings.TrimSpace(values[0]) == "" {
+		return tui.SelectResult{Message: "Could not add custom model: model ID is required."}
+	}
+	modelID := strings.TrimSpace(values[0])
+	providerName := pendingCustomProviderName(*cfg)
+	if providerName == "" {
+		providerName = activeProviderName(*cfg)
+	}
+	if providerName == "" {
+		return tui.SelectResult{Message: "Could not add custom model: select a provider first."}
+	}
+
+	next := *cfg
+	for i := range next.Providers {
+		provider := &next.Providers[i]
+		if provider.Name != providerName {
+			continue
+		}
+		for _, model := range provider.Models {
+			if model.Name == modelID || model.ID == modelID {
+				return tui.SelectResult{Message: fmt.Sprintf("Could not add custom model: %q already exists for provider %q.", modelID, providerName)}
+			}
+		}
+		provider.Models = append(provider.Models, config.ModelConfig{Name: modelID, ID: modelID, Provider: providerName})
+		break
+	}
+	next.Provider = providerName
+	next.Model = modelID
+	if err := next.Normalize(); err != nil {
+		return tui.SelectResult{Message: fmt.Sprintf("Could not add custom model %q: %v", modelID, err)}
+	}
+	loaded, err := saveAndReloadConfig(next, persistencePath, configPath, map[string]any{
+		"provider":  providerName,
+		"model":     modelID,
+		"providers": next.Providers,
+	})
+	if err != nil {
+		return tui.SelectResult{Message: fmt.Sprintf("Could not save custom model %q: %v", modelID, err)}
+	}
+	if err := application.SwitchModel(loaded); err != nil {
+		return tui.SelectResult{Message: fmt.Sprintf("Could not reload custom model %q: %v", modelID, err)}
+	}
+	*cfg = loaded
+	return tui.SelectResult{Message: fmt.Sprintf("Added custom model %s and reloaded settings. Future prompts will use this model.", modelID)}
+}
+
+func activeProviderName(cfg config.Config) string {
+	if strings.TrimSpace(cfg.Provider) != "" {
+		return cfg.Provider
+	}
+	for _, provider := range cfg.Providers {
+		for _, model := range provider.Models {
+			if model.Name == cfg.Model || model.ID == cfg.Model {
+				return provider.Name
+			}
+		}
+	}
+	if len(cfg.Providers) == 1 {
+		return cfg.Providers[0].Name
+	}
+	return ""
+}
+
+func pendingCustomProviderName(cfg config.Config) string {
+	for i := len(cfg.Providers) - 1; i >= 0; i-- {
+		if len(cfg.Providers[i].Models) == 0 {
+			return cfg.Providers[i].Name
+		}
+	}
+	return ""
+}
+
+func saveAndReloadConfig(current config.Config, persistencePath, configPath string, updates map[string]any) (config.Config, error) {
+	if err := config.SaveLocalOverrides(persistencePath, updates); err != nil {
+		return config.Config{}, err
+	}
+	loaded, err := config.Load(configPath)
+	if err != nil {
+		return config.Config{}, err
+	}
+	loaded.WorkDir = current.WorkDir
+	if err := loaded.Normalize(); err != nil {
+		return config.Config{}, err
+	}
+	return loaded, nil
 }
 
 func handleEffortSwitch(cfg *config.Config, application *app.App, effort, persistencePath string) string {
