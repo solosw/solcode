@@ -23,14 +23,62 @@ A terminal-based coding agent powered by Claude (Anthropic API) that can read, w
 
 ### Installation
 
+**One-line install (no Go required)** — downloads the rolling **master** build
+(published by CI on every push to `master`/`main`; there is no `latest` channel):
+
+```bash
+# Linux / macOS
+curl -fsSL https://raw.githubusercontent.com/solosw/solcode/master/scripts/install.sh | bash
+```
+
+```powershell
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/solosw/solcode/master/scripts/install.ps1 | iex
+```
+
+Options:
+
+```bash
+# custom install dir / fork (still tracks master by default)
+curl -fsSL .../install.sh | bash -s -- --dir ~/bin
+SOLCODE_REPO=myorg/solcode curl -fsSL .../install.sh | bash
+
+# optional: pin a versioned release tag if you publish one
+curl -fsSL .../install.sh | bash -s -- --version v0.1.0
+```
+
+```powershell
+& .\scripts\install.ps1 -InstallDir "$env:USERPROFILE\bin"
+# & .\scripts\install.ps1 -Version v0.1.0
+```
+
+**From source** (requires Go 1.25+):
+
 ```bash
 go install github.com/solosw/solcode/cmd/solcode@master
+# or
+git clone https://github.com/solosw/solcode.git && cd solcode
+go build -o solcode ./cmd/solcode
+```
+
+**How binaries are published**
+
+| Trigger | Release tag | Asset names | Install default |
+|---------|-------------|-------------|-----------------|
+| Push to `master`/`main` | `master` (rolling, overwritten) | `solcode_master_<os>_<arch>.*` | yes |
+| Push tag `v*` (optional) | `vX.Y.Z` | `solcode_vX.Y.Z_<os>_<arch>.*` | via `--version` |
+
+Local build:
+
+```bash
+./scripts/build-release.sh master          # Linux/macOS
+# .\scripts\build-release.ps1 -Version master   # Windows
 ```
 
 ### Prerequisites
 
-- Go 1.25+
 - An Anthropic API key (set `ANTHROPIC_API_KEY` environment variable)
+- For source builds only: Go 1.25+
 
 ### First run
 
@@ -42,6 +90,9 @@ solcode
 
 # Batch mode
 solcode -prompt "Explain the architecture of this project"
+
+# Check binary version (master builds show master+<sha>)
+solcode -version
 ```
 
 ## Usage

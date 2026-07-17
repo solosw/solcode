@@ -1,0 +1,63 @@
+name: Publish master
+
+# Rolling binary channel: every push to master/main rebuilds and updates
+# GitHub Release tag "master". Install scripts download from that tag.
+# There is no "latest" release channel.
+
+on:
+  push:
+    branches:
+      - master
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish-master:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build release assets
+        env:
+          # Asset names stay solcode_master_* so install URLs stay stable.
+          # Binary -version embeds master+shortsha.
+          VERSION_LABEL: master
+        run: |
+          chmod +x scripts/build-release.sh
+          SHORT_SHA="$(echo "${GITHUB_SHA}" | cut -c1-7)"
+          # build-release uses first arg for asset version AND ldflags by default;
+          # inject a more informative binary version via VERSION_LDFLAGS override if present.
+          # We pass "master" as asset version, and set ldflags version separately.
+          export LDFLAGS_VERSION="master+${SHORT_SHA}"
+          ./scripts/build-release.sh master
+
+      - name: Publish rolling master release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: master
+          name: master (rolling)
+          target_commitish: ${{ github.sha }}
+          prerelease: true
+          make_latest: false
+          body: |
+            Rolling build from branch `${{ github.ref_name }}`.
+
+            - Commit: `${{ github.sha }}`
+            - Install (Linux/macOS): `curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/master/scripts/install.sh | bash`
+            - Install (Windows): `irm https://raw.githubusercontent.com/${{ github.repository }}/master/scripts/install.ps1 | iex`
+
+            Assets are overwritten on each push to master/main.
+          files: |
+            dist/solcode_*
+            dist/checksums.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

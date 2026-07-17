@@ -31,5 +31,5 @@ Thumbs.db
 
 # solcode runtime state (project-scoped, under ~/.solcode/<project>/)
 # These are generated at runtime, not committed
-.solcode/
+
 .warp-snapshots

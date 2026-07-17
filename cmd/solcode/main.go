@@ -24,6 +24,11 @@ import (
 	"github.com/solosw/solcode/internal/tui"
 )
 
+// version is injected at link time by release builds:
+//
+//	-ldflags "-X main.version=v0.1.0"
+var version = "dev"
+
 func main() {
 	var configPath string
 	var prompt string
@@ -32,6 +37,7 @@ func main() {
 	var timeout time.Duration
 
 	var modelOverride string
+	var showVersion bool
 
 	flag.StringVar(&configPath, "config", "", "Path to JSON config file")
 	flag.StringVar(&prompt, "prompt", "", "Prompt to run non-interactively")
@@ -39,7 +45,13 @@ func main() {
 	flag.IntVar(&maxTurns, "max-turns", 0, "Maximum model/tool loop turns")
 	flag.DurationVar(&timeout, "timeout", 0, "Maximum run duration (0 disables the timeout)")
 	flag.StringVar(&modelOverride, "model", "", "Override model (name or ID from config)")
+	flag.BoolVar(&showVersion, "version", false, "Print version and exit")
 	flag.Parse()
+
+	if showVersion {
+		fmt.Println(version)
+		return
+	}
 
 	if prompt == "" && flag.NArg() > 0 {
 		prompt = flag.Arg(0)
