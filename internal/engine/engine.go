@@ -108,6 +108,7 @@ func (e *Engine) runLegacyModel(ctx context.Context, req RunRequest) RunResult {
 	messages := append([]sdk.MessageParam(nil), req.Messages...)
 	prompt := cfg.Prompt
 	prompt, blocked, errText := e.runUserPromptHook(ctx, cfg, prompt)
+	prompt = applyPlanModeUserPrompt(e.config.Permissions, prompt)
 	userMsg, modelText := userMessageFromPrompt(prompt, cfg.WorkDir)
 	messages = append(messages, userMsg)
 	if blocked || errText != "" {
@@ -136,6 +137,7 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 	messages := append([]sdk.MessageParam(nil), runReq.Messages...)
 	prompt := cfg.Prompt
 	prompt, blocked, errText := e.runUserPromptHook(ctx, cfg, prompt)
+	prompt = applyPlanModeUserPrompt(e.config.Permissions, prompt)
 	userMsg, modelText := userMessageFromPrompt(prompt, cfg.WorkDir)
 	messages = append(messages, userMsg)
 	if blocked || errText != "" {
@@ -266,18 +268,9 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 				// UI gets caption text only — never dump base64 image payloads.
 				e.config.OnToolDone(use.Name, text, isError)
 			}
-			if isError {
-				if cfg.Role == agent.AgentRoleTask {
-					results = append(results, apiResult)
-					messages = append(messages, sdk.NewUserMessage(cpanthropic.ToolResultBlocks(results)...))
-					return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: fmt.Sprintf("tool %s failed: %s", use.Name, text)}, Messages: messages}
-				}
-				if use.Name == tool.TaskToolName {
-					results = append(results, apiResult)
-					messages = append(messages, sdk.NewUserMessage(cpanthropic.ToolResultBlocks(results)...))
-					return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: fmt.Sprintf("task failed: %s", text)}, Messages: messages}
-				}
-			}
+			// Tool failures/timeouts (and Task tool errors) must not abort the agent
+			// loop — especially Task sub-agents, which should keep running and recover
+			// from is_error tool_results. Only context cancel / model errors stop the run.
 			results = append(results, apiResult)
 		}
 		messages = append(messages, sdk.NewUserMessage(cpanthropic.ToolResultBlocks(results)...))
@@ -287,6 +280,7 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 				if queued == "" {
 					continue
 				}
+				queued = applyPlanModeUserPrompt(e.config.Permissions, queued)
 				msg, _ := userMessageFromPrompt(queued, cfg.WorkDir)
 				messages = append(messages, msg)
 			}
@@ -305,6 +299,15 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 func userMessageFromPrompt(prompt, workDir string) (sdk.MessageParam, string) {
 	expanded := attach.Expand(prompt, workDir)
 	return attach.UserMessage(expanded), expanded.Text
+}
+
+// applyPlanModeUserPrompt prepends plan-mode instructions when the permission
+// service is in plan mode. Idempotent if the marker is already present.
+func applyPlanModeUserPrompt(perms *permission.Service, prompt string) string {
+	if perms == nil || perms.Mode() != permission.ModePlan {
+		return prompt
+	}
+	return permission.WrapPlanModePrompt(prompt)
 }
 
 // toolResultToAPI maps a tool ContentBlock into an API tool_result payload.

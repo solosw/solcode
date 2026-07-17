@@ -121,7 +121,11 @@ func (s *Service) Check(t tool.Tool, input json.RawMessage) Decision {
 		if t.IsReadOnly(input) {
 			return Decision{Allowed: true}
 		}
-		return Decision{Allowed: false, Reason: "plan mode only allows read-only tools"}
+		// Planning session may use TodoWrite (checklist) and Task (explore via sub-agents).
+		if IsPlanModeExtraTool(t.Name()) {
+			return Decision{Allowed: true}
+		}
+		return Decision{Allowed: false, Reason: "plan mode only allows read-only tools, TodoWrite, and Task"}
 	case ModeAcceptEdits:
 		if isAcceptEditsTool(t) {
 			return Decision{Allowed: true}

@@ -349,10 +349,12 @@ Hook scripts (multi-language): PreToolUse bash guard & input wrap, PostToolUse l
 | `auto` | Ask for destructive operations, auto-approve reads |
 | `accept_edits` | Auto-approve edits, ask for bash |
 | `bypass` | Skip all permission prompts |
-| `yolo` | Full auto-pilot with no confirmations |
-| `plan` | Plan-only mode, no tool execution |
+| `yolo` | Full auto-pilot with no confirmations (alias of bypass) |
+| `plan` | Plan-only: read-only tools + `TodoWrite` + `Task`; each user message gets plan instructions (prefer sub-agent exploration, no file edits) |
 
 Switch modes at runtime with `Shift+Tab`.
+
+In **plan** mode, solcode prepends a planning system-style brief to every user message (not shown as a separate TUI bubble beyond the model transcript). Mutating tools (`Edit` / `Write` / `Patch` / `Bash` / …) are blocked; use `Task` to explore via sub-agents and `TodoWrite` to track the plan.
 
 ## Project Structure
 
