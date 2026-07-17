@@ -106,7 +106,7 @@ func (v *viewTool) Invoke(ctx context.Context, uctx *UseContext, input json.RawM
 
 	if IsImagePath(filePath) {
 		ext := strings.ToLower(filepath.Ext(filePath))
-		return ErrorResult(fmt.Sprintf("This is an image file of type: %s. Use a different tool to process images.", ext)), nil
+		return ErrorResult(fmt.Sprintf("This is an image file of type: %s. Use the ViewImage tool to examine images.", ext)), nil
 	}
 
 	content, totalLines, err := ReadTextFile(filePath, params.Offset, params.Limit)

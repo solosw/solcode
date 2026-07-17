@@ -60,3 +60,49 @@ func TestTokenEstimatorRequest(t *testing.T) {
 		t.Fatalf("Request() = %d, want %d", got, want)
 	}
 }
+
+func TestTokenEstimatorImageTokens(t *testing.T) {
+	if got := tokenest.ImageTokens(0, 0); got != tokenest.MinImageTokens {
+		t.Fatalf("ImageTokens(0,0) = %d, want %d", got, tokenest.MinImageTokens)
+	}
+	// 750x750 → 750 tokens exactly after formula.
+	if got, want := tokenest.ImageTokens(750, 750), 750; got != want {
+		t.Fatalf("ImageTokens(750,750) = %d, want %d", got, want)
+	}
+	// Messages with an image block must count more than text-only.
+	img := attachImageBlock(t, 100) // 100 bytes of fake base64 payload → some tokens
+	withImg := []sdk.MessageParam{
+		sdk.NewUserMessage(sdk.NewTextBlock("look"), img),
+	}
+	textOnly := []sdk.MessageParam{
+		sdk.NewUserMessage(sdk.NewTextBlock("look")),
+	}
+	if tokenest.Messages(withImg) <= tokenest.Messages(textOnly) {
+		t.Fatalf("messages with image (%d) should exceed text-only (%d)", tokenest.Messages(withImg), tokenest.Messages(textOnly))
+	}
+	if tokenest.MessageImageTokens(withImg) <= 0 {
+		t.Fatal("MessageImageTokens should be > 0")
+	}
+}
+
+// attachImageBlock builds a minimal base64 image content block for token tests.
+func attachImageBlock(t *testing.T, rawBytes int) sdk.ContentBlockParamUnion {
+	t.Helper()
+	if rawBytes < 1 {
+		rawBytes = 1
+	}
+	// base64 of zero bytes of length rawBytes
+	data := make([]byte, rawBytes)
+	encoded := strings.Repeat("A", (rawBytes*4+2)/3) // approximate base64 length
+	_ = data
+	return sdk.ContentBlockParamUnion{
+		OfImage: &sdk.ImageBlockParam{
+			Source: sdk.ImageBlockParamSourceUnion{
+				OfBase64: &sdk.Base64ImageSourceParam{
+					MediaType: "image/png",
+					Data:      encoded,
+				},
+			},
+		},
+	}
+}

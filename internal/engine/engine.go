@@ -9,6 +9,7 @@ import (
 	sdk "github.com/anthropics/anthropic-sdk-go"
 	"github.com/solosw/solcode/internal/agent"
 	cpanthropic "github.com/solosw/solcode/internal/anthropic"
+	"github.com/solosw/solcode/internal/attach"
 	"github.com/solosw/solcode/internal/hook"
 	"github.com/solosw/solcode/internal/permission"
 	"github.com/solosw/solcode/internal/tokenest"
@@ -106,15 +107,15 @@ func (e *Engine) runLegacyModel(ctx context.Context, req RunRequest) RunResult {
 	cfg := req.AgentConfig
 	messages := append([]sdk.MessageParam(nil), req.Messages...)
 	prompt := cfg.Prompt
-	messages = append(messages, sdk.NewUserMessage(sdk.NewTextBlock(prompt)))
 	prompt, blocked, errText := e.runUserPromptHook(ctx, cfg, prompt)
-	messages[len(messages)-1] = sdk.NewUserMessage(sdk.NewTextBlock(prompt))
+	userMsg, modelText := userMessageFromPrompt(prompt, cfg.WorkDir)
+	messages = append(messages, userMsg)
 	if blocked || errText != "" {
 		return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: errText}, Messages: messages}
 	}
 
 	response, err := e.config.Model.Send(ctx, ModelRequest{
-		Prompt:  prompt,
+		Prompt:  modelText,
 		WorkDir: cfg.WorkDir,
 	})
 	if err != nil {
@@ -134,12 +135,14 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 
 	messages := append([]sdk.MessageParam(nil), runReq.Messages...)
 	prompt := cfg.Prompt
-	messages = append(messages, sdk.NewUserMessage(sdk.NewTextBlock(prompt)))
 	prompt, blocked, errText := e.runUserPromptHook(ctx, cfg, prompt)
-	messages[len(messages)-1] = sdk.NewUserMessage(sdk.NewTextBlock(prompt))
+	userMsg, modelText := userMessageFromPrompt(prompt, cfg.WorkDir)
+	messages = append(messages, userMsg)
 	if blocked || errText != "" {
 		return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: errText}, Messages: messages}
 	}
+	// modelText is the expanded text used for local token estimation.
+	prompt = modelText
 
 	turnLimit := cfg.MaxTurns
 	if turnLimit <= 0 && !cfg.UnlimitedTurns {
@@ -256,36 +259,36 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 			if err := ctx.Err(); err != nil {
 				return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: err.Error()}, Messages: messages}
 			}
-			text := ""
-			isError := true
-			if toolResult.Content != nil {
-				text = toolResult.Content.Text
-				isError = toolResult.IsError || toolResult.Content.IsError
-			}
+			apiResult := toolResultToAPI(use.ID, toolResult)
+			text := apiResult.Text
+			isError := apiResult.IsError
 			if isMain && e.config.OnToolDone != nil {
+				// UI gets caption text only — never dump base64 image payloads.
 				e.config.OnToolDone(use.Name, text, isError)
 			}
 			if isError {
 				if cfg.Role == agent.AgentRoleTask {
-					results = append(results, cpanthropic.ToolResult{ToolUseID: use.ID, Text: text, IsError: true})
+					results = append(results, apiResult)
 					messages = append(messages, sdk.NewUserMessage(cpanthropic.ToolResultBlocks(results)...))
 					return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: fmt.Sprintf("tool %s failed: %s", use.Name, text)}, Messages: messages}
 				}
 				if use.Name == tool.TaskToolName {
-					results = append(results, cpanthropic.ToolResult{ToolUseID: use.ID, Text: text, IsError: true})
+					results = append(results, apiResult)
 					messages = append(messages, sdk.NewUserMessage(cpanthropic.ToolResultBlocks(results)...))
 					return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: fmt.Sprintf("task failed: %s", text)}, Messages: messages}
 				}
 			}
-			results = append(results, cpanthropic.ToolResult{ToolUseID: use.ID, Text: text, IsError: isError})
+			results = append(results, apiResult)
 		}
 		messages = append(messages, sdk.NewUserMessage(cpanthropic.ToolResultBlocks(results)...))
 		if isMain && e.config.QueuedPrompts != nil {
-			for _, prompt := range e.config.QueuedPrompts() {
-				prompt = strings.TrimSpace(prompt)
-				if prompt != "" {
-					messages = append(messages, sdk.NewUserMessage(sdk.NewTextBlock(prompt)))
+			for _, queued := range e.config.QueuedPrompts() {
+				queued = strings.TrimSpace(queued)
+				if queued == "" {
+					continue
 				}
+				msg, _ := userMessageFromPrompt(queued, cfg.WorkDir)
+				messages = append(messages, msg)
 			}
 		}
 	}
@@ -295,6 +298,32 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 		return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Output: finalText}, Messages: messages}
 	}
 	return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: fmt.Sprintf("max turns reached: %d", turnLimit)}, Messages: messages}
+}
+
+// userMessageFromPrompt expands @path attachments (inlining text files and
+// converting images to multimodal blocks) into a user MessageParam.
+func userMessageFromPrompt(prompt, workDir string) (sdk.MessageParam, string) {
+	expanded := attach.Expand(prompt, workDir)
+	return attach.UserMessage(expanded), expanded.Text
+}
+
+// toolResultToAPI maps a tool ContentBlock into an API tool_result payload.
+// Image results carry base64 data for multimodal tool_result content.
+func toolResultToAPI(toolUseID string, toolResult ToolResult) cpanthropic.ToolResult {
+	out := cpanthropic.ToolResult{
+		ToolUseID: toolUseID,
+		IsError:   true,
+	}
+	if toolResult.Content == nil {
+		return out
+	}
+	out.Text = toolResult.Content.Text
+	out.IsError = toolResult.IsError || toolResult.Content.IsError
+	if toolResult.Content.Type == "image" && toolResult.Content.Data != "" {
+		out.ImageMimeType = toolResult.Content.MimeType
+		out.ImageData = toolResult.Content.Data
+	}
+	return out
 }
 
 func nonEmpty(value, fallback string) string {

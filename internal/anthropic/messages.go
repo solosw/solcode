@@ -137,21 +137,63 @@ func ToolUseBlocks(message *sdk.Message) []sdk.ToolUseBlock {
 }
 
 func ToolResultMessage(toolUseID string, text string, isError bool) sdk.MessageParam {
-	return sdk.NewUserMessage(sdk.NewToolResultBlock(toolUseID, text, isError))
+	return sdk.NewUserMessage(ToolResultBlock(ToolResult{
+		ToolUseID: toolUseID,
+		Text:      text,
+		IsError:   isError,
+	}))
 }
 
 func ToolResultBlocks(results []ToolResult) []sdk.ContentBlockParamUnion {
 	blocks := make([]sdk.ContentBlockParamUnion, 0, len(results))
 	for _, result := range results {
-		blocks = append(blocks, sdk.NewToolResultBlock(result.ToolUseID, result.Text, result.IsError))
+		blocks = append(blocks, ToolResultBlock(result))
 	}
 	return blocks
 }
 
+// ToolResult is a tool invocation outcome sent back as a tool_result block.
+// When ImageData is set, content includes a multimodal image block (plus Text).
 type ToolResult struct {
-	ToolUseID string
-	Text      string
-	IsError   bool
+	ToolUseID     string
+	Text          string
+	IsError       bool
+	ImageMimeType string
+	ImageData     string // base64-encoded image payload
+}
+
+// ToolResultBlock builds a single tool_result content block, optionally with an image.
+func ToolResultBlock(result ToolResult) sdk.ContentBlockParamUnion {
+	content := make([]sdk.ToolResultBlockParamContentUnion, 0, 2)
+	if text := strings.TrimSpace(result.Text); text != "" || result.ImageData == "" {
+		// Always include text when present, or a placeholder when there is no image.
+		content = append(content, sdk.ToolResultBlockParamContentUnion{
+			OfText: &sdk.TextBlockParam{Text: result.Text},
+		})
+	}
+	if result.ImageData != "" {
+		mimeType := result.ImageMimeType
+		if mimeType == "" {
+			mimeType = "image/png"
+		}
+		content = append(content, sdk.ToolResultBlockParamContentUnion{
+			OfImage: &sdk.ImageBlockParam{
+				Source: sdk.ImageBlockParamSourceUnion{
+					OfBase64: &sdk.Base64ImageSourceParam{
+						MediaType: sdk.Base64ImageSourceMediaType(mimeType),
+						Data:      result.ImageData,
+					},
+				},
+			},
+		})
+	}
+	return sdk.ContentBlockParamUnion{
+		OfToolResult: &sdk.ToolResultBlockParam{
+			ToolUseID: result.ToolUseID,
+			Content:   content,
+			IsError:   sdk.Bool(result.IsError),
+		},
+	}
 }
 
 func RawInput(input json.RawMessage) json.RawMessage {

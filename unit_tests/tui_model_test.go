@@ -2,6 +2,8 @@ package unit_tests
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -533,6 +535,32 @@ func TestTUIModelSlashCompactAutocomplete(t *testing.T) {
 	}
 }
 
+func TestTUIModelFileAutocompleteAndApply(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "alpha.go"), []byte("package alpha"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "beta.go"), []byte("package beta"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	model := tui.NewWith(nil, tui.Dark, "", dir, true)
+	updated, cmd := model.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	model = asTUIModel(t, updated, cmd)
+
+	model, _ = setInputValue(model, "look at @a")
+	view := model.View()
+	if !strings.Contains(view, "Files:") || !strings.Contains(view, "@alpha.go") {
+		t.Fatalf("expected file autocomplete in view: %s", view)
+	}
+
+	updated, cmd = model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	model = asTUIModel(t, updated, cmd)
+	view = model.View()
+	if !strings.Contains(view, "@alpha.go") {
+		t.Fatalf("expected completed path in view after tab: %s", view)
+	}
+}
+
 func TestTUIModelAskUserDialogResponds(t *testing.T) {
 	model := newTUI(t)
 	responseCh := make(chan map[string]string, 1)
@@ -811,6 +839,18 @@ func setInputValue(model tui.Model, value string) (tui.Model, tea.Cmd) {
 		return m, cmd
 	}
 	return *updated.(*tui.Model), cmd
+}
+
+func asTUIModel(t *testing.T, updated tea.Model, _ tea.Cmd) tui.Model {
+	t.Helper()
+	if m, ok := updated.(tui.Model); ok {
+		return m
+	}
+	if m, ok := updated.(*tui.Model); ok {
+		return *m
+	}
+	t.Fatalf("unexpected model type %T", updated)
+	return tui.Model{}
 }
 
 func hasLineContainingAll(text string, parts ...string) bool {

@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/solosw/solcode/internal/attach"
 	"github.com/solosw/solcode/internal/tokenest"
 )
 
@@ -160,10 +161,20 @@ type SelectResult struct {
 type SelectFunc func(kind DialogKind, value string) SelectResult
 type CustomSelectFunc func(kind DialogKind, values []string) SelectResult
 
+type AutocompleteKind int
+
+const (
+	AutocompleteSlash AutocompleteKind = iota
+	AutocompleteFile
+)
+
 type AutocompleteState struct {
 	Items    []string
 	Selected int
 	Prefix   string
+	Kind     AutocompleteKind
+	// AtStart is the byte index of the '@' token start in the input (file mode).
+	AtStart int
 }
 
 type TodoViewItem struct {
@@ -1141,42 +1152,107 @@ func (m *Model) applyAutocomplete() {
 		m.autocomplete = nil
 		return
 	}
-	cmd := m.autocomplete.Items[m.autocomplete.Selected]
-	m.input.Reset()
-	// set the full command text
-	full := "/" + cmd + " "
-	for _, r := range full {
-		m.input, _ = m.input.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	item := m.autocomplete.Items[m.autocomplete.Selected]
+	switch m.autocomplete.Kind {
+	case AutocompleteFile:
+		value := m.input.Value()
+		start := m.autocomplete.AtStart
+		if start < 0 || start > len(value) {
+			start = 0
+		}
+		// Replace from @ to end of current token with @selected
+		// Keep a trailing space only for files (not directories ending with /).
+		replacement := "@" + item
+		if !strings.HasSuffix(item, "/") {
+			replacement += " "
+		}
+		prefix := value[:start]
+		newValue := prefix + replacement
+		m.input.Reset()
+		setTextareaValue(&m.input, newValue)
+		m.autocomplete = nil
+		// If we completed a directory, immediately re-open file suggestions.
+		m.updateAutocomplete()
+	default:
+		m.input.Reset()
+		full := "/" + item + " "
+		setTextareaValue(&m.input, full)
+		m.autocomplete = nil
 	}
-	m.autocomplete = nil
 }
 
 func (m *Model) updateAutocomplete() tea.Cmd {
 	value := m.input.Value()
-	if !strings.HasPrefix(value, "/") || strings.Contains(value, " ") {
-		m.autocomplete = nil
-		return nil
-	}
-	prefix := strings.TrimPrefix(value, "/")
-	commands := []string{"help", "clear", "model", "provider", "effort", "sessions", "compact", "fix-session", "new-session", "skills", "mcp"}
-	if m.skillNamesFn != nil {
-		commands = append(commands, m.skillNamesFn()...)
-	}
-	var matches []string
-	for _, cmd := range commands {
-		if strings.HasPrefix(cmd, prefix) && cmd != prefix {
-			matches = append(matches, cmd)
+
+	// Slash commands: whole input starts with / and has no spaces yet.
+	if strings.HasPrefix(value, "/") && !strings.Contains(value, " ") {
+		prefix := strings.TrimPrefix(value, "/")
+		commands := []string{"help", "clear", "model", "provider", "effort", "sessions", "compact", "fix-session", "new-session", "skills", "mcp"}
+		if m.skillNamesFn != nil {
+			commands = append(commands, m.skillNamesFn()...)
 		}
-	}
-	if len(matches) == 0 {
-		m.autocomplete = nil
+		var matches []string
+		for _, cmd := range commands {
+			if strings.HasPrefix(cmd, prefix) && cmd != prefix {
+				matches = append(matches, cmd)
+			}
+		}
+		if len(matches) == 0 {
+			m.autocomplete = nil
+			return nil
+		}
+		m.autocomplete = &AutocompleteState{
+			Items:    matches,
+			Selected: 0,
+			Prefix:   prefix,
+			Kind:     AutocompleteSlash,
+		}
 		return nil
 	}
-	m.autocomplete = &AutocompleteState{
-		Items:    matches,
-		Selected: 0,
-		Prefix:   prefix,
+
+	// File path suggestions for @token at end of input.
+	if filePrefix, atStart, ok := attach.CurrentAtToken(value); ok {
+		matches := attach.SuggestFiles(m.cwd, filePrefix)
+		// Drop exact complete match when typing a full file name with no trailing slash.
+		if filePrefix != "" && !strings.HasSuffix(filePrefix, "/") {
+			filtered := matches[:0]
+			for _, match := range matches {
+				if match == filePrefix {
+					continue
+				}
+				filtered = append(filtered, match)
+			}
+			matches = filtered
+		}
+		if len(matches) == 0 {
+			m.autocomplete = nil
+			return nil
+		}
+		selected := 0
+		if m.autocomplete != nil && m.autocomplete.Kind == AutocompleteFile {
+			// Preserve selection when the list still contains the previous item.
+			prev := ""
+			if m.autocomplete.Selected >= 0 && m.autocomplete.Selected < len(m.autocomplete.Items) {
+				prev = m.autocomplete.Items[m.autocomplete.Selected]
+			}
+			for i, match := range matches {
+				if match == prev {
+					selected = i
+					break
+				}
+			}
+		}
+		m.autocomplete = &AutocompleteState{
+			Items:    matches,
+			Selected: selected,
+			Prefix:   filePrefix,
+			Kind:     AutocompleteFile,
+			AtStart:  atStart,
+		}
+		return nil
 	}
+
+	m.autocomplete = nil
 	return nil
 }
 
@@ -1741,7 +1817,13 @@ func (m Model) displayContextTokens() int64 {
 		if input == "" {
 			return m.tokenUsage.EstimatedContextTokens
 		}
-		return m.tokenUsage.EstimatedContextTokens + int64(tokenest.Text(input))
+		// Include @attachment expansion (esp. image vision tokens) in the live estimate.
+		extra := int64(tokenest.Text(input))
+		if strings.Contains(input, "@") {
+			expanded := attach.Expand(input, m.cwd)
+			extra = int64(expanded.EstimatedTokens())
+		}
+		return m.tokenUsage.EstimatedContextTokens + extra
 	}
 	return m.localEstimatedContextTokens()
 }
@@ -1777,23 +1859,35 @@ func (m Model) localEstimatedContextTokens() int64 {
 		b.WriteString(content)
 		b.WriteString("\n")
 	}
+	textTokens := int64(tokenest.Text(b.String()))
 	input := strings.TrimSpace(m.input.Value())
-	if input != "" {
-		b.WriteString("user: ")
-		b.WriteString(input)
+	if input == "" {
+		return base + textTokens
 	}
-	return base + int64(tokenest.Text(b.String()))
+	// Prefer full @attachment expansion so image vision tokens are counted.
+	if strings.Contains(input, "@") {
+		expanded := attach.Expand(input, m.cwd)
+		return base + textTokens + int64(expanded.EstimatedTokens())
+	}
+	return base + textTokens + int64(tokenest.Text("user: "+input))
 }
 
 func (m Model) renderAutocomplete() string {
 	t := m.theme
 	var b strings.Builder
-	b.WriteString("  " + t.Dim.Render("Commands:") + "\n")
+	label := "Commands:"
+	prefix := "/"
+	if m.autocomplete.Kind == AutocompleteFile {
+		label = "Files:"
+		prefix = "@"
+	}
+	b.WriteString("  " + t.Dim.Render(label) + "\n")
 	for i, item := range m.autocomplete.Items {
+		display := prefix + item
 		if i == m.autocomplete.Selected {
-			b.WriteString("  " + t.ClaudeStyle.Render("❯ /"+item) + "\n")
+			b.WriteString("  " + t.ClaudeStyle.Render("❯ "+display) + "\n")
 		} else {
-			b.WriteString("    " + t.Dim.Render("/"+item) + "\n")
+			b.WriteString("    " + t.Dim.Render(display) + "\n")
 		}
 	}
 	return b.String()

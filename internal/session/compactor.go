@@ -109,7 +109,7 @@ func Compact(ctx context.Context, summary string, messages []sdk.MessageParam, w
 		}
 	}
 	retainedTranscript := Transcript(retained)
-	changed := sessionTranscript(messages) != retainedTranscript
+	changed := Transcript(messages) != retainedTranscript
 	if !changed {
 		return CompactResult{
 			Summary:             result.Summary,

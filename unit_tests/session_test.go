@@ -205,16 +205,22 @@ func TestSessionCompactUsesEstimatedContextTokens(t *testing.T) {
 	if session.ApproxTokensFromMessages(messages) >= 1000 {
 		t.Fatal("test setup expected message-only estimate to stay below threshold")
 	}
+	// TargetTokens=1 forces keep/cut after EstimatedTokens crosses the threshold,
+	// so short fixture messages still produce a Changed session.
 	result, err := session.Compact(ctx, "previous", messages, nil, session.CompactOptions{
 		MaxRecentTurns:         1,
 		SummaryThresholdTokens: 1000,
 		EstimatedTokens:        1000,
+		TargetTokens:           1,
 	})
 	if err != nil {
 		t.Fatalf("compact: %v", err)
 	}
 	if !result.Changed {
 		t.Fatal("expected estimated context tokens to trigger compaction")
+	}
+	if len(result.Messages) >= len(messages) {
+		t.Fatalf("expected fewer retained messages after estimated-token compact, before=%d after=%d", len(messages), len(result.Messages))
 	}
 }
 

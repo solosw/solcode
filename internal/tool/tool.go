@@ -57,6 +57,17 @@ func ErrorResult(msg string) *ContentBlock {
 	return &ContentBlock{Type: "text", Text: msg, IsError: true}
 }
 
+// ImageResult builds a multimodal image content block (base64) with an optional
+// text caption. The engine converts this into a tool_result with text + image.
+func ImageResult(mimeType, data, caption string) *ContentBlock {
+	return &ContentBlock{
+		Type:     "image",
+		MimeType: mimeType,
+		Data:     data,
+		Text:     caption,
+	}
+}
+
 // Tool defines the interface that every tool must implement.
 // It combines OpenCode's simplicity (Info + Run) with ClaudeCode Go's
 // safety annotations.

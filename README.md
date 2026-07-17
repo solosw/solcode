@@ -5,6 +5,7 @@ A terminal-based coding agent powered by Claude (Anthropic API) that can read, w
 ## Features
 
 - **Interactive TUI** — Rich terminal UI built with [Bubble Tea](https://github.com/charmbracelet/bubbletea), with streaming text, inline diff rendering, syntax highlighting, timestamps, thinking indicators, and permission dialogs.
+- **@ file attachments** — Type `@` to autocomplete and attach files from the working directory. Text files are inlined into the prompt; images are converted to multimodal image blocks for the model.
 - **Persistent sessions** — Reload saved conversation history with its original message timestamps.
 - **Batch mode** — Run one-shot prompts non-interactively via `-prompt`.
 - **Multi-model support** — Configure multiple LLM providers and models, switch at runtime with `/model` and `/provider`, or add them directly from their dialogs.
@@ -78,6 +79,35 @@ Config auto-discovery looks for `~/.solcode/settings.json`, `~/.solcode/settings
 | `Ctrl+U` / `Ctrl+D` | Half-page scroll |
 | `↑` / `↓` | Navigate input history |
 | `Esc` | Exit select-all / close dialog |
+
+### File attachments (`@`)
+
+Type `@` in the input to attach files relative to the working directory:
+
+- Autocomplete suggests files and directories (`↑`/`↓` + `Enter`/`Tab`)
+- Text files are inlined into the user message for the model
+- Images (png/jpg/gif/webp/…) are converted to Anthropic multimodal image blocks
+- Paths with spaces: `@"my file.png"`
+
+**Image context optimization**
+
+Large images can dominate the context window. solcode applies the same pipeline for `@` image attachments and the `ViewImage` tool:
+
+1. **Estimates vision tokens** using Anthropic’s formula after normalizing the longest edge to ≤1568px:  
+   `tokens ≈ (width × height) / 750`
+2. **Pre-resizes** images to a preferred max edge of **1280px** (never above 1568px)
+3. **Re-encodes** as JPEG (quality 80) when smaller, so screenshots/photos use fewer bytes and tokens
+4. **Counts image tokens** in live TUI `ctx` usage and in session token estimates (not only text)
+5. **Sends real image blocks** — `@` attaches them on the user message; `ViewImage` returns them inside the `tool_result` (not a base64 text dump)
+
+The model-facing attach note includes size and approximate token cost, e.g.  
+`[attached image: shot.png, 4000x3000→1280x960, image/jpeg, ~1638 tokens, compressed 2.1MB→180KB]`.
+
+Example:
+
+```
+Explain @internal/engine/engine.go and look at @screenshot.png
+```
 
 ### Slash Commands
 
@@ -193,7 +223,7 @@ All configuration lives in a JSON file. Example:
 | `tui.theme` | string | Initial palette: `dark` (default) or `light` |
 | `tui.background` | string | TUI background color (hex or ANSI color index) |
 
-`ViewImage` supplies an image data URL to the model; the standard terminal TUI does not render inline images, so it has no image-background setting.
+`ViewImage` returns a multimodal image block (after resize/re-encode) inside the tool result; the standard terminal TUI only shows the text caption, not the pixels.
 
 ## Built-in Tools
 
@@ -239,6 +269,7 @@ solcode/
 │   ├── agent/                 # Coordinator & sub-agent orchestration
 │   ├── anthropic/             # Anthropic API client & message types
 │   ├── app/                   # Application lifecycle & wiring
+│   ├── attach/                # @path attachment expand (text inline + image blocks)
 │   ├── config/                # Configuration loading & normalization
 │   ├── db/                    # Database migrations & SQL queries
 │   ├── engine/                # Core prompt→model→tool loop
