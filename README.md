@@ -24,7 +24,7 @@ A terminal-based coding agent powered by Claude (Anthropic API) that can read, w
 ### Installation
 
 ```bash
-go install github.com/solosw/solcode/cmd/solcode@latest
+go install github.com/solosw/solcode/cmd/solcode@master
 ```
 
 ### Prerequisites
