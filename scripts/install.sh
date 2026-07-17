@@ -24,6 +24,7 @@ VERSION="${SOLCODE_VERSION:-master}"
 INSTALL_DIR="${SOLCODE_INSTALL_DIR:-${HOME}/.local/bin}"
 BINARY_NAME="solcode"
 GITHUB_BASE="${GITHUB_BASE:-https://github.com}"
+NO_PATH=0
 
 usage() {
   cat <<'EOF'
@@ -33,11 +34,13 @@ Options:
   --version TAG   Release tag (default: master, or $SOLCODE_VERSION)
   --dir PATH      Install directory (default: ~/.local/bin)
   --repo OWNER/NAME
+  --no-path       Do not modify shell config / PATH
   --help
 
 Notes:
   - Default channel is "master" (rolling build from the master branch).
   - There is no "latest" channel; "latest" is treated as "master".
+  - PATH is updated automatically for the current shell and common rc files.
   - Pin a semver tag with --version vX.Y.Z if you publish versioned releases.
 EOF
 }
@@ -55,6 +58,10 @@ while [[ $# -gt 0 ]]; do
     --repo)
       REPO="${2:?missing repo}"
       shift 2
+      ;;
+    --no-path)
+      NO_PATH=1
+      shift
       ;;
     --help|-h)
       usage
@@ -246,19 +253,142 @@ echo
 echo "Installed: ${DEST}"
 echo "Version:   ${TAG}"
 
-case ":${PATH}:" in
-  *":${INSTALL_DIR}:"*)
-    echo "PATH already includes ${INSTALL_DIR}"
-    ;;
-  *)
-    echo
-    echo "Add to PATH (current shell):"
-    echo "  export PATH=\"${INSTALL_DIR}:\$PATH\""
-    echo
-    echo "Persist (bash/zsh), e.g.:"
-    echo "  echo 'export PATH=\"${INSTALL_DIR}:\$PATH\"' >> ~/.bashrc"
-    ;;
-esac
+# --- PATH automation ---
+# Managed block markers (idempotent re-installs).
+PATH_MARKER_BEGIN="# >>> solcode PATH >>>"
+PATH_MARKER_END="# <<< solcode PATH <<<"
+PATH_LINE="export PATH=\"${INSTALL_DIR}:\$PATH\""
+
+path_already_in_env() {
+  case ":${PATH}:" in
+    *":${INSTALL_DIR}:"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+append_path_block() {
+  local file="$1"
+  local dir
+  dir="$(dirname "$file")"
+  mkdir -p "$dir" 2>/dev/null || true
+  touch "$file" 2>/dev/null || return 1
+
+  if grep -Fqs "$PATH_MARKER_BEGIN" "$file" 2>/dev/null; then
+    # Refresh block in place (portable: rewrite temp file).
+    local tmp
+    tmp="$(mktemp)"
+    awk -v begin="$PATH_MARKER_BEGIN" -v end="$PATH_MARKER_END" -v line="$PATH_LINE" '
+      $0 == begin { print; print line; skip=1; next }
+      $0 == end { skip=0; print; next }
+      skip { next }
+      { print }
+    ' "$file" >"$tmp" && mv "$tmp" "$file"
+    return 0
+  fi
+
+  {
+    printf '\n%s\n%s\n%s\n' "$PATH_MARKER_BEGIN" "$PATH_LINE" "$PATH_MARKER_END"
+  } >>"$file"
+}
+
+ensure_path() {
+  if [[ "$NO_PATH" -eq 1 ]]; then
+    echo "Skipped PATH update (--no-path)."
+    return 0
+  fi
+
+  # Current shell (for this process tree; also useful if user sources the script).
+  if ! path_already_in_env; then
+    export PATH="${INSTALL_DIR}:${PATH}"
+    echo "Updated PATH for current session: ${INSTALL_DIR}"
+  else
+    echo "PATH already includes ${INSTALL_DIR} (current session)"
+  fi
+
+  # Persist into common shell configs (only files that exist or are default for $SHELL).
+  local shell_name rc_candidates=() updated=()
+  shell_name="$(basename "${SHELL:-}")"
+
+  case "$shell_name" in
+    zsh)
+      rc_candidates+=("${ZDOTDIR:-$HOME}/.zshrc")
+      ;;
+    bash)
+      rc_candidates+=("$HOME/.bashrc")
+      # macOS login shells often only read .bash_profile
+      rc_candidates+=("$HOME/.bash_profile")
+      ;;
+    fish)
+      rc_candidates+=("$HOME/.config/fish/config.fish")
+      ;;
+    *)
+      rc_candidates+=("$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.profile")
+      ;;
+  esac
+
+  # Always ensure at least one common file is updated so new terminals work.
+  # Prefer existing files; if none exist, create the primary for this shell.
+  local existing=()
+  local f
+  for f in "${rc_candidates[@]}"; do
+    [[ -f "$f" ]] && existing+=("$f")
+  done
+
+  if [[ ${#existing[@]} -eq 0 ]]; then
+    case "$shell_name" in
+      zsh) existing+=("${ZDOTDIR:-$HOME}/.zshrc") ;;
+      fish) existing+=("$HOME/.config/fish/config.fish") ;;
+      *) existing+=("$HOME/.bashrc") ;;
+    esac
+  fi
+
+  for f in "${existing[@]}"; do
+    if [[ "$shell_name" == "fish" && "$f" == *config.fish ]]; then
+      # fish uses a different syntax
+      local fish_begin="# >>> solcode PATH >>>"
+      local fish_end="# <<< solcode PATH <<<"
+      local fish_line="fish_add_path -m ${INSTALL_DIR}"
+      mkdir -p "$(dirname "$f")" 2>/dev/null || true
+      touch "$f" 2>/dev/null || continue
+      if grep -Fqs "$fish_begin" "$f" 2>/dev/null; then
+        local tmp
+        tmp="$(mktemp)"
+        awk -v begin="$fish_begin" -v end="$fish_end" -v line="$fish_line" '
+          $0 == begin { print; print line; skip=1; next }
+          $0 == end { skip=0; print; next }
+          skip { next }
+          { print }
+        ' "$f" >"$tmp" && mv "$tmp" "$f"
+      else
+        printf '\n%s\n%s\n%s\n' "$fish_begin" "$fish_line" "$fish_end" >>"$f"
+      fi
+      updated+=("$f")
+      continue
+    fi
+
+    if append_path_block "$f"; then
+      updated+=("$f")
+    fi
+  done
+
+  if [[ ${#updated[@]} -gt 0 ]]; then
+    echo "Persisted PATH in:"
+    for f in "${updated[@]}"; do
+      echo "  $f"
+    done
+    echo "New terminals will pick this up automatically."
+    # If user ran via curl|bash, their interactive shell won't see export;
+    # give a one-liner they can eval, but PATH files are already done.
+    if [[ "${BASH_SOURCE[0]:-}" == "" || "${BASH_SOURCE[0]:-}" == "bash" || "${BASH_SOURCE[0]:-}" == "/dev/stdin" || "${BASH_SOURCE[0]:-}" == "stdin" ]]; then
+      echo
+      echo "For this already-open shell, run:"
+      echo "  export PATH=\"${INSTALL_DIR}:\$PATH\""
+      echo "  # or: hash -r; hash -p ${DEST} ${BINARY_NAME} 2>/dev/null || true"
+    fi
+  fi
+}
+
+ensure_path
 
 echo
 echo "Next:"
@@ -266,3 +396,4 @@ echo "  export ANTHROPIC_API_KEY=sk-ant-..."
 echo "  ${BINARY_NAME}"
 echo
 echo "Done."
+

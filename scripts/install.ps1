@@ -112,19 +112,69 @@ Hint: push to master so CI publishes the rolling "master" release,
     if (-not $NoPath) {
         $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
         if (-not $userPath) { $userPath = "" }
-        $parts = $userPath -split ';' | Where-Object { $_ -ne "" }
-        if ($parts -notcontains $InstallDir) {
-            $newPath = if ($userPath.TrimEnd(';')) { "$userPath;$InstallDir" } else { $InstallDir }
-            [Environment]::SetEnvironmentVariable("Path", $newPath, "User")
-            $env:Path = "$env:Path;$InstallDir"
-            Write-Host "Added to user PATH: $InstallDir"
-            Write-Host "(Open a new terminal if 'solcode' is not found yet.)"
-        } else {
-            Write-Host "PATH already includes $InstallDir"
-            if (($env:Path -split ';') -notcontains $InstallDir) {
-                $env:Path = "$env:Path;$InstallDir"
+        $parts = @($userPath -split ';' | Where-Object { $_ -ne "" })
+        $normalizedInstall = [System.IO.Path]::GetFullPath($InstallDir).TrimEnd('\')
+        $already = $false
+        foreach ($p in $parts) {
+            try {
+                if ([System.IO.Path]::GetFullPath($p).TrimEnd('\') -eq $normalizedInstall) {
+                    $already = $true
+                    break
+                }
+            } catch {
+                if ($p -eq $InstallDir) { $already = $true; break }
             }
         }
+
+        if (-not $already) {
+            $newPath = if ($userPath.Trim().TrimEnd(';')) { "$($userPath.TrimEnd(';'));$InstallDir" } else { $InstallDir }
+            [Environment]::SetEnvironmentVariable("Path", $newPath, "User")
+            Write-Host "Added to user PATH: $InstallDir"
+        } else {
+            Write-Host "User PATH already includes $InstallDir"
+        }
+
+        # Current session
+        $sessionParts = @($env:Path -split ';' | Where-Object { $_ -ne "" })
+        $inSession = $false
+        foreach ($p in $sessionParts) {
+            try {
+                if ([System.IO.Path]::GetFullPath($p).TrimEnd('\') -eq $normalizedInstall) {
+                    $inSession = $true
+                    break
+                }
+            } catch {
+                if ($p -eq $InstallDir) { $inSession = $true; break }
+            }
+        }
+        if (-not $inSession) {
+            $env:Path = "$InstallDir;$env:Path"
+            Write-Host "Updated PATH for current PowerShell session"
+        }
+
+        # Notify running apps (Explorer etc.) that User PATH changed.
+        try {
+            Add-Type -Namespace Win32 -Name Native -MemberDefinition @'
+[DllImport("user32.dll", SetLastError=true, CharSet=CharSet.Auto)]
+public static extern IntPtr SendMessageTimeout(
+    IntPtr hWnd, uint Msg, UIntPtr wParam, string lParam,
+    uint fuFlags, uint uTimeout, out UIntPtr lpdwResult);
+'@ -ErrorAction SilentlyContinue
+            $HWND_BROADCAST = [IntPtr]0xffff
+            $WM_SETTINGCHANGE = 0x1a
+            $result = [UIntPtr]::Zero
+            [void][Win32.Native]::SendMessageTimeout(
+                $HWND_BROADCAST, $WM_SETTINGCHANGE, [UIntPtr]::Zero, "Environment",
+                2, 5000, [ref]$result)
+        } catch {
+            # Non-fatal: new terminals still pick up User PATH.
+        }
+
+        Write-Host "New terminals will find 'solcode' automatically."
+        Write-Host "If this window still cannot, open a new terminal or run:"
+        Write-Host "  `$env:Path = '$InstallDir;' + `$env:Path"
+    } else {
+        Write-Host "Skipped PATH update (-NoPath)."
     }
 
     Write-Host ""

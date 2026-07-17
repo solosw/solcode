@@ -43,14 +43,23 @@ Options:
 curl -fsSL .../install.sh | bash -s -- --dir ~/bin
 SOLCODE_REPO=myorg/solcode curl -fsSL .../install.sh | bash
 
+# skip automatic PATH update
+curl -fsSL .../install.sh | bash -s -- --no-path
+
 # optional: pin a versioned release tag if you publish one
 curl -fsSL .../install.sh | bash -s -- --version v0.1.0
 ```
 
 ```powershell
 & .\scripts\install.ps1 -InstallDir "$env:USERPROFILE\bin"
+# & .\scripts\install.ps1 -NoPath
 # & .\scripts\install.ps1 -Version v0.1.0
 ```
+
+Install scripts **add the binary directory to PATH automatically**:
+
+- **Linux/macOS**: current session + shell rc (`.bashrc` / `.zshrc` / fish `config.fish`), idempotent managed block
+- **Windows**: user `Path` env var + current PowerShell session (+ `WM_SETTINGCHANGE` broadcast)
 
 **From source** (requires Go 1.25+):
 
