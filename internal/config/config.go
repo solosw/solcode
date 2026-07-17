@@ -282,6 +282,8 @@ func Default() Config {
 			PromotionAccessThreshold: 3,
 			PromotionConfidence:      0.75,
 		},
+		// Eager tool-result compression via PostToolUse builtin hook (headroom legacy).
+		Hooks: hook.DefaultConfig(),
 	}
 }
 
@@ -380,6 +382,7 @@ func (cfg *Config) Normalize() error {
 	cfg.MCPServers = cloneMCPServers(cfg.MCP.Servers)
 
 	cfg.normalizeSessionMemory()
+	ensureDefaultToolResultCompressHook(cfg)
 
 	for i := range cfg.Providers {
 		p := &cfg.Providers[i]
@@ -668,6 +671,46 @@ func applyEnvLegacy(cfg *Config) {
 	if strings.TrimSpace(cfg.Effort) == "" {
 		cfg.Effort = "high"
 	}
+}
+
+// ensureDefaultToolResultCompressHook injects the built-in PostToolUse compressor
+// when the user has not already configured it (or has empty hooks).
+// Opt out by adding a builtin named disable_compress_tool_result under PostToolUse.
+func ensureDefaultToolResultCompressHook(cfg *Config) {
+	if cfg == nil {
+		return
+	}
+	if cfg.Hooks.Events == nil {
+		cfg.Hooks = hook.DefaultConfig()
+		return
+	}
+	groups := cfg.Hooks.Events[hook.EventPostToolUse]
+	for _, g := range groups {
+		for _, h := range g.Hooks {
+			name := strings.TrimSpace(h.Name)
+			if name == "" {
+				name = strings.TrimSpace(h.Command)
+			}
+			if !strings.EqualFold(strings.TrimSpace(h.Type), "builtin") {
+				continue
+			}
+			switch name {
+			case hook.BuiltinCompressToolResult, hook.BuiltinDisableCompressToolResult:
+				return
+			}
+		}
+	}
+	// Append rather than replace so user PostToolUse hooks stay.
+	cfg.Hooks.Events[hook.EventPostToolUse] = append(groups, hook.MatcherConfig{
+		Matcher: "*",
+		Hooks: []hook.CommandConfig{
+			{
+				Type:     "builtin",
+				Name:     hook.BuiltinCompressToolResult,
+				FailMode: "open",
+			},
+		},
+	})
 }
 
 func (cfg *Config) normalizeSessionMemory() {

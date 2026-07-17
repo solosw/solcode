@@ -1,0 +1,31 @@
+{
+  "provider": "anthropic",
+  "model": "sonnet",
+  "max_turns": 20,
+  "stream": true,
+  "thinking": true,
+  "thinking_text": false,
+  "effort": "medium",
+  "permission_mode": "auto",
+  "providers": [
+    {
+      "name": "anthropic",
+      "api_key_env": "ANTHROPIC_API_KEY",
+      "base_url_env": "ANTHROPIC_BASE_URL",
+      "models": [
+        {
+          "name": "sonnet",
+          "id": "claude-sonnet-4-6",
+          "max_context_tokens": 1000000
+        
+        },
+        {
+          "name": "haiku",
+          "id": "claude-haiku-4-5",
+          "max_context_tokens": 200000
+        
+        }
+      ]
+    }
+  ]
+}

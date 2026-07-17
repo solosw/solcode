@@ -253,10 +253,12 @@ All configuration lives in a JSON file. Example:
   ],
   "hooks": {
     "events": {
-      "tool_invoked": [
+      "PostToolUse": [
         {
-          "matcher": "bash",
-          "command": "echo 'bash was called'"
+          "matcher": "*",
+          "hooks": [
+            { "type": "builtin", "name": "compress_tool_result", "fail_mode": "open" }
+          ]
         }
       ]
     }
@@ -279,11 +281,43 @@ All configuration lives in a JSON file. Example:
 | `providers` | array | Multi-provider configuration |
 | `skills.paths` | array | Directories to scan for skill files |
 | `mcp_servers` | array | MCP server definitions |
-| `hooks.events` | map | Event → matcher+command mappings |
+| `hooks.events` | map | Event → matchers; hook types: `command` or `builtin` |
 | `tui.theme` | string | Initial palette: `dark` (default) or `light` |
 | `tui.background` | string | TUI background color (hex or ANSI color index) |
 
+**Eager tool-result compression (default)**
+
+Large tool outputs are compressed on `PostToolUse` by the builtin `compress_tool_result` (headroom **legacy** path). Probe data on real sessions showed ~70–85% savings for tool dumps; the pipeline path was near 0%.
+
+- Skips `Edit` / `Write` / `Patch` / `Diff`, errors, images, and small outputs (&lt; ~800 tokens)
+- Applies only when savings ≥15% and ≥100 tokens
+- `fail_mode: "open"` so failures never block tools
+
+Disable:
+
+```json
+{
+  "hooks": {
+    "events": {
+      "PostToolUse": [
+        { "matcher": "*", "hooks": [{ "type": "builtin", "name": "disable_compress_tool_result" }] }
+      ]
+    }
+  }
+}
+```
+
 `ViewImage` returns a multimodal image block (after resize/re-encode) inside the tool result; the standard terminal TUI only shows the text caption, not the pixels.
+
+**Examples pack** — see [`examples/`](examples/) for end-to-end samples:
+
+| Area | Path |
+|------|------|
+| Model / full `settings.json` | [`examples/settings/`](examples/settings/) |
+| Skills (`SKILL.md` workflows) | [`examples/skills/`](examples/skills/) |
+| Hooks (Node / Python / Bash / PowerShell / Go) | [`examples/hooks/`](examples/hooks/) |
+
+Hook scripts (multi-language): PreToolUse bash guard & input wrap, PostToolUse log/trim, UserPromptSubmit prefix, plus builtin `compress_tool_result`.
 
 ## Built-in Tools
 

@@ -128,11 +128,7 @@ func (x *ToolExecutor) Execute(ctx context.Context, call ToolCall, env ToolEnv) 
 			return ToolResult{Content: blocked, IsError: true}
 		}
 		if result.ModifiedResult != nil {
-			if modified, ok := result.ModifiedResult.(map[string]any); ok {
-				if text, ok := modified["text"].(string); ok {
-					content = tool.Result(text)
-				}
-			}
+			content = hook.ApplyModifiedResult(content, result.ModifiedResult)
 		}
 	}
 	return ToolResult{Content: content, IsError: content.IsError}

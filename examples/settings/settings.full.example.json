@@ -1,0 +1,136 @@
+{
+  "provider": "anthropic",
+  "model": "sonnet",
+  "fast_model": "haiku",
+  "max_turns": 30,
+  "stream": true,
+  "thinking": true,
+  "thinking_text": false,
+  "effort": "medium",
+  "permission_mode": "auto",
+  "tui": {
+    "theme": "dark",
+    "background": "#101820"
+  },
+  "providers": [
+    {
+      "name": "anthropic",
+      "api_key_env": "ANTHROPIC_API_KEY",
+      "base_url_env": "ANTHROPIC_BASE_URL",
+      "models": [
+        {
+          "name": "opus",
+          "id": "claude-opus-4-8",
+          "display_name": "Claude Opus 4.8",
+          "max_context_tokens": 1000000,
+          "max_tokens": 64000,
+          "thinking": true,
+          "thinking_text": true,
+          "effort": "high"
+        },
+        {
+          "name": "sonnet",
+          "id": "claude-sonnet-4-6",
+          "display_name": "Claude Sonnet 4.6",
+          "default": true,
+          "max_context_tokens": 1000000,
+          "max_tokens": 64000,
+          "thinking": true,
+          "thinking_text": false,
+          "effort": "medium"
+        },
+        {
+          "name": "haiku",
+          "id": "claude-haiku-4-5",
+          "display_name": "Claude Haiku 4.5",
+          "fast": true,
+          "max_context_tokens": 200000,
+          "max_tokens": 8192,
+          "thinking": false,
+          "effort": "low"
+        }
+      ]
+    }
+  ],
+  "skills": {
+    "paths": [
+      "examples/skills",
+      ".solcode/skills"
+    ],
+    "enabled": [],
+    "disabled": []
+  },
+  "mcp_servers": [
+    {
+      "name": "filesystem-notes",
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "."],
+      "disabled": true
+    }
+  ],
+  "session": {
+    "enabled": true,
+    "persist": true,
+    "default_session": "main"
+  },
+  "memory": {
+    "enabled": true,
+    "max_recent_turns": 20,
+    "compaction_trigger_percent": 85,
+    "compaction_target_percent": 15
+  },
+  "knowledge_graph": {
+    "enabled": true,
+    "context_max_tokens": 4000,
+    "retention_days": 90
+  },
+  "hooks": {
+    "events": {
+      "UserPromptSubmit": [
+        {
+          "matcher": "*",
+          "hooks": [
+            {
+              "type": "command",
+              "command": "node examples/hooks/user-prompt-prefix.mjs",
+              "timeout_ms": 3000,
+              "fail_mode": "open"
+            }
+          ]
+        }
+      ],
+      "PreToolUse": [
+        {
+          "matcher": "Bash",
+          "hooks": [
+            {
+              "type": "command",
+              "command": "node examples/hooks/pre-tool-bash-guard.mjs",
+              "timeout_ms": 5000,
+              "fail_mode": "open"
+            }
+          ]
+        }
+      ],
+      "PostToolUse": [
+        {
+          "matcher": "*",
+          "hooks": [
+            {
+              "type": "command",
+              "command": "node examples/hooks/post-tool-log.mjs",
+              "timeout_ms": 3000,
+              "fail_mode": "open"
+            },
+            {
+              "type": "builtin",
+              "name": "compress_tool_result",
+              "fail_mode": "open"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

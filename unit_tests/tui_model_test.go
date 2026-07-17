@@ -841,6 +841,107 @@ func setInputValue(model tui.Model, value string) (tui.Model, tea.Cmd) {
 	return *updated.(*tui.Model), cmd
 }
 
+func TestTUIDialogScrollsWhenManyItems(t *testing.T) {
+	const height = 18
+	const width = 80
+	model := tui.New(nil)
+	model.SetDialogCallbacks(func(kind tui.DialogKind) []tui.DialogItem {
+		items := make([]tui.DialogItem, 0, 40)
+		for i := 0; i < 40; i++ {
+			items = append(items, tui.DialogItem{
+				Label: fmt.Sprintf("option-%02d", i),
+				Value: fmt.Sprintf("%d", i),
+			})
+		}
+		return items
+	}, nil)
+
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: width, Height: height})
+	model = updated.(tui.Model)
+	// Open sessions dialog with many items.
+	model.ShowDialog(tui.DialogSessions)
+
+	view := model.View()
+	viewLines := strings.Split(view, "\n")
+	if len(viewLines) > height+2 {
+		// Allow a small ANSI / trailing newline slack, but not a full overflow.
+		t.Fatalf("view height %d exceeds terminal height %d\n%s", len(viewLines), height, view)
+	}
+	if !strings.Contains(view, "option-00") {
+		t.Fatalf("expected first page to include option-00: %s", view)
+	}
+	if strings.Contains(view, "option-39") {
+		t.Fatalf("expected long list to be windowed (option-39 should be off-screen): %s", view)
+	}
+	// Scrollbar thumb/track should appear beside the list (█ preferred; │ is track).
+	// Position counter is the reliable signal that the list is scroll-aware.
+	if !strings.Contains(view, "1/40") {
+		t.Fatalf("expected position counter 1/40 in dialog hint: %s", view)
+	}
+	if !strings.Contains(view, "█") {
+		// Thumb may use █; if theme falls back, at least ensure list is clipped.
+		if strings.Contains(view, "option-10") {
+			t.Fatalf("expected clipped list without showing option-10 on small terminal: %s", view)
+		}
+	}
+
+	// Move selection to the end; window should follow.
+	for i := 0; i < 45; i++ {
+		updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+		model = asTUIModel(t, updated, nil)
+	}
+	view = model.View()
+	if !strings.Contains(view, "option-39") {
+		t.Fatalf("expected selection window to include option-39: %s", view)
+	}
+	if !strings.Contains(view, "40/40") {
+		t.Fatalf("expected end position counter 40/40: %s", view)
+	}
+	if lipglossHeight(view) > height+2 {
+		t.Fatalf("scrolled view still overflows terminal: height=%d terminal=%d", lipglossHeight(view), height)
+	}
+}
+
+func TestTUIAskUserDialogScrollsWhenManyOptions(t *testing.T) {
+	const height = 16
+	model := newTUI(t)
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 80, Height: height})
+	model = updated.(tui.Model)
+
+	opts := make([]tui.AskUserOption, 0, 30)
+	for i := 0; i < 30; i++ {
+		opts = append(opts, tui.AskUserOption{Label: fmt.Sprintf("choice-%02d", i)})
+	}
+	responseCh := make(chan map[string]string, 1)
+	updated, _ = model.Update(tui.AskUserRequestMsg{
+		Questions: []tui.AskUserQuestion{{
+			Question: "Pick one?",
+			Header:   "Many",
+			Options:  opts,
+		}},
+		ResponseCh: responseCh,
+	})
+	model = asTUIModel(t, updated, nil)
+	view := model.View()
+	if strings.Contains(view, "choice-29") {
+		t.Fatalf("expected ask-user options to be windowed: %s", view)
+	}
+	if !strings.Contains(view, "choice-00") {
+		t.Fatalf("expected first options visible: %s", view)
+	}
+	// 30 options + custom = 31 rows; counter should reflect that.
+	if !strings.Contains(view, "/31") {
+		t.Fatalf("expected ask-user position counter: %s", view)
+	}
+	if lipglossHeight(view) > height+2 {
+		t.Fatalf("ask-user view overflows terminal: height=%d terminal=%d\n%s", lipglossHeight(view), height, view)
+	}
+}
+
+func lipglossHeight(view string) int {
+	return strings.Count(view, "\n") + 1
+}
+
 func asTUIModel(t *testing.T, updated tea.Model, _ tea.Cmd) tui.Model {
 	t.Helper()
 	if m, ok := updated.(tui.Model); ok {

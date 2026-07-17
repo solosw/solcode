@@ -124,8 +124,8 @@ func buildTheme(name string, p themePalette) Theme {
 	t.DialogBorder = lipgloss.NewStyle().
 		Border(lipgloss.NormalBorder()).
 		BorderForeground(t.Permission).
-		Padding(1, 2).
-		MarginTop(1)
+		Padding(0, 1).
+		MarginTop(0)
 	t.PermTitle = lipgloss.NewStyle().Foreground(t.Permission).Bold(true)
 	t.PermHint = lipgloss.NewStyle().Foreground(t.Inactive)
 	t.DiffAdd = lipgloss.NewStyle().Foreground(t.Success)

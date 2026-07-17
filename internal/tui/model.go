@@ -1021,6 +1021,7 @@ func (m Model) handleDialogKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	m.status = "Ready"
+	m.resize()
 	m.refreshViewport()
 	return m, nil
 }
@@ -1123,11 +1124,13 @@ func (m *Model) handleAutocompleteKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.autocomplete.Selected > 0 {
 			m.autocomplete.Selected--
 		}
+		m.resize()
 		return m, nil
 	case "down", "j":
 		if m.autocomplete.Selected < len(m.autocomplete.Items)-1 {
 			m.autocomplete.Selected++
 		}
+		m.resize()
 		return m, nil
 	case "enter", "tab":
 		m.applyAutocomplete()
@@ -1874,23 +1877,32 @@ func (m Model) localEstimatedContextTokens() int64 {
 
 func (m Model) renderAutocomplete() string {
 	t := m.theme
-	var b strings.Builder
 	label := "Commands:"
 	prefix := "/"
 	if m.autocomplete.Kind == AutocompleteFile {
 		label = "Files:"
 		prefix = "@"
 	}
-	b.WriteString("  " + t.Dim.Render(label) + "\n")
-	for i, item := range m.autocomplete.Items {
-		display := prefix + item
+	items := m.autocomplete.Items
+	maxLines := m.maxOverlayListLines()
+	start, end := visibleRange(m.autocomplete.Selected, len(items), maxLines)
+
+	var itemLines []string
+	for i := start; i < end; i++ {
+		display := prefix + items[i]
 		if i == m.autocomplete.Selected {
-			b.WriteString("  " + t.ClaudeStyle.Render("❯ "+display) + "\n")
+			itemLines = append(itemLines, "  "+t.ClaudeStyle.Render("❯ "+display))
 		} else {
-			b.WriteString("    " + t.Dim.Render(display) + "\n")
+			itemLines = append(itemLines, "    "+t.Dim.Render(display))
 		}
 	}
-	return b.String()
+	listWidth := max(20, min(m.width-6, 56))
+	list := m.renderScrollableList(itemLines, len(items), start, maxLines, listWidth)
+	header := "  " + t.Dim.Render(label)
+	if len(items) > maxLines {
+		header += t.Dim.Render(fmt.Sprintf("  %d/%d", m.autocomplete.Selected+1, len(items)))
+	}
+	return m.fitOverlay(header + "\n" + list)
 }
 
 func (m Model) renderDialog() string {
@@ -1900,25 +1912,30 @@ func (m Model) renderDialog() string {
 	if m.dialog.Custom {
 		return m.renderCustomDialog(title, dialogWidth)
 	}
-	var items strings.Builder
-	for i, item := range m.dialog.Items {
-		prefix := "  "
+	items := m.dialog.Items
+	maxLines := m.maxOverlayListLines()
+	start, end := visibleRange(m.dialog.Selected, len(items), maxLines)
+
+	var itemLines []string
+	for i := start; i < end; i++ {
+		item := items[i]
+		line := "  " + item.Label
 		if i == m.dialog.Selected {
-			prefix = t.ClaudeStyle.Render("❯ ") + t.ClaudeStyle.Render(item.Label)
-		} else {
-			prefix += item.Label
+			line = t.ClaudeStyle.Render("❯ ") + t.ClaudeStyle.Render(item.Label)
 		}
 		if item.Current {
-			prefix += t.Dim.Render(" (current)")
+			line += t.Dim.Render(" (current)")
 		}
 		if item.Subtitle != "" {
-			prefix += "  " + t.Dim.Render(item.Subtitle)
+			line += "  " + t.Dim.Render(item.Subtitle)
 		}
-		items.WriteString(prefix + "\n")
+		itemLines = append(itemLines, line)
 	}
-	hint := t.PermHint.Render("[↑/↓] Navigate  [Enter] Select  [Esc] Cancel")
-	body := strings.Join([]string{title, "", items.String(), hint}, "\n")
-	return lipgloss.PlaceHorizontal(m.width, lipgloss.Center, t.DialogBorder.Width(dialogWidth).Render(body))
+	listWidth := max(16, dialogWidth-6)
+	list := m.renderScrollableList(itemLines, len(items), start, maxLines, listWidth)
+	hint := t.PermHint.Render(fmt.Sprintf("[↑/↓] Navigate  [Enter] Select  [Esc] Cancel  %d/%d", m.dialog.Selected+1, max(1, len(items))))
+	body := strings.Join([]string{title, list, hint}, "\n")
+	return m.fitOverlay(lipgloss.PlaceHorizontal(m.width, lipgloss.Center, t.DialogBorder.Width(dialogWidth).Render(body)))
 }
 
 func (m Model) renderCustomDialog(title string, dialogWidth int) string {
@@ -1926,7 +1943,7 @@ func (m Model) renderCustomDialog(title string, dialogWidth int) string {
 	field := customDialogFieldLabel(dialog.Active, dialog.CustomStep)
 	hint := m.theme.PermHint.Render("[Enter] Continue  [Esc] Back to choices  [Ctrl+C] Cancel")
 	body := strings.Join([]string{title, "", field, "", "  " + dialog.CustomInput.View(), "", hint}, "\n")
-	return lipgloss.PlaceHorizontal(m.width, lipgloss.Center, m.theme.DialogBorder.Width(dialogWidth).Render(body))
+	return m.fitOverlay(lipgloss.PlaceHorizontal(m.width, lipgloss.Center, m.theme.DialogBorder.Width(dialogWidth).Render(body)))
 }
 
 func customDialogFieldLabel(kind DialogKind, step int) string {
@@ -1981,6 +1998,7 @@ func (m *Model) ShowDialog(kind DialogKind) {
 		Items:    items,
 		Selected: 0,
 	}
+	m.resize()
 	m.refreshViewport()
 }
 
@@ -1992,7 +2010,7 @@ func (m Model) renderPermissionDialog() string {
 	desc := truncate(strings.TrimSpace(m.pending.description), 600)
 	hint := t.PermHint.Render("[y] Allow   [n] Deny")
 	body := strings.Join([]string{title, "", "Tool: " + tool, desc, "", hint}, "\n")
-	return lipgloss.PlaceHorizontal(m.width, lipgloss.Center, t.DialogBorder.Width(dialogWidth).Render(body))
+	return m.fitOverlay(lipgloss.PlaceHorizontal(m.width, lipgloss.Center, t.DialogBorder.Width(dialogWidth).Render(body)))
 }
 
 func (m Model) renderConfirmDialog() string {
@@ -2002,7 +2020,7 @@ func (m Model) renderConfirmDialog() string {
 	question := truncate(strings.TrimSpace(m.pendingConf.question), 600)
 	hint := t.PermHint.Render("[y] Yes   [n] No")
 	body := strings.Join([]string{title, "", question, "", hint}, "\n")
-	return lipgloss.PlaceHorizontal(m.width, lipgloss.Center, t.DialogBorder.Width(dialogWidth).Render(body))
+	return m.fitOverlay(lipgloss.PlaceHorizontal(m.width, lipgloss.Center, t.DialogBorder.Width(dialogWidth).Render(body)))
 }
 
 func (m Model) renderAskUserDialog() string {
@@ -2020,8 +2038,29 @@ func (m Model) renderAskUserDialog() string {
 		titleText = fmt.Sprintf("%s %d/%d", titleText, ask.index+1, len(ask.questions))
 	}
 	title := t.PermTitle.Render(titleText)
-	lines := []string{title, "", truncate(strings.TrimSpace(q.Question), 600), ""}
-	for i, opt := range q.Options {
+	// Options + trailing "Custom answer" row participate in the scroll window.
+	optionCount := len(q.Options)
+	totalRows := optionCount + 1 // custom answer
+	maxLines := m.maxOverlayListLines()
+	// Reserve 1 extra visual line when custom row shows its input field.
+	listBudget := maxLines
+	start, end := visibleRange(ask.selected, totalRows, listBudget)
+	// Drop previews when the list is long so each option stays one line.
+	showPreview := optionCount <= listBudget
+
+	var itemLines []string
+	for i := start; i < end; i++ {
+		if i == optionCount {
+			customMarker := "  "
+			if ask.selected == optionCount {
+				customMarker = t.ClaudeStyle.Render("❯ ")
+			}
+			// Custom field always shows input when in the window.
+			itemLines = append(itemLines, customMarker+"Custom answer")
+			itemLines = append(itemLines, "    "+ask.customInput.View())
+			continue
+		}
+		opt := q.Options[i]
 		marker := "  "
 		if i == ask.selected {
 			marker = t.ClaudeStyle.Render("❯ ")
@@ -2037,27 +2076,36 @@ func (m Model) renderAskUserDialog() string {
 		if strings.TrimSpace(opt.Description) != "" {
 			line += " — " + t.Dim.Render(opt.Description)
 		}
-		lines = append(lines, line)
-		if strings.TrimSpace(opt.Preview) != "" {
-			lines = append(lines, "    "+t.Dim.Render(truncate(oneLine(opt.Preview), max(20, m.width-8))))
+		itemLines = append(itemLines, line)
+		if showPreview && strings.TrimSpace(opt.Preview) != "" {
+			itemLines = append(itemLines, "    "+t.Dim.Render(truncate(oneLine(opt.Preview), max(20, m.width-8))))
 		}
 	}
-	customMarker := "  "
-	if ask.selected == len(q.Options) {
-		customMarker = t.ClaudeStyle.Render("❯ ")
+	// Keep custom input visible when selected but window ended before custom row.
+	if ask.selected == optionCount && end <= optionCount {
+		customMarker := t.ClaudeStyle.Render("❯ ")
+		itemLines = append(itemLines, customMarker+"Custom answer", "    "+ask.customInput.View())
 	}
-	lines = append(lines, customMarker+"Custom answer", "    "+ask.customInput.View())
-	hint := "[↑/↓] Navigate  [Enter] Select or enter custom answer  [Esc] Cancel"
+
+	dialogWidth := min(60, m.width-4)
+	listWidth := max(16, dialogWidth-6)
+	// Scrollbar tracks logical rows (options+custom), not wrapped preview lines.
+	list := m.renderScrollableList(itemLines, totalRows, start, listBudget, listWidth)
+
+	hint := fmt.Sprintf("[↑/↓] Navigate  [Enter] Select or enter custom answer  [Esc] Cancel  %d/%d", ask.selected+1, totalRows)
 	if q.MultiSelect {
-		hint = "[↑/↓] Navigate  [Space] Toggle  [Enter] Submit or enter custom answer  [Esc] Cancel"
+		hint = fmt.Sprintf("[↑/↓] Navigate  [Space] Toggle  [Enter] Submit  [Esc] Cancel  %d/%d", ask.selected+1, totalRows)
 	}
 	if ask.editingCustom {
 		hint = "[Enter] Submit custom answer  [Esc] Back to choices  [Ctrl+C] Cancel"
 	}
-	lines = append(lines, "", t.PermHint.Render(hint))
-	body := strings.Join(lines, "\n")
-	dialogWidth := min(60, m.width-4)
-	return lipgloss.PlaceHorizontal(m.width, lipgloss.Center, t.DialogBorder.Width(dialogWidth).Render(body))
+	body := strings.Join([]string{
+		title,
+		truncate(strings.TrimSpace(q.Question), 600),
+		list,
+		t.PermHint.Render(hint),
+	}, "\n")
+	return m.fitOverlay(lipgloss.PlaceHorizontal(m.width, lipgloss.Center, t.DialogBorder.Width(dialogWidth).Render(body)))
 }
 
 func (m Model) renderActivityPanel() string {
@@ -2169,13 +2217,229 @@ func (m Model) layout() tuiLayout {
 }
 
 func (m Model) activeDialogHeight() int {
-	if m.pendingConf != nil || m.pendingAsk != nil || m.pending != nil {
+	content := ""
+	switch {
+	case m.pendingConf != nil:
+		content = m.renderConfirmDialog()
+	case m.pendingAsk != nil:
+		content = m.renderAskUserDialog()
+	case m.dialog != nil && m.dialog.Active != DialogNone:
+		content = m.renderDialog()
+	case m.pending != nil:
+		content = m.renderPermissionDialog()
+	case m.autocomplete != nil:
+		content = m.renderAutocomplete()
+	default:
+		return 0
+	}
+	h := lipgloss.Height(content)
+	maxH := m.maxOverlayTotalHeight()
+	if h > maxH {
+		return maxH
+	}
+	if h < 1 {
+		return 1
+	}
+	return h
+}
+
+// maxOverlayListLines is how many option rows an overlay may paint before
+// scrolling. Sized so title + list + hint (+ borders) fit in the overlay budget
+// and are not clipped by status/input chrome below.
+func (m Model) maxOverlayListLines() int {
+	if m.height <= 0 {
 		return 8
 	}
-	if m.dialog != nil && m.dialog.Active != DialogNone {
-		return min(8, len(m.dialog.Items)+4)
+	totalH := m.maxOverlayTotalHeight()
+	// border(2) + title(1) + hint(1) [+ question(1) for AskUser]
+	chrome := 4
+	if m.pendingAsk != nil {
+		chrome = 5
 	}
-	return 0
+	budget := totalH - chrome
+	if budget < 2 {
+		budget = 2
+	}
+	// Cap so a giant terminal still feels like a panel, not a full-screen dump.
+	capByHeight := max(3, (m.height*6)/10)
+	if budget > capByHeight {
+		budget = capByHeight
+	}
+	return budget
+}
+
+// maxOverlayTotalHeight is the absolute height budget for any overlay block.
+// Leaves input + status (+ activity) and one chat line so the popup is not
+// covered by the bottom chrome.
+func (m Model) maxOverlayTotalHeight() int {
+	if m.height <= 0 {
+		return 12
+	}
+	reserved := 4 + 2 + m.activityPanelHeight() + 1 // input, status×2, min chat
+	return max(6, m.height-reserved)
+}
+
+// fitOverlay clamps overlay content so JoinVertical never exceeds the terminal.
+func (m Model) fitOverlay(content string) string {
+	if content == "" || m.height <= 0 {
+		return content
+	}
+	maxH := m.maxOverlayTotalHeight()
+	if lipgloss.Height(content) <= maxH {
+		return content
+	}
+	return lipgloss.NewStyle().MaxHeight(maxH).Width(max(1, m.width)).Render(content)
+}
+
+// renderScrollableList paints option lines with a right-edge scrollbar when the
+// list is longer than the visible window. Title/hint stay outside this block so
+// they are never covered by scrolling content.
+//
+// total = full item count, offset = first visible index, maxVisible = window
+// capacity used for thumb math (typically maxOverlayListLines).
+func (m Model) renderScrollableList(itemLines []string, total, offset, maxVisible, listWidth int) string {
+	visible := len(itemLines)
+	if visible < 1 {
+		visible = 1
+		itemLines = []string{""}
+	}
+	if maxVisible < 1 {
+		maxVisible = visible
+	}
+	// Track height matches what we paint (no empty padding for short lists).
+	trackHeight := visible
+	needsBar := total > visible
+
+	contentWidth := max(8, listWidth)
+	if needsBar {
+		contentWidth = max(8, listWidth-2)
+	}
+	padded := padListColumn(itemLines, contentWidth)
+	if !needsBar {
+		return padded
+	}
+	// Thumb math uses the logical window capacity so position stays stable.
+	bar := m.renderListScrollbar(total, min(maxVisible, total), offset, trackHeight)
+	return lipgloss.JoinHorizontal(lipgloss.Top, padded, bar)
+}
+
+// renderListScrollbar draws a vertical track matching the chat scrollbar style.
+// total = full item count, visible = window size, offset = first visible index,
+// height = painted track rows.
+func (m Model) renderListScrollbar(total, visible, offset, height int) string {
+	if height <= 0 {
+		return ""
+	}
+	trackStyle := lipgloss.NewStyle().Foreground(m.theme.Subtle)
+	thumbStyle := lipgloss.NewStyle().Foreground(m.theme.Claude)
+	if total <= visible {
+		var b strings.Builder
+		for i := 0; i < height; i++ {
+			b.WriteString(trackStyle.Render(" │"))
+			if i < height-1 {
+				b.WriteString("\n")
+			}
+		}
+		return b.String()
+	}
+	thumbHeight := max(1, visible*height/total)
+	maxThumbPos := total - visible
+	thumbPos := 0
+	if maxThumbPos > 0 {
+		thumbPos = offset * (height - thumbHeight) / maxThumbPos
+	}
+	thumbPos = clamp(thumbPos, 0, height-thumbHeight)
+	var b strings.Builder
+	for i := 0; i < height; i++ {
+		if i >= thumbPos && i < thumbPos+thumbHeight {
+			b.WriteString(thumbStyle.Render(" █"))
+		} else {
+			b.WriteString(trackStyle.Render(" │"))
+		}
+		if i < height-1 {
+			b.WriteString("\n")
+		}
+	}
+	return b.String()
+}
+
+func padListColumn(lines []string, width int) string {
+	if width < 1 {
+		width = 1
+	}
+	var b strings.Builder
+	for i, line := range lines {
+		w := lipgloss.Width(line)
+		if w > width {
+			line = trimToWidth(line, width)
+			w = lipgloss.Width(line)
+		}
+		if w < width {
+			line += strings.Repeat(" ", width-w)
+		}
+		b.WriteString(line)
+		if i < len(lines)-1 {
+			b.WriteString("\n")
+		}
+	}
+	return b.String()
+}
+
+func trimToWidth(s string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if lipgloss.Width(s) <= width {
+		return s
+	}
+	// Walk runes until display width fits, leave room for ellipsis when possible.
+	ellipsis := "…"
+	limit := width
+	if width > 1 {
+		limit = width - lipgloss.Width(ellipsis)
+	}
+	var b strings.Builder
+	used := 0
+	for _, r := range s {
+		rw := lipgloss.Width(string(r))
+		if used+rw > limit {
+			break
+		}
+		b.WriteRune(r)
+		used += rw
+	}
+	if width > 1 {
+		b.WriteString(ellipsis)
+	}
+	return b.String()
+}
+
+// visibleRange returns a half-open [start,end) window that keeps selected in
+// view when total exceeds maxVisible.
+func visibleRange(selected, total, maxVisible int) (start, end int) {
+	if total <= 0 {
+		return 0, 0
+	}
+	if maxVisible < 1 {
+		maxVisible = 1
+	}
+	if selected < 0 {
+		selected = 0
+	}
+	if selected >= total {
+		selected = total - 1
+	}
+	if total <= maxVisible {
+		return 0, total
+	}
+	start = selected - maxVisible/2
+	if start < 0 {
+		start = 0
+	}
+	if start > total-maxVisible {
+		start = total - maxVisible
+	}
+	return start, start + maxVisible
 }
 
 func (m *Model) appendAssistantDelta(text string) {

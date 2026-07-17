@@ -1,0 +1,81 @@
+{
+  "hooks": {
+    "events": {
+      "UserPromptSubmit": [
+        {
+          "matcher": "*",
+          "hooks": [
+            {
+              "type": "command",
+              "command": "node examples/hooks/user-prompt-prefix.mjs",
+              "timeout_ms": 3000,
+              "fail_mode": "open"
+            }
+          ]
+        }
+      ],
+      "PreToolUse": [
+        {
+          "matcher": "Bash",
+          "hooks": [
+            {
+              "type": "command",
+              "command": "node examples/hooks/pre-tool-bash-guard.mjs",
+              "timeout_ms": 5000,
+              "fail_mode": "open"
+            },
+            {
+              "type": "command",
+              "command": "node examples/hooks/pre-tool-rtk-wrap.mjs",
+              "timeout_ms": 3000,
+              "fail_mode": "open"
+            }
+          ]
+        }
+      ],
+      "PostToolUse": [
+        {
+          "matcher": "*",
+          "hooks": [
+            {
+              "type": "command",
+              "command": "node examples/hooks/post-tool-log.mjs",
+              "timeout_ms": 3000,
+              "fail_mode": "open"
+            },
+            {
+              "type": "builtin",
+              "name": "compress_tool_result",
+              "fail_mode": "open"
+            }
+          ]
+        },
+        {
+          "matcher": "Bash|View|Grep",
+          "hooks": [
+            {
+              "type": "command",
+              "command": "node examples/hooks/post-tool-trim.mjs",
+              "timeout_ms": 3000,
+              "fail_mode": "open"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "_comment_language_swaps": {
+    "python_PreToolUse": "python examples/hooks/python/pre_tool_bash_guard.py",
+    "python_UserPromptSubmit": "python examples/hooks/python/user_prompt_prefix.py",
+    "python_PostToolUse_log": "python examples/hooks/python/post_tool_log.py",
+    "python_PostToolUse_trim": "python examples/hooks/python/post_tool_trim.py",
+    "bash_PreToolUse": "bash examples/hooks/bash/pre-tool-bash-guard.sh",
+    "bash_UserPromptSubmit": "bash examples/hooks/bash/user-prompt-prefix.sh",
+    "bash_PostToolUse_log": "bash examples/hooks/bash/post-tool-log.sh",
+    "powershell_PreToolUse": "powershell -NoProfile -ExecutionPolicy Bypass -File examples/hooks/powershell/pre-tool-bash-guard.ps1",
+    "powershell_UserPromptSubmit": "powershell -NoProfile -ExecutionPolicy Bypass -File examples/hooks/powershell/user-prompt-prefix.ps1",
+    "powershell_PostToolUse_trim": "powershell -NoProfile -ExecutionPolicy Bypass -File examples/hooks/powershell/post-tool-trim.ps1",
+    "go_PreToolUse": "go run ./examples/hooks/go/bash_guard",
+    "go_UserPromptSubmit": "go run ./examples/hooks/go/prompt_prefix"
+  }
+}

@@ -39,8 +39,13 @@ type MatcherConfig struct {
 }
 
 type CommandConfig struct {
-	Type      string `json:"type,omitempty"`
-	Command   string `json:"command,omitempty"`
+	// Type is "command" (default) or "builtin".
+	Type string `json:"type,omitempty"`
+	// Command is the shell command for type=command.
+	Command string `json:"command,omitempty"`
+	// Name selects a built-in hook when type=builtin
+	// (e.g. "compress_tool_result").
+	Name      string `json:"name,omitempty"`
 	TimeoutMS int    `json:"timeout_ms,omitempty"`
 	FailMode  string `json:"fail_mode,omitempty"`
 }
@@ -82,13 +87,24 @@ func (r *Runtime) Run(ctx context.Context, event Event) (Result, error) {
 			continue
 		}
 		for _, hook := range group.Hooks {
-			if hook.Type != "command" {
+			hookType := strings.TrimSpace(hook.Type)
+			if hookType == "" {
+				hookType = "command"
+			}
+
+			var hookResult Result
+			var err error
+			switch hookType {
+			case "command":
+				hookResult, err = runCommandHook(ctx, hook, event)
+			case "builtin":
+				hookResult, err = runBuiltinHook(hook, event)
+			default:
 				return result, fmt.Errorf("unsupported hook type: %s", hook.Type)
 			}
-			hookResult, err := runCommandHook(ctx, hook, event)
 			if err != nil {
 				if hook.FailMode == "open" {
-					result = Result{Decision: DecisionAllow}
+					// Keep prior decision; do not abort the tool pipeline.
 					continue
 				}
 				return result, err
@@ -102,6 +118,9 @@ func (r *Runtime) Run(ctx context.Context, event Event) (Result, error) {
 			}
 			if hookResult.ModifiedPrompt != "" {
 				event.Prompt = hookResult.ModifiedPrompt
+			}
+			if hookResult.ModifiedResult != nil {
+				event.ToolResult = hookResult.ModifiedResult
 			}
 			if hookResult.Decision == DecisionBlock {
 				return result, nil
