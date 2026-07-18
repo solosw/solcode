@@ -50,6 +50,15 @@ func DefaultSkillDirs(workDir string) []string {
 	return uniqueNonEmpty(append(paths, legacyPaths...))
 }
 
+// DefaultWorkflowDirs returns user/project workflow search paths.
+func DefaultWorkflowDirs(workDir string) []string {
+	paths := []string{filepath.Join(UserConfigDir(), "workflows")}
+	if projectDir := ProjectConfigDir(workDir); projectDir != "" {
+		paths = append(paths, filepath.Join(projectDir, "workflows"))
+	}
+	return uniqueNonEmpty(paths)
+}
+
 func projectSubDir(workDir string) string {
 	if workDir == "" {
 		return ""
@@ -117,6 +126,7 @@ type Config struct {
 	Hooks            hook.Config          `json:"hooks,omitempty"`
 	TUI              TUIConfig            `json:"tui,omitempty"`
 	Skills           SkillsConfig         `json:"skills,omitempty"`
+	Workflows        WorkflowsConfig      `json:"workflows,omitempty"`
 	MCP              MCPConfig            `json:"mcp,omitempty"`
 	MCPServers       []MCPServerConfig    `json:"mcp_servers,omitempty"`
 	Session          SessionConfig        `json:"session,omitempty"`
@@ -135,6 +145,14 @@ type TUIConfig struct {
 }
 
 type SkillsConfig struct {
+	Paths    []string `json:"paths,omitempty"`
+	Enabled  []string `json:"enabled,omitempty"`
+	Disabled []string `json:"disabled,omitempty"`
+}
+
+// WorkflowsConfig discovers user-authored Task graphs for explicit slash invocation.
+// Workflows are not exposed to the model as tools.
+type WorkflowsConfig struct {
 	Paths    []string `json:"paths,omitempty"`
 	Enabled  []string `json:"enabled,omitempty"`
 	Disabled []string `json:"disabled,omitempty"`
@@ -374,6 +392,10 @@ func (cfg *Config) Normalize() error {
 	cfg.Skills.Paths = defaultSkillPaths(cfg.WorkDir, cleanAndExpandPaths(cfg.Skills.Paths))
 	cfg.Skills.Enabled = cleanStringSlice(cfg.Skills.Enabled)
 	cfg.Skills.Disabled = cleanStringSlice(cfg.Skills.Disabled)
+
+	cfg.Workflows.Paths = defaultWorkflowPaths(cfg.WorkDir, cleanAndExpandPaths(cfg.Workflows.Paths))
+	cfg.Workflows.Enabled = cleanStringSlice(cfg.Workflows.Enabled)
+	cfg.Workflows.Disabled = cleanStringSlice(cfg.Workflows.Disabled)
 
 	if len(cfg.MCPServers) > 0 {
 		cfg.MCP.Servers = cloneMCPServers(cfg.MCPServers)
@@ -1180,6 +1202,10 @@ func normalizeMCPServers(servers []MCPServerConfig) []MCPServerConfig {
 
 func defaultSkillPaths(workDir string, configured []string) []string {
 	return uniqueNonEmpty(append(DefaultSkillDirs(workDir), configured...))
+}
+
+func defaultWorkflowPaths(workDir string, configured []string) []string {
+	return uniqueNonEmpty(append(DefaultWorkflowDirs(workDir), configured...))
 }
 
 func defaultMCPServers(workDir string, configured []MCPServerConfig) []MCPServerConfig {

@@ -1,0 +1,25 @@
+name: parallel-explore
+description: Explore code and docs in parallel, then merge findings
+tasks:
+  - id: code
+    description: Explore code structure
+    prompt: |
+      Map the main packages and entry points relevant to: {{args}}
+      List key files and one-line roles. Read-only only.
+    difficulty: easy
+    allowed_tools: [View, Grep, Glob, LS]
+  - id: docs
+    description: Explore docs and examples
+    prompt: |
+      Find README/docs/examples relevant to: {{args}}
+      Summarize what they claim vs what code might implement. Read-only only.
+    difficulty: easy
+    allowed_tools: [View, Grep, Glob, LS]
+  - id: merge
+    description: Merge exploration findings
+    prompt: |
+      Merge the code and docs findings into a short report for: {{args}}
+      Call out gaps, risks, and next investigation steps.
+    depends_on: [code, docs]
+    difficulty: hard
+    allowed_tools: [View, Grep, Glob, LS]

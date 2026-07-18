@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/solosw/solcode/internal/engine"
 	"github.com/solosw/solcode/internal/permission"
 	"github.com/solosw/solcode/internal/tool"
 )
@@ -90,5 +91,75 @@ func TestWrapPlanModePromptIdempotent(t *testing.T) {
 	twice := permission.WrapPlanModePrompt(once)
 	if strings.Count(twice, permission.PlanModePromptMarker) != 1 {
 		t.Fatalf("expected single marker, got %d", strings.Count(twice, permission.PlanModePromptMarker))
+	}
+}
+
+func TestStripPlanModePrompt(t *testing.T) {
+	wrapped := permission.WrapPlanModePrompt("design auth flow")
+	stripped := permission.StripPlanModePrompt(wrapped)
+	if strings.Contains(stripped, permission.PlanModePromptMarker) {
+		t.Fatalf("marker should be removed, got %q", stripped)
+	}
+	if stripped != "design auth flow" {
+		t.Fatalf("expected original user text, got %q", stripped)
+	}
+	if got := permission.StripPlanModePrompt("plain"); got != "plain" {
+		t.Fatalf("unexpected strip: %q", got)
+	}
+}
+
+func TestAppendPlanModeSystemPrompt(t *testing.T) {
+	base := "You are solcode."
+	once := permission.AppendPlanModeSystemPrompt(base)
+	if !strings.HasPrefix(once, base) {
+		t.Fatalf("expected system prompt prefix, got %q", once)
+	}
+	if !strings.Contains(once, permission.PlanModePromptMarker) {
+		t.Fatal("expected plan mode marker appended to system prompt")
+	}
+	if !strings.Contains(once, permission.PlanModeInstructions) {
+		t.Fatal("expected full plan instructions in system prompt")
+	}
+	twice := permission.AppendPlanModeSystemPrompt(once)
+	if strings.Count(twice, permission.PlanModePromptMarker) != 1 {
+		t.Fatalf("expected single marker after re-append, got %d", strings.Count(twice, permission.PlanModePromptMarker))
+	}
+}
+
+func TestContextBuilderPlanModeSystemPrompt(t *testing.T) {
+	on := engine.ContextBuilder{SystemPrompt: "custom", PlanMode: true}
+	reqOn := on.Build(engine.BuildRequest{WorkDir: "/tmp"})
+	if !strings.Contains(reqOn.System, permission.PlanModePromptMarker) {
+		t.Fatal("plan mode should append plan instructions to system prompt")
+	}
+	if !strings.Contains(reqOn.System, "custom") {
+		t.Fatal("custom system prompt should still be present")
+	}
+
+	off := engine.ContextBuilder{SystemPrompt: "custom", PlanMode: false}
+	reqOff := off.Build(engine.BuildRequest{WorkDir: "/tmp"})
+	if strings.Contains(reqOff.System, permission.PlanModePromptMarker) {
+		t.Fatal("non-plan mode must strip plan instructions from system prompt")
+	}
+
+	stale := engine.ContextBuilder{
+		SystemPrompt: permission.AppendPlanModeSystemPrompt("custom"),
+		PlanMode:     false,
+	}
+	reqStale := stale.Build(engine.BuildRequest{WorkDir: "/tmp"})
+	if strings.Contains(reqStale.System, permission.PlanModePromptMarker) {
+		t.Fatal("stale plan block must be stripped when not in plan mode")
+	}
+	if !strings.Contains(reqStale.System, "custom") {
+		t.Fatal("custom text should remain after stripping plan block")
+	}
+
+	staleOn := engine.ContextBuilder{
+		SystemPrompt: permission.AppendPlanModeSystemPrompt("custom"),
+		PlanMode:     true,
+	}
+	reqStaleOn := staleOn.Build(engine.BuildRequest{WorkDir: "/tmp"})
+	if strings.Count(reqStaleOn.System, permission.PlanModePromptMarker) != 1 {
+		t.Fatalf("expected single plan marker, got %d", strings.Count(reqStaleOn.System, permission.PlanModePromptMarker))
 	}
 }

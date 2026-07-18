@@ -13,17 +13,38 @@ import (
 type SessionID string
 
 type Metadata struct {
-	ID                           SessionID `json:"id"`
-	Title                        string    `json:"title,omitempty"`
-	WorkDir                      string    `json:"work_dir,omitempty"`
-	Model                        string    `json:"model,omitempty"`
-	CrossSessionMemory           *bool     `json:"cross_session_memory,omitempty"`
-	MemoryBootstrapPending       bool      `json:"memory_bootstrap_pending,omitempty"`
-	MemorySummaryCompleted       bool      `json:"memory_summary_completed,omitempty"`
-	MemoryCompactionCompleted    bool      `json:"memory_compaction_completed,omitempty"`
-	MemoryCompactionMessageCount int       `json:"memory_compaction_message_count,omitempty"`
-	CreatedAt                    time.Time `json:"created_at"`
-	UpdatedAt                    time.Time `json:"updated_at"`
+	ID                           SessionID  `json:"id"`
+	Title                        string     `json:"title,omitempty"`
+	WorkDir                      string     `json:"work_dir,omitempty"`
+	Model                        string     `json:"model,omitempty"`
+	CrossSessionMemory           *bool      `json:"cross_session_memory,omitempty"`
+	MemoryBootstrapPending       bool       `json:"memory_bootstrap_pending,omitempty"`
+	MemorySummaryCompleted       bool       `json:"memory_summary_completed,omitempty"`
+	MemoryCompactionCompleted    bool       `json:"memory_compaction_completed,omitempty"`
+	MemoryCompactionMessageCount int        `json:"memory_compaction_message_count,omitempty"`
+	Usage                        UsageStats `json:"usage,omitempty"`
+	CreatedAt                    time.Time  `json:"created_at"`
+	UpdatedAt                    time.Time  `json:"updated_at"`
+}
+
+// UsageStats holds cumulative API token counters for a session.
+// These are persisted so TUI can restore session totals after reload.
+type UsageStats struct {
+	InputTokens              int64 `json:"input_tokens,omitempty"`
+	OutputTokens             int64 `json:"output_tokens,omitempty"`
+	CacheCreationInputTokens int64 `json:"cache_creation_input_tokens,omitempty"`
+	CacheReadInputTokens     int64 `json:"cache_read_input_tokens,omitempty"`
+}
+
+// Add accumulates one API turn into the session totals.
+func (u *UsageStats) Add(input, output, cacheWrite, cacheRead int64) {
+	if u == nil {
+		return
+	}
+	u.InputTokens += input
+	u.OutputTokens += output
+	u.CacheCreationInputTokens += cacheWrite
+	u.CacheReadInputTokens += cacheRead
 }
 
 const (

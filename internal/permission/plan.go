@@ -117,14 +117,69 @@ func IsPlanModeExtraTool(name string) bool {
 	return false
 }
 
-// WrapPlanModePrompt prepends plan-mode instructions to a user prompt if missing.
-func WrapPlanModePrompt(userPrompt string) string {
-	userPrompt = strings.TrimSpace(userPrompt)
-	if userPrompt == "" {
+// WrapPlanModePrompt prepends plan-mode instructions to a prompt if missing.
+// Prefer AppendPlanModeSystemPrompt for system prompts; this remains for tests
+// and any callers that still wrap free-form text.
+func WrapPlanModePrompt(prompt string) string {
+	prompt = strings.TrimSpace(prompt)
+	if prompt == "" {
 		return PlanModeInstructions
 	}
-	if strings.Contains(userPrompt, PlanModePromptMarker) {
-		return userPrompt
+	if strings.Contains(prompt, PlanModePromptMarker) {
+		return prompt
 	}
-	return PlanModeInstructions + "\n\n" + userPrompt
+	return PlanModeInstructions + "\n\n" + prompt
+}
+
+// StripPlanModePrompt removes an injected plan-mode instruction block from text.
+// Used when leaving plan mode or when moving plan instructions to the system prompt.
+func StripPlanModePrompt(text string) string {
+	if text == "" || !strings.Contains(text, PlanModePromptMarker) {
+		return text
+	}
+	// Prefer stripping the full known instruction block when present.
+	if strings.Contains(text, PlanModeInstructions) {
+		text = strings.ReplaceAll(text, PlanModeInstructions, "")
+	} else {
+		// Fallback: drop from marker through end of that paragraph block.
+		for {
+			idx := strings.Index(text, PlanModePromptMarker)
+			if idx < 0 {
+				break
+			}
+			rest := text[idx+len(PlanModePromptMarker):]
+			// Cut until a double-newline that ends the instruction block, or end.
+			endRel := strings.Index(rest, "\n\n")
+			if endRel < 0 {
+				text = strings.TrimSpace(text[:idx])
+				break
+			}
+			// Keep scanning in case multiple blocks exist; remove one chunk at a time.
+			// Include trailing blank lines after the first paragraph pair.
+			cutEnd := idx + len(PlanModePromptMarker) + endRel
+			// Extend through consecutive blank lines.
+			for cutEnd < len(text) && (text[cutEnd] == '\n' || text[cutEnd] == '\r') {
+				cutEnd++
+			}
+			text = text[:idx] + text[cutEnd:]
+		}
+	}
+	// Collapse leftover blank runs introduced by removal.
+	for strings.Contains(text, "\n\n\n") {
+		text = strings.ReplaceAll(text, "\n\n\n", "\n\n")
+	}
+	return strings.TrimSpace(text)
+}
+
+// AppendPlanModeSystemPrompt appends plan-mode instructions to a system prompt
+// when missing. Idempotent if the marker is already present.
+func AppendPlanModeSystemPrompt(systemPrompt string) string {
+	systemPrompt = strings.TrimSpace(systemPrompt)
+	if strings.Contains(systemPrompt, PlanModePromptMarker) {
+		return systemPrompt
+	}
+	if systemPrompt == "" {
+		return PlanModeInstructions
+	}
+	return systemPrompt + "\n\n" + PlanModeInstructions
 }

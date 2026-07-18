@@ -7,6 +7,7 @@ import (
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
 	cpanthropic "github.com/solosw/solcode/internal/anthropic"
+	"github.com/solosw/solcode/internal/permission"
 	"github.com/solosw/solcode/internal/tokenest"
 	"github.com/solosw/solcode/internal/tool"
 )
@@ -14,6 +15,9 @@ import (
 type ContextBuilder struct {
 	SystemPrompt string
 	SkillNames   []string
+	// PlanMode, when true, appends plan-mode instructions to the system prompt.
+	// When false, any leftover plan-mode block is stripped from SystemPrompt.
+	PlanMode bool
 }
 
 type ContextItem struct {
@@ -337,13 +341,21 @@ type BuildRequest struct {
 func (b ContextBuilder) systemPrompt(workDir string) string {
 	parts := []string{}
 	if text := strings.TrimSpace(b.SystemPrompt); text != "" {
-		parts = append(parts, text)
+		// Never leave a stale plan-mode block in the custom system prompt.
+		// Re-append below only when PlanMode is active.
+		text = stripPlanModeFromText(text)
+		if text != "" {
+			parts = append(parts, text)
+		}
 	}
 	parts = append(parts, defaultSystemPrompt())
 	parts = append(parts, toolUsagePrompt())
 	parts = append(parts, skillsPrompt(b.SkillNames))
 	if workDir != "" {
 		parts = append(parts, "Working directory: "+workDir)
+	}
+	if b.PlanMode {
+		parts = append(parts, planModeSystemPrompt())
 	}
 	return strings.Join(nonEmptyParts(parts), "\n\n")
 }
@@ -406,6 +418,14 @@ func nonEmptyParts(parts []string) []string {
 		}
 	}
 	return out
+}
+
+func stripPlanModeFromText(text string) string {
+	return permission.StripPlanModePrompt(text)
+}
+
+func planModeSystemPrompt() string {
+	return permission.PlanModeInstructions
 }
 
 func defaultSystemPrompt() string {

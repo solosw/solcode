@@ -26,25 +26,32 @@ import (
 	"github.com/solosw/solcode/internal/session"
 	"github.com/solosw/solcode/internal/skill"
 	"github.com/solosw/solcode/internal/tool"
+	"github.com/solosw/solcode/internal/workflow"
 )
 
 type App struct {
-	Config         config.Config
-	Client         *cpanthropic.Client
-	Tools          *tool.Registry
-	Hooks          *hook.Runtime
-	Permissions    *permission.Service
-	Engine         *engine.Engine
-	Coordinator    *agent.Coordinator
-	Sessions       *session.Manager
-	MemoryStore    *memory.FileStore
-	MemoryManager  *memory.Manager
-	SkillRegistry  *skill.Registry
-	MCPRegistry    *mcp.Registry
-	ChangeGraph    *changegraph.Store
-	summaryWriter  session.SummaryWriter
-	summaryRefresh sync.Mutex
-	mcpFactory     mcp.ClientFactory
+	Config           config.Config
+	Client           *cpanthropic.Client
+	Tools            *tool.Registry
+	Hooks            *hook.Runtime
+	Permissions      *permission.Service
+	Engine           *engine.Engine
+	Coordinator      *agent.Coordinator
+	Sessions         *session.Manager
+	MemoryStore      *memory.FileStore
+	MemoryManager    *memory.Manager
+	SkillRegistry    *skill.Registry
+	WorkflowRegistry *workflow.Registry
+	MCPRegistry      *mcp.Registry
+	ChangeGraph      *changegraph.Store
+	summaryWriter    session.SummaryWriter
+	summaryRefresh   sync.Mutex
+	mcpFactory       mcp.ClientFactory
+
+	// usageSession binds OnUsage accumulation to the active session so
+	// token totals persist across reloads.
+	usageSessionMu sync.Mutex
+	usageSession   *session.Session
 
 	onTextDelta     func(string)
 	onThinkingDelta func(string)
@@ -164,20 +171,45 @@ func New(cfg config.Config, opts ...Option) (*App, error) {
 	})
 
 	recordFileChange := newFileChangeRecorder(graphStore)
-	eng := engine.NewEngine(engineConfig(cfg, client, runtime, registry, permissions, options.onTextDelta, options.onThinkingDelta, options.onToolStart, options.onToolDone, options.onUsage, options.onAskUser, options.queuedPrompts, recordFileChange))
+
+	// Construct App first so engine OnUsage can bind to emitUsage for session totals.
+	application := &App{
+		Config:           cfg,
+		Client:           client,
+		Tools:            registry,
+		Hooks:            runtime,
+		Permissions:      permissions,
+		Sessions:         nil, // filled below when enabled
+		MemoryStore:      nil,
+		MemoryManager:    nil,
+		SkillRegistry:    skillRegistry,
+		WorkflowRegistry: loadWorkflows(cfg),
+		MCPRegistry:      mcpRegistry,
+		ChangeGraph:      graphStore,
+		mcpFactory:       options.mcpFactory,
+		onTextDelta:      options.onTextDelta,
+		onThinkingDelta:  options.onThinkingDelta,
+		onToolStart:      options.onToolStart,
+		onToolDone:       options.onToolDone,
+		onUsage:          options.onUsage,
+		onStatus:         options.onStatus,
+		onAskUser:        options.onAskUser,
+		queuedPrompts:    options.queuedPrompts,
+	}
+	eng := engine.NewEngine(engineConfig(cfg, client, runtime, registry, permissions, options.onTextDelta, options.onThinkingDelta, options.onToolStart, options.onToolDone, application.emitUsage, options.onAskUser, options.queuedPrompts, recordFileChange))
 	coordinator := agent.NewCoordinator(eng)
 	registry.Register(tool.NewTaskTool(coordinator))
+	application.Engine = eng
+	application.Coordinator = coordinator
 
-	var sessions *session.Manager
 	if cfg.Session.Enabled && cfg.Session.Persist {
-		sessions = session.NewManager(session.NewFileStore(cfg.Session.Dir), session.SessionID(cfg.Session.DefaultSession))
+		application.Sessions = session.NewManager(session.NewFileStore(cfg.Session.Dir), session.SessionID(cfg.Session.DefaultSession))
 	}
-	var memoryStore *memory.FileStore
-	var memoryManager *memory.Manager
 	if cfg.Memory.Enabled {
-		memoryStore = memory.NewFileStore(cfg.Memory.Dir)
+		memoryStore := memory.NewFileStore(cfg.Memory.Dir)
 		memoryModel := memoryModelName(cfg)
-		memoryManager = memory.NewManagerWithExtractor(
+		application.MemoryStore = memoryStore
+		application.MemoryManager = memory.NewManagerWithExtractor(
 			memoryStore,
 			memory.DefaultGate{},
 			memory.AnthropicJudge{Client: client, Model: memoryModel},
@@ -190,30 +222,52 @@ func New(cfg config.Config, opts ...Option) (*App, error) {
 		}}).WithRetrievalBudget(cfg.Memory.RetrievalM2Limit, cfg.Memory.RetrievalM3Limit, cfg.Memory.RetrievalM4Limit, cfg.Memory.RetrievalM5Limit)
 	}
 
-	return &App{
-		Config:          cfg,
-		Client:          client,
-		Tools:           registry,
-		Hooks:           runtime,
-		Permissions:     permissions,
-		Engine:          eng,
-		Coordinator:     coordinator,
-		Sessions:        sessions,
-		MemoryStore:     memoryStore,
-		MemoryManager:   memoryManager,
-		SkillRegistry:   skillRegistry,
-		MCPRegistry:     mcpRegistry,
-		ChangeGraph:     graphStore,
-		mcpFactory:      options.mcpFactory,
-		onTextDelta:     options.onTextDelta,
-		onThinkingDelta: options.onThinkingDelta,
-		onToolStart:     options.onToolStart,
-		onToolDone:      options.onToolDone,
-		onUsage:         options.onUsage,
-		onStatus:        options.onStatus,
-		onAskUser:       options.onAskUser,
-		queuedPrompts:   options.queuedPrompts,
-	}, nil
+	return application, nil
+}
+
+// emitUsage accumulates per-turn usage into the active session (when bound)
+// and forwards absolute session totals to the UI callback.
+func (a *App) emitUsage(u engine.Usage) {
+	if a == nil {
+		return
+	}
+	a.usageSessionMu.Lock()
+	if a.usageSession != nil {
+		a.usageSession.Metadata.Usage.Add(
+			u.InputTokens,
+			u.OutputTokens,
+			u.CacheCreationInputTokens,
+			u.CacheReadInputTokens,
+		)
+		// Forward absolute session totals so the TUI can display/persist them.
+		u.InputTokens = a.usageSession.Metadata.Usage.InputTokens
+		u.OutputTokens = a.usageSession.Metadata.Usage.OutputTokens
+		u.CacheCreationInputTokens = a.usageSession.Metadata.Usage.CacheCreationInputTokens
+		u.CacheReadInputTokens = a.usageSession.Metadata.Usage.CacheReadInputTokens
+	}
+	cb := a.onUsage
+	a.usageSessionMu.Unlock()
+	if cb != nil {
+		cb(u)
+	}
+}
+
+// bindUsageSession attaches s for OnUsage accumulation. Call the returned
+// cleanup to detach (typically via defer).
+func (a *App) bindUsageSession(s *session.Session) func() {
+	if a == nil {
+		return func() {}
+	}
+	a.usageSessionMu.Lock()
+	a.usageSession = s
+	a.usageSessionMu.Unlock()
+	return func() {
+		a.usageSessionMu.Lock()
+		if a.usageSession == s {
+			a.usageSession = nil
+		}
+		a.usageSessionMu.Unlock()
+	}
 }
 
 func openChangeGraph(cfg config.Config) (*changegraph.Store, error) {
@@ -277,7 +331,7 @@ func (a *App) SwitchModel(cfg config.Config) error {
 			PromotionConfidence:      cfg.Memory.PromotionConfidence,
 		}}).WithRetrievalBudget(cfg.Memory.RetrievalM2Limit, cfg.Memory.RetrievalM3Limit, cfg.Memory.RetrievalM4Limit, cfg.Memory.RetrievalM5Limit)
 	}
-	a.Engine.UpdateConfig(engineConfig(cfg, client, a.Hooks, a.Tools, a.Permissions, a.onTextDelta, a.onThinkingDelta, a.onToolStart, a.onToolDone, a.onUsage, a.onAskUser, a.queuedPrompts, newFileChangeRecorder(a.ChangeGraph)))
+	a.Engine.UpdateConfig(engineConfig(cfg, client, a.Hooks, a.Tools, a.Permissions, a.onTextDelta, a.onThinkingDelta, a.onToolStart, a.onToolDone, a.emitUsage, a.onAskUser, a.queuedPrompts, newFileChangeRecorder(a.ChangeGraph)))
 	return nil
 }
 
@@ -306,6 +360,7 @@ func (a *App) ReloadFeatures(cfg config.Config, mcpFactory mcp.ClientFactory) er
 	a.Config = cfg
 	a.Tools = registry
 	a.SkillRegistry = skillRegistry
+	a.WorkflowRegistry = loadWorkflows(cfg)
 	a.MCPRegistry = mcpRegistry
 	a.ChangeGraph = graphStore
 	registry.Register(tool.NewTaskTool(a.Coordinator))
@@ -328,7 +383,7 @@ func (a *App) ReloadFeatures(cfg config.Config, mcpFactory mcp.ClientFactory) er
 	} else {
 		a.MemoryManager = nil
 	}
-	a.Engine.UpdateConfig(engineConfig(cfg, a.Client, a.Hooks, a.Tools, a.Permissions, a.onTextDelta, a.onThinkingDelta, a.onToolStart, a.onToolDone, a.onUsage, a.onAskUser, a.queuedPrompts, newFileChangeRecorder(a.ChangeGraph)))
+	a.Engine.UpdateConfig(engineConfig(cfg, a.Client, a.Hooks, a.Tools, a.Permissions, a.onTextDelta, a.onThinkingDelta, a.onToolStart, a.onToolDone, a.emitUsage, a.onAskUser, a.queuedPrompts, newFileChangeRecorder(a.ChangeGraph)))
 	return nil
 }
 
@@ -469,6 +524,8 @@ func (a *App) RunPromptWithSession(ctx context.Context, sessionID, prompt, workD
 		MaxTurns:     maxTurns,
 	}
 	projectKnowledge := a.projectKnowledgeForRequest(ctx, current, prompt)
+	// Bind usage accumulation so OnUsage persists session totals.
+	unbindUsage := a.bindUsageSession(current)
 	result := a.Engine.RunWithHistory(ctx, engine.RunRequest{
 		AgentConfig:      cfg,
 		SessionID:        sessionID,
@@ -477,6 +534,7 @@ func (a *App) RunPromptWithSession(ctx context.Context, sessionID, prompt, workD
 		MemoryContext:    memoryContext,
 		ProjectKnowledge: projectKnowledge,
 	})
+	unbindUsage()
 	current.Metadata.WorkDir = workDir
 	current.Metadata.Model = a.Config.Model
 	if len(result.Messages) > 0 {
@@ -822,7 +880,11 @@ func (a *App) estimateSessionContextTokens(ctx context.Context, current *session
 		return 0
 	}
 	messages := session.StripEphemeralContextMessages(current.CopyMessages())
-	builder := engine.ContextBuilder{SystemPrompt: a.Config.SystemPrompt, SkillNames: skillNames(a.SkillRegistry)}
+	builder := engine.ContextBuilder{
+		SystemPrompt: a.Config.SystemPrompt,
+		SkillNames:   skillNames(a.SkillRegistry),
+		PlanMode:     a.Permissions != nil && a.Permissions.Mode() == permission.ModePlan,
+	}
 	tools := []tool.Tool(nil)
 	if a.Tools != nil {
 		tools = a.Tools.All()
@@ -2519,6 +2581,93 @@ func registerBuiltins(registry *tool.Registry) {
 		tool.NewWebSearchTool(),
 		tool.NewWriteTool(),
 	)
+}
+
+func loadWorkflows(cfg config.Config) *workflow.Registry {
+	registry := workflow.NewRegistry()
+	for _, dir := range cfg.Workflows.Paths {
+		registryDir := dir
+		if !filepath.IsAbs(registryDir) && cfg.WorkDir != "" {
+			registryDir = filepath.Join(cfg.WorkDir, registryDir)
+		}
+		loaded := workflow.LoadFromDirs(registryDir)
+		for _, def := range loaded.All() {
+			if len(cfg.Workflows.Enabled) > 0 && !contains(cfg.Workflows.Enabled, def.Name) {
+				continue
+			}
+			if contains(cfg.Workflows.Disabled, def.Name) {
+				continue
+			}
+			// Skip invalid definitions at load time.
+			if err := def.Validate(); err != nil {
+				continue
+			}
+			registry.Add(def)
+		}
+	}
+	return registry
+}
+
+// RunWorkflow executes a named user-authored Task graph explicitly.
+// Workflows are not exposed as model tools and are blocked in plan mode.
+// Results are returned as text only; nothing is written to memory.
+func (a *App) RunWorkflow(ctx context.Context, name, args string) (string, error) {
+	if a == nil {
+		return "", fmt.Errorf("app is nil")
+	}
+	if a.Permissions != nil && a.Permissions.Mode() == permission.ModePlan {
+		return "", fmt.Errorf("workflow is not allowed in plan mode; switch permission mode and retry")
+	}
+	if a.Coordinator == nil {
+		return "", fmt.Errorf("agent coordinator is not configured")
+	}
+	if a.WorkflowRegistry == nil {
+		return "", fmt.Errorf("no workflows loaded")
+	}
+	def, ok := a.WorkflowRegistry.Find(name)
+	if !ok {
+		return "", fmt.Errorf("unknown workflow: %s", strings.TrimSpace(name))
+	}
+	params, err := def.ToTaskParams(args)
+	if err != nil {
+		return "", err
+	}
+	params.FastModel = a.Config.FastModel
+	raw, err := json.Marshal(params)
+	if err != nil {
+		return "", fmt.Errorf("marshal workflow tasks: %w", err)
+	}
+	taskTool := tool.NewTaskTool(a.Coordinator)
+	result, err := taskTool.Invoke(ctx, &tool.UseContext{
+		AgentID:   "workflow",
+		WorkDir:   a.Config.WorkDir,
+		FastModel: a.Config.FastModel,
+	}, raw)
+	if err != nil {
+		return "", err
+	}
+	if result == nil {
+		return "", fmt.Errorf("workflow %q returned no result", def.Name)
+	}
+	textOut := strings.TrimSpace(result.Text)
+	if result.IsError {
+		if textOut == "" {
+			textOut = "workflow failed"
+		}
+		return "", fmt.Errorf("%s", textOut)
+	}
+	if textOut == "" {
+		textOut = fmt.Sprintf("Workflow %q completed with no output.", def.Name)
+	}
+	return fmt.Sprintf("[Workflow: %s]\n\n%s", def.Name, textOut), nil
+}
+
+// ListWorkflows returns loaded workflow names and descriptions for explicit UI listing.
+func (a *App) ListWorkflows() []workflow.Definition {
+	if a == nil || a.WorkflowRegistry == nil {
+		return nil
+	}
+	return a.WorkflowRegistry.All()
 }
 
 func loadSkills(cfg config.Config) *skill.Registry {

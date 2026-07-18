@@ -1,0 +1,20 @@
+name: test-then-review
+description: Run tests, then review failures and suggest fixes
+tasks:
+  - id: test
+    description: Run unit tests
+    prompt: |
+      Run the project's unit tests (prefer `go test ./unit_tests -count=1` when this is a Go repo).
+      Summarize pass/fail counts and list failing test names with short error excerpts.
+      Args from user: {{args}}
+    difficulty: easy
+    allowed_tools: [Bash, View, Glob, Grep, LS]
+  - id: review
+    description: Review failures and propose fixes
+    prompt: |
+      Using the test results above, diagnose the failures and propose concrete fixes.
+      Prefer small diffs. Do not apply fixes unless the user args say so.
+      Args from user: {{args}}
+    depends_on: [test]
+    difficulty: hard
+    allowed_tools: [View, Grep, Glob, LS, Bash]

@@ -1,11 +1,12 @@
 # solcode examples
 
-End-to-end samples for configuration, skills, and hooks.
+End-to-end samples for configuration, skills, workflows, and hooks.
 
 | Area | Path | What it shows |
 |------|------|----------------|
 | **Settings** | [`settings/`](settings/) | Model / provider / permissions / MCP / skills / hooks in `settings.json` |
-| **Skills** | [`skills/`](skills/) | Reusable markdown workflows (`SKILL.md` or `name.md`) |
+| **Skills** | [`skills/`](skills/) | Reusable markdown playbooks (`SKILL.md` or `name.md`) |
+| **Workflows** | [`workflows/`](workflows/) | User-authored Task graphs (YAML); explicit `/workflow` invoke only |
 | **Hooks** | [`hooks/`](hooks/) | Event hooks in **Node**, **Python**, **Bash**, **PowerShell**, **Go** |
 
 ## Quick start

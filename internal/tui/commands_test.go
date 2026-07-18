@@ -17,6 +17,32 @@ func TestFixSessionIsBuiltinSlashCommand(t *testing.T) {
 	}
 }
 
+func TestSlashHelpIncludesWorkflowCommands(t *testing.T) {
+	help := slashHelpText()
+	if !strings.Contains(help, "/workflow") || !strings.Contains(help, "/workflows") {
+		t.Fatalf("expected /workflow and /workflows in slash command help, got %q", help)
+	}
+}
+
+func TestWorkflowIsBuiltinSlashCommand(t *testing.T) {
+	if !isBuiltinSlashCommand("workflow") || !isBuiltinSlashCommand("workflows") {
+		t.Fatalf("expected /workflow and /workflows to be built-in commands")
+	}
+}
+
+func TestSlashAutocompleteIncludesWorkflows(t *testing.T) {
+	m := New(nil)
+	m.input.SetValue("/work")
+	m.updateAutocomplete()
+	if m.autocomplete == nil {
+		t.Fatal("expected slash autocomplete for /work")
+	}
+	joined := strings.Join(m.autocomplete.Items, ",")
+	if !strings.Contains(joined, "workflows") || !strings.Contains(joined, "workflow") {
+		t.Fatalf("expected workflow(s) in autocomplete items, got %q", joined)
+	}
+}
+
 func TestCustomProviderDialogCollectsAllFields(t *testing.T) {
 	var gotKind DialogKind
 	var gotValues []string

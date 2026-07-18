@@ -50,6 +50,8 @@ func slashHelpText() string {
 		"/new-session [name] — create and switch to a new session",
 		"/skills — browse skills and toggle enabled/disabled",
 		"/mcp — browse MCP servers and toggle enabled/disabled",
+		"/workflows — list loaded workflows (explicit Task graphs)",
+		"/workflow <name> [args] — run a workflow by name (not available in plan mode)",
 		"/[skill] [args] — invoke a loaded skill by name",
 	}, "\n")
 }
@@ -68,6 +70,7 @@ func (m *Model) handleSlashCommand(input string) (bool, tea.Cmd) {
 		m.appendCommandResult(slashHelpText())
 	case "clear":
 		m.messages = []ChatMessage{m.systemMessage("Conversation cleared. Type /help for commands.")}
+		m.resetSessionTokenTotals()
 	case "model":
 		if m.itemsFunc == nil {
 			m.appendCommandResult("/model is not available in this session.")
@@ -123,6 +126,30 @@ func (m *Model) handleSlashCommand(input string) (bool, tea.Cmd) {
 			m.loadingStart = time.Now()
 			m.refreshViewport()
 			return true, tea.Batch(m.slashAsyncHandler(cmd.Name, cmd.Args), m.nextSpinnerTick())
+		}
+	case "workflows":
+		if m.slashHandler == nil {
+			m.appendCommandResult("/workflows is not available in this session.")
+		} else {
+			m.appendCommandResult(m.slashHandler(cmd.Name, cmd.Args))
+		}
+	case "workflow":
+		if m.slashAsyncHandler == nil {
+			m.appendCommandResult("/workflow is not available in this session.")
+		} else if strings.TrimSpace(cmd.Args) == "" {
+			m.appendCommandResult("Usage: /workflow <name> [args]\nList loaded workflows with /workflows.")
+		} else {
+			name, rest, _ := strings.Cut(strings.TrimSpace(cmd.Args), " ")
+			m.status = fmt.Sprintf("Running workflow %s...", name)
+			m.spinnerActive = true
+			m.loadingStart = time.Now()
+			m.refreshViewport()
+			// Pass "name [args]" so the async handler can split them.
+			payload := name
+			if strings.TrimSpace(rest) != "" {
+				payload = name + " " + strings.TrimSpace(rest)
+			}
+			return true, tea.Batch(m.slashAsyncHandler(cmd.Name, payload), m.nextSpinnerTick())
 		}
 	case "new-session":
 		if m.newSessionHandler == nil {
@@ -181,6 +208,8 @@ var builtinCommands = map[string]bool{
 	"new-session": true,
 	"skills":      true,
 	"mcp":         true,
+	"workflows":   true,
+	"workflow":    true,
 }
 
 func isBuiltinSlashCommand(name string) bool {
@@ -202,6 +231,11 @@ func (m *Model) appendCommandResult(content string) {
 func (m *Model) applySelectResult(result SelectResult) {
 	if result.ReplaceMessages {
 		m.messages = result.Messages
+		// Switching sessions resets in-memory totals; restore from SelectResult if provided.
+		m.resetSessionTokenTotals()
+	}
+	if result.TokenUsage != nil {
+		m.applyTokenUsage(*result.TokenUsage)
 	}
 	if strings.TrimSpace(result.Message) != "" {
 		m.messages = append(m.messages, m.systemMessage(result.Message))

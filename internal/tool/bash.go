@@ -185,6 +185,7 @@ func (b *bashTool) runCommand(ctx context.Context, command, workDir string) (str
 	}
 	cmd := shell.Command(ctx, command)
 	cmd.Dir = workDir
+	configureCommandCancellation(cmd)
 
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout

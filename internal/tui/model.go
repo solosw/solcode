@@ -41,6 +41,10 @@ type TokenUsageMsg struct {
 	CacheCreationInputTokens int64
 	CacheReadInputTokens     int64
 	MaxContextTokens         int64
+	// SessionTotals, when true, replaces cumulative counters with absolute
+	// session values (loaded/persisted totals). When false, values are treated
+	// as per-request deltas and accumulated.
+	SessionTotals bool
 }
 
 type ToolStartMsg struct {
@@ -156,6 +160,9 @@ type SelectResult struct {
 	Message         string
 	Messages        []ChatMessage
 	ReplaceMessages bool
+	// TokenUsage, when set, replaces session token totals after message replace
+	// (used when switching/loading a persisted session).
+	TokenUsage *TokenUsageMsg
 }
 
 type SelectFunc func(kind DialogKind, value string) SelectResult
@@ -380,6 +387,15 @@ func (m *Model) ReplaceMessages(messages []ChatMessage) {
 	}
 	m.messages = append([]ChatMessage(nil), messages...)
 	m.refreshViewport()
+}
+
+// ApplyTokenUsage applies a usage update outside the tea message loop
+// (e.g. restoring persisted totals during TUI bootstrap).
+func (m *Model) ApplyTokenUsage(msg TokenUsageMsg) {
+	if m == nil {
+		return
+	}
+	m.applyTokenUsage(msg)
 }
 
 func defaultToolCollapsed(name string) bool {
@@ -647,17 +663,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case ReplaceMessagesMsg:
 		m.messages = append([]ChatMessage(nil), msg.Messages...)
+		// Switching/reloading a session resets cumulative request totals.
+		m.resetSessionTokenTotals()
 		m.refreshViewport()
 		return m, nil
 	case TokenUsageMsg:
-		m.tokenUsage = TokenUsage{
-			EstimatedContextTokens:   msg.EstimatedContextTokens,
-			InputTokens:              msg.InputTokens,
-			OutputTokens:             msg.OutputTokens,
-			CacheCreationInputTokens: msg.CacheCreationInputTokens,
-			CacheReadInputTokens:     msg.CacheReadInputTokens,
-			MaxContextTokens:         msg.MaxContextTokens,
-		}
+		m.applyTokenUsage(msg)
 		m.refreshViewport()
 		return m, nil
 	case ToolStartMsg:
@@ -1190,7 +1201,7 @@ func (m *Model) updateAutocomplete() tea.Cmd {
 	// Slash commands: whole input starts with / and has no spaces yet.
 	if strings.HasPrefix(value, "/") && !strings.Contains(value, " ") {
 		prefix := strings.TrimPrefix(value, "/")
-		commands := []string{"help", "clear", "model", "provider", "effort", "sessions", "compact", "fix-session", "new-session", "skills", "mcp"}
+		commands := []string{"help", "clear", "model", "provider", "effort", "sessions", "compact", "fix-session", "new-session", "skills", "mcp", "workflows", "workflow"}
 		if m.skillNamesFn != nil {
 			commands = append(commands, m.skillNamesFn()...)
 		}
@@ -1750,33 +1761,121 @@ func (m Model) renderUsageStatus() string {
 	usage := m.tokenUsage
 	used := m.displayContextTokens()
 	limit := m.currentContextLimit()
-	parts := []string{fmt.Sprintf("ctx %s/%s", compactTokens(used), renderContextLimit(limit))}
-	cacheWrite := usage.CacheCreationInputTokens
-	cacheRead := usage.CacheReadInputTokens
-	if cacheRead > 0 || cacheWrite > 0 {
-		cache := fmt.Sprintf("cache %s/%s", compactTokens(cacheRead), compactTokens(cacheWrite))
-		if pct := cacheSharePercent(usage.InputTokens, cacheRead, cacheWrite); pct != "" {
-			cache += " (" + pct + ")"
-		}
-		parts = append(parts, cache)
+	// Always-visible footer. Cache combines read+write as one progress bar
+	// against total input-side tokens (uncached input + cache read + cache write).
+	bar := renderContextProgressBar(used, limit, 12)
+	parts := []string{fmt.Sprintf("%s %s/%s", bar, compactTokens(used), renderContextLimit(limit))}
+
+	inputSide := usageInputSideTotal(usage.InputTokens, usage.CacheReadInputTokens, usage.CacheCreationInputTokens)
+	cacheTotal := usage.CacheReadInputTokens + usage.CacheCreationInputTokens
+	if cacheTotal < 0 {
+		cacheTotal = 0
 	}
-	if usage.OutputTokens > 0 {
-		parts = append(parts, fmt.Sprintf("out %s", compactTokens(usage.OutputTokens)))
-	}
+	parts = append(parts, fmt.Sprintf("cache %s %s (%s)",
+		renderContextProgressBar(cacheTotal, inputSide, 8),
+		compactTokens(cacheTotal),
+		tokenSharePercent(cacheTotal, inputSide),
+	))
 	return strings.Join(parts, " · ")
 }
 
-func cacheSharePercent(inputTokens, cacheRead, cacheWrite int64) string {
-	cacheTotal := cacheRead + cacheWrite
-	if cacheTotal <= 0 {
-		return ""
+// applyTokenUsage updates the latest context estimate and session token counters.
+// SessionTotals messages replace absolute counters (from persisted session);
+// otherwise values are treated as per-request deltas.
+func (m *Model) applyTokenUsage(msg TokenUsageMsg) {
+	if msg.EstimatedContextTokens > 0 {
+		m.tokenUsage.EstimatedContextTokens = msg.EstimatedContextTokens
 	}
-	denominator := inputTokens + cacheTotal
-	if denominator <= 0 {
-		return ""
+	if msg.MaxContextTokens > 0 {
+		m.tokenUsage.MaxContextTokens = msg.MaxContextTokens
 	}
-	percent := cacheTotal * 100 / denominator
+	if msg.SessionTotals {
+		m.tokenUsage.InputTokens = msg.InputTokens
+		m.tokenUsage.OutputTokens = msg.OutputTokens
+		m.tokenUsage.CacheCreationInputTokens = msg.CacheCreationInputTokens
+		m.tokenUsage.CacheReadInputTokens = msg.CacheReadInputTokens
+		return
+	}
+	m.tokenUsage.InputTokens += msg.InputTokens
+	m.tokenUsage.OutputTokens += msg.OutputTokens
+	m.tokenUsage.CacheCreationInputTokens += msg.CacheCreationInputTokens
+	m.tokenUsage.CacheReadInputTokens += msg.CacheReadInputTokens
+}
+
+// resetSessionTokenTotals clears cumulative request counters (cache/in/out)
+// while preserving the last known context limit.
+func (m *Model) resetSessionTokenTotals() {
+	limit := m.tokenUsage.MaxContextTokens
+	m.tokenUsage.InputTokens = 0
+	m.tokenUsage.OutputTokens = 0
+	m.tokenUsage.CacheCreationInputTokens = 0
+	m.tokenUsage.CacheReadInputTokens = 0
+	m.tokenUsage.EstimatedContextTokens = 0
+	m.tokenUsage.MaxContextTokens = limit
+}
+
+// usageInputSideTotal is uncached input + cache read + cache write (session totals).
+// Used as the denominator for separate cache-read / cache-write progress bars.
+func usageInputSideTotal(inputTokens, cacheRead, cacheWrite int64) int64 {
+	total := int64(0)
+	if inputTokens > 0 {
+		total += inputTokens
+	}
+	if cacheRead > 0 {
+		total += cacheRead
+	}
+	if cacheWrite > 0 {
+		total += cacheWrite
+	}
+	return total
+}
+
+// tokenSharePercent returns part/total as a percent string (always, including "0%").
+func tokenSharePercent(part, total int64) string {
+	if part < 0 {
+		part = 0
+	}
+	if total <= 0 {
+		return "0%"
+	}
+	percent := part * 100 / total
+	if percent < 0 {
+		percent = 0
+	}
+	if percent > 100 {
+		percent = 100
+	}
 	return fmt.Sprintf("%d%%", percent)
+}
+
+// cacheSharePercent reports combined cache (read+write) share of input-side tokens.
+// Kept for tests / callers that want a single combined percentage.
+func cacheSharePercent(inputTokens, cacheRead, cacheWrite int64) string {
+	return tokenSharePercent(cacheRead+cacheWrite, usageInputSideTotal(inputTokens, cacheRead, cacheWrite))
+}
+
+// renderContextProgressBar draws a fixed-width filled bar for used/limit.
+// Uses block characters that render well in common terminals.
+func renderContextProgressBar(used, limit int64, width int) string {
+	if width < 4 {
+		width = 4
+	}
+	if limit <= 0 {
+		return "[" + strings.Repeat("░", width) + "]"
+	}
+	// Floor division for share bars; round-up only when used > 0 so tiny non-zero
+	// values still show one block (same as context occupancy).
+	filled := int(used * int64(width) / limit)
+	if used > 0 && filled == 0 {
+		filled = 1
+	}
+	if filled > width {
+		filled = width
+	}
+	if filled < 0 {
+		filled = 0
+	}
+	return "[" + strings.Repeat("█", filled) + strings.Repeat("░", width-filled) + "]"
 }
 
 func compactTokens(value int64) string {

@@ -108,7 +108,8 @@ func (e *Engine) runLegacyModel(ctx context.Context, req RunRequest) RunResult {
 	messages := append([]sdk.MessageParam(nil), req.Messages...)
 	prompt := cfg.Prompt
 	prompt, blocked, errText := e.runUserPromptHook(ctx, cfg, prompt)
-	prompt = applyPlanModeUserPrompt(e.config.Permissions, prompt)
+	// Plan-mode instructions live on the system prompt; never inject into user turns.
+	prompt = permission.StripPlanModePrompt(prompt)
 	userMsg, modelText := userMessageFromPrompt(prompt, cfg.WorkDir)
 	messages = append(messages, userMsg)
 	if blocked || errText != "" {
@@ -137,7 +138,9 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 	messages := append([]sdk.MessageParam(nil), runReq.Messages...)
 	prompt := cfg.Prompt
 	prompt, blocked, errText := e.runUserPromptHook(ctx, cfg, prompt)
-	prompt = applyPlanModeUserPrompt(e.config.Permissions, prompt)
+	// Plan-mode instructions live on the system prompt; never inject into user turns.
+	// Also strip any historical plan-mode prefix from older sessions / mode switches.
+	prompt = permission.StripPlanModePrompt(prompt)
 	userMsg, modelText := userMessageFromPrompt(prompt, cfg.WorkDir)
 	messages = append(messages, userMsg)
 	if blocked || errText != "" {
@@ -159,6 +162,7 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 	builder := ContextBuilder{
 		SystemPrompt: e.config.SystemPrompt,
 		SkillNames:   e.config.SkillNames,
+		PlanMode:     e.config.Permissions != nil && e.config.Permissions.Mode() == permission.ModePlan,
 	}
 
 	var finalText string
@@ -280,7 +284,8 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 				if queued == "" {
 					continue
 				}
-				queued = applyPlanModeUserPrompt(e.config.Permissions, queued)
+				// Plan-mode instructions are on the system prompt only.
+				queued = permission.StripPlanModePrompt(queued)
 				msg, _ := userMessageFromPrompt(queued, cfg.WorkDir)
 				messages = append(messages, msg)
 			}
@@ -299,15 +304,6 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 func userMessageFromPrompt(prompt, workDir string) (sdk.MessageParam, string) {
 	expanded := attach.Expand(prompt, workDir)
 	return attach.UserMessage(expanded), expanded.Text
-}
-
-// applyPlanModeUserPrompt prepends plan-mode instructions when the permission
-// service is in plan mode. Idempotent if the marker is already present.
-func applyPlanModeUserPrompt(perms *permission.Service, prompt string) string {
-	if perms == nil || perms.Mode() != permission.ModePlan {
-		return prompt
-	}
-	return permission.WrapPlanModePrompt(prompt)
 }
 
 // toolResultToAPI maps a tool ContentBlock into an API tool_result payload.

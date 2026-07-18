@@ -1,8 +1,13 @@
 package unit_tests
 
 import (
+	"context"
+	"encoding/json"
+	"runtime"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/solosw/solcode/internal/tool"
 )
@@ -25,5 +30,30 @@ func TestTruncateOutput(t *testing.T) {
 	}
 	if tool.TruncateOutput("hello", 100) != "hello" {
 		t.Fatal("short content should be unchanged")
+	}
+}
+
+func TestBashToolCancellationStopsCommandImmediately(t *testing.T) {
+	command := "sleep 30"
+	if runtime.GOOS == "windows" {
+		command = "ping -n 30 127.0.0.1 > nul"
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = tool.NewBashTool().Invoke(ctx, &tool.UseContext{}, json.RawMessage(`{"command":`+strconv.Quote(command)+`}`))
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Bash invocation did not return promptly after cancellation")
 	}
 }

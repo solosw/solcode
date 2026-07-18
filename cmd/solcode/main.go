@@ -165,7 +165,7 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 			program.Send(tui.ToolDoneMsg{Name: name, Output: output, IsError: isError})
 		}
 	}
-	sendUsage := func(usage engine.Usage) {
+	sendUsage := func(usage engine.Usage, sessionTotals bool) {
 		if program == nil {
 			return
 		}
@@ -176,10 +176,12 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 			CacheCreationInputTokens: usage.CacheCreationInputTokens,
 			CacheReadInputTokens:     usage.CacheReadInputTokens,
 			MaxContextTokens:         usage.MaxContextTokens,
+			SessionTotals:            sessionTotals,
 		})
 	}
+	// Engine usage is already accumulated into session totals by App.emitUsage.
 	onUsage := func(usage engine.Usage) {
-		sendUsage(usage)
+		sendUsage(usage, true)
 	}
 	onStatus := func(status string) {
 		if program != nil {
@@ -300,13 +302,30 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 		if sessionName == "" {
 			sessionName = "main"
 		}
-		if s, err := loadSanitizedSession(context.Background(), application, sessionName, cfg); err == nil && s != nil && len(s.Messages) > 0 {
-			model.ReplaceMessages(chatMessagesFromSession(s))
+		if s, err := loadSanitizedSession(context.Background(), application, sessionName, cfg); err == nil && s != nil {
+			if len(s.Messages) > 0 {
+				model.ReplaceMessages(chatMessagesFromSession(s))
+			}
+			// Restore persisted session token totals into the status bar.
+			usage := usageFromSession(cfg, application, s)
+			model.ApplyTokenUsage(tui.TokenUsageMsg{
+				EstimatedContextTokens:   usage.EstimatedContextTokens,
+				InputTokens:              usage.InputTokens,
+				OutputTokens:             usage.OutputTokens,
+				CacheCreationInputTokens: usage.CacheCreationInputTokens,
+				CacheReadInputTokens:     usage.CacheReadInputTokens,
+				MaxContextTokens:         usage.MaxContextTokens,
+				SessionTotals:            true,
+			})
 		}
 	}
 	model.SetModelNameFn(func() string { return cfg.Model })
 	model.SetContextBaseFn(func() int64 {
-		builder := engine.ContextBuilder{SystemPrompt: cfg.SystemPrompt, SkillNames: appSkillNames(application)}
+		builder := engine.ContextBuilder{
+			SystemPrompt: cfg.SystemPrompt,
+			SkillNames:   appSkillNames(application),
+			PlanMode:     application != nil && application.Permissions != nil && application.Permissions.Mode() == permission.ModePlan,
+		}
 		return builder.EstimateContextTokens(engine.BuildRequest{WorkDir: cfg.WorkDir, Tools: application.Tools.All()})
 	})
 	model.SetContextLimitFn(func() int64 { return cfg.MaxContextTokens })
@@ -314,6 +333,8 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 		switch command {
 		case "sessions":
 			return handleSessionsCommand(&cfg, application)
+		case "workflows":
+			return handleWorkflowsCommand(application)
 		default:
 			return fmt.Sprintf("Unknown command: /%s. Try /help.", command)
 		}
@@ -334,7 +355,7 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 				}
 				if s != nil && program != nil {
 					program.Send(tui.ReplaceMessagesMsg{Messages: chatMessagesFromSession(s)})
-					sendUsage(usageFromSession(cfg, application, s))
+					sendUsage(usageFromSession(cfg, application, s), true)
 				}
 				if !changed {
 					return tui.CommandResultMsg{Text: "Compact skipped: current session is below the compaction threshold or has no older segment to compress."}
@@ -353,12 +374,27 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 				}
 				if s != nil && program != nil {
 					program.Send(tui.ReplaceMessagesMsg{Messages: chatMessagesFromSession(s)})
-					sendUsage(usageFromSession(cfg, application, s))
+					sendUsage(usageFromSession(cfg, application, s), true)
 				}
 				if removed == 0 {
 					return tui.CommandResultMsg{Text: "Session is already valid; no incomplete tool exchanges were found."}
 				}
 				return tui.CommandResultMsg{Text: fmt.Sprintf("Repaired current session: removed %d incomplete tool block(s).", removed)}
+			}
+		case "workflow":
+			return func() tea.Msg {
+				name, rest, _ := strings.Cut(strings.TrimSpace(args), " ")
+				name = strings.TrimSpace(name)
+				if name == "" {
+					return tui.CommandResultMsg{Text: "Usage: /workflow <name> [args]\nList loaded workflows with /workflows."}
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), timeout)
+				defer cancel()
+				out, err := application.RunWorkflow(ctx, name, strings.TrimSpace(rest))
+				if err != nil {
+					return tui.CommandResultMsg{Text: fmt.Sprintf("Workflow %q failed: %v", name, err)}
+				}
+				return tui.CommandResultMsg{Text: out}
 			}
 		default:
 			return func() tea.Msg {
@@ -770,10 +806,20 @@ func handleSessionSwitch(cfg *config.Config, application *app.App, sessionName, 
 	application.Config.Session.DefaultSession = sessionName
 	messages := chatMessagesFromSession(s)
 	message := persistDefaultSessionMessage(fmt.Sprintf("Switched session to %s.", sessionName), persistencePath, sessionName)
+	usage := usageFromSession(*cfg, application, s)
 	return tui.SelectResult{
 		Message:         message,
 		Messages:        messages,
 		ReplaceMessages: true,
+		TokenUsage: &tui.TokenUsageMsg{
+			EstimatedContextTokens:   usage.EstimatedContextTokens,
+			InputTokens:              usage.InputTokens,
+			OutputTokens:             usage.OutputTokens,
+			CacheCreationInputTokens: usage.CacheCreationInputTokens,
+			CacheReadInputTokens:     usage.CacheReadInputTokens,
+			MaxContextTokens:         usage.MaxContextTokens,
+			SessionTotals:            true,
+		},
 	}
 }
 
@@ -921,6 +967,27 @@ func toolResultText(result *sdk.ToolResultBlockParam) string {
 		}
 	}
 	return strings.Join(parts, "\n")
+}
+
+func handleWorkflowsCommand(application *app.App) string {
+	if application == nil {
+		return "No workflows loaded."
+	}
+	defs := application.ListWorkflows()
+	if len(defs) == 0 {
+		return "No workflows loaded. Place YAML under ~/.solcode/workflows or <project>/.solcode/workflows, or set workflows.paths."
+	}
+	var b strings.Builder
+	b.WriteString("Loaded workflows (explicit invoke via /workflow <name> [args]):\n")
+	for _, def := range defs {
+		desc := strings.TrimSpace(def.Description)
+		if desc == "" {
+			desc = "(no description)"
+		}
+		b.WriteString(fmt.Sprintf("  %s — %s\n", def.Name, desc))
+	}
+	b.WriteString("\nWorkflows are not exposed to the model and are blocked in plan mode.")
+	return strings.TrimSpace(b.String())
 }
 
 func handleSessionsCommand(cfg *config.Config, application *app.App) string {
@@ -1093,7 +1160,11 @@ func usageFromSession(cfg config.Config, application *app.App, s *session.Sessio
 	if strings.TrimSpace(workDir) == "" {
 		workDir = cfg.WorkDir
 	}
-	builder := engine.ContextBuilder{SystemPrompt: cfg.SystemPrompt, SkillNames: appSkillNames(application)}
+	builder := engine.ContextBuilder{
+		SystemPrompt: cfg.SystemPrompt,
+		SkillNames:   appSkillNames(application),
+		PlanMode:     application != nil && application.Permissions != nil && application.Permissions.Mode() == permission.ModePlan,
+	}
 	var tools []tool.Tool
 	if application != nil && application.Tools != nil {
 		tools = application.Tools.All()
@@ -1110,7 +1181,14 @@ func usageFromSession(cfg config.Config, application *app.App, s *session.Sessio
 		Stream:         cfg.Stream,
 		SessionSummary: appcoreSanitizedSummary(application, s),
 	})
-	return engine.Usage{EstimatedContextTokens: estimated, MaxContextTokens: cfg.MaxContextTokens}
+	return engine.Usage{
+		EstimatedContextTokens:   estimated,
+		InputTokens:              s.Metadata.Usage.InputTokens,
+		OutputTokens:             s.Metadata.Usage.OutputTokens,
+		CacheCreationInputTokens: s.Metadata.Usage.CacheCreationInputTokens,
+		CacheReadInputTokens:     s.Metadata.Usage.CacheReadInputTokens,
+		MaxContextTokens:         cfg.MaxContextTokens,
+	}
 }
 
 func configCloneMCPServers(servers []config.MCPServerConfig) []config.MCPServerConfig {
