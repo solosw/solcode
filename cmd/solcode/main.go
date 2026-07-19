@@ -323,6 +323,7 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 	model.SetContextBaseFn(func() int64 {
 		builder := engine.ContextBuilder{
 			SystemPrompt: cfg.SystemPrompt,
+			Skills:       appSkillInfos(application),
 			SkillNames:   appSkillNames(application),
 			PlanMode:     application != nil && application.Permissions != nil && application.Permissions.Mode() == permission.ModePlan,
 		}
@@ -1126,6 +1127,21 @@ func appSkillNames(application *app.App) []string {
 	return out
 }
 
+func appSkillInfos(application *app.App) []engine.SkillInfo {
+	if application == nil || application.SkillRegistry == nil {
+		return nil
+	}
+	defs := application.SkillRegistry.All()
+	out := make([]engine.SkillInfo, 0, len(defs))
+	for _, def := range defs {
+		out = append(out, engine.SkillInfo{
+			Name:        def.Name,
+			Description: def.Description,
+		})
+	}
+	return out
+}
+
 func loadSanitizedSession(ctx context.Context, application *app.App, sessionName string, cfg config.Config) (*session.Session, error) {
 	if application == nil || application.Sessions == nil {
 		return nil, nil
@@ -1162,6 +1178,7 @@ func usageFromSession(cfg config.Config, application *app.App, s *session.Sessio
 	}
 	builder := engine.ContextBuilder{
 		SystemPrompt: cfg.SystemPrompt,
+		Skills:       appSkillInfos(application),
 		SkillNames:   appSkillNames(application),
 		PlanMode:     application != nil && application.Permissions != nil && application.Permissions.Mode() == permission.ModePlan,
 	}

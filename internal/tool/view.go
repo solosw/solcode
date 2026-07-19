@@ -78,9 +78,9 @@ func (v *viewTool) Invoke(ctx context.Context, uctx *UseContext, input json.RawM
 		return ErrorResult("file_path is required"), nil
 	}
 
-	filePath := params.FilePath
-	if !filepath.IsAbs(filePath) {
-		filePath = filepath.Join(uctx.WorkDir, filePath)
+	filePath := ResolvePath(uctx, params.FilePath)
+	if err := CheckAllowedPath(uctx, filePath); err != nil {
+		return ErrorResult(err.Error()), nil
 	}
 
 	fileInfo, err := os.Stat(filePath)

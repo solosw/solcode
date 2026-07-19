@@ -1,3 +1,8 @@
+---
+name: pr
+description: Draft a pull-request title and body from the current branch changes. Use when the user asks for a PR description.
+---
+
 # pr
 
 Draft a pull-request title and description from branch commits and the diff vs base.

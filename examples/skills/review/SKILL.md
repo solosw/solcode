@@ -1,3 +1,8 @@
+---
+name: review
+description: Structured code review of the current change set or a path in Args. Use when the user asks for a review, PR feedback, or "anything wrong here?"
+---
+
 # review
 
 Perform a focused code review of the current change set or a path given in Args.

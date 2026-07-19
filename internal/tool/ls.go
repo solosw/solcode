@@ -80,8 +80,12 @@ func (l *lsTool) Invoke(ctx context.Context, uctx *UseContext, input json.RawMes
 	if searchPath == "" {
 		searchPath = uctx.WorkDir
 	}
-	if !filepath.IsAbs(searchPath) {
-		searchPath = filepath.Join(uctx.WorkDir, searchPath)
+	if searchPath == "" {
+		searchPath = "."
+	}
+	searchPath = ResolvePath(uctx, searchPath)
+	if err := CheckAllowedPath(uctx, searchPath); err != nil {
+		return ErrorResult(err.Error()), nil
 	}
 
 	if _, err := os.Stat(searchPath); os.IsNotExist(err) {

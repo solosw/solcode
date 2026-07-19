@@ -89,7 +89,10 @@ func (v *viewImageTool) Invoke(ctx context.Context, uctx *UseContext, input json
 		return ErrorResult("file_path is required"), nil
 	}
 
-	filePath := resolveImagePath(params.FilePath, uctx)
+	filePath := ResolvePath(uctx, params.FilePath)
+	if err := CheckAllowedPath(uctx, filePath); err != nil {
+		return ErrorResult(err.Error()), nil
+	}
 
 	info, err := os.Stat(filePath)
 	if err != nil {
@@ -151,16 +154,6 @@ func formatViewImageCaption(filePath string, img attach.ImageAttachment) string 
 	}
 	parts = append(parts, "Path: "+filePath)
 	return strings.Join(parts, "\n")
-}
-
-func resolveImagePath(filePath string, uctx *UseContext) string {
-	if filepath.IsAbs(filePath) {
-		return filePath
-	}
-	if uctx != nil && uctx.WorkDir != "" {
-		return filepath.Join(uctx.WorkDir, filePath)
-	}
-	return filePath
 }
 
 func formatImageSize(sz int64) string {

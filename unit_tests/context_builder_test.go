@@ -9,9 +9,18 @@ import (
 )
 
 func TestContextBuilderSystemPromptIsStable(t *testing.T) {
-	builder := engine.ContextBuilder{SystemPrompt: "user system", SkillNames: []string{"review", "verify"}}
+	builder := engine.ContextBuilder{
+		SystemPrompt: "user system",
+		Skills: []engine.SkillInfo{
+			{Name: "review", Description: "Code review"},
+			{Name: "verify", Description: "Verify changes"},
+		},
+	}
 	req := builder.Build(engine.BuildRequest{
-		WorkDir:        "C:/work",
+		WorkDir: "C:/work",
+		Messages: []sdk.MessageParam{
+			sdk.NewUserMessage(sdk.NewTextBlock("hello")),
+		},
 		SessionSummary: "User is building session memory.",
 		MemoryContext: []engine.ContextItem{
 			{Title: "Project", Content: "Use persistent main session."},
@@ -19,11 +28,12 @@ func TestContextBuilderSystemPromptIsStable(t *testing.T) {
 	})
 	for _, want := range []string{
 		"user system",
-		"You are solcode, an interactive CLI-based coding agent that helps with software engineering tasks.",
+		"You are solcode, an interactive agent that helps users with software engineering tasks.",
 		"Tool usage:",
 		"Skills:",
-		"Skills are reusable markdown workflows loaded from the configured skills directories.",
-		"Available skills: review, verify",
+		"Agent Skills packages",
+		"review: Code review",
+		"verify: Verify changes",
 		"Working directory: C:/work",
 	} {
 		if !strings.Contains(req.System, want) {
@@ -43,9 +53,10 @@ func TestContextBuilderSystemPromptIsStable(t *testing.T) {
 		t.Fatalf("unexpected system prompt order: %q", req.System)
 	}
 	if len(req.Messages) < 2 {
-		t.Fatalf("expected context messages to be appended, got %d messages", len(req.Messages))
+		t.Fatalf("expected context message + user message, got %d messages", len(req.Messages))
 	}
-	rendered := req.Messages[len(req.Messages)-2].Content
+	// Context is injected as a user message immediately before the latest user prompt.
+	rendered := req.Messages[0].Content
 	foundSummary := false
 	foundMemory := false
 	for _, block := range rendered {
@@ -59,13 +70,13 @@ func TestContextBuilderSystemPromptIsStable(t *testing.T) {
 		}
 	}
 	if !foundSummary {
-		t.Fatalf("expected session summary in appended context messages, got %v", rendered)
+		t.Fatalf("expected session summary in injected context messages, got %v", rendered)
 	}
 	if !foundMemory {
-		t.Fatalf("expected retrieved memory in appended context messages, got %v", rendered)
+		t.Fatalf("expected retrieved memory in injected context messages, got %v", rendered)
 	}
-	if req.Messages[len(req.Messages)-1].Content[0].OfText == nil || !strings.Contains(req.Messages[len(req.Messages)-1].Content[0].OfText.Text, "keep this context in mind") {
-		t.Fatalf("expected assistant ack at tail, got %#v", req.Messages[len(req.Messages)-1])
+	if req.Messages[len(req.Messages)-1].Content[0].OfText == nil || !strings.Contains(req.Messages[len(req.Messages)-1].Content[0].OfText.Text, "hello") {
+		t.Fatalf("expected original user message at tail, got %#v", req.Messages[len(req.Messages)-1])
 	}
 }
 

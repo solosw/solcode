@@ -49,7 +49,10 @@ type Config struct {
 	MaxContextTokens int64
 	MaxTokens        int64
 	SystemPrompt     string
-	SkillNames       []string
+	Skills           []SkillInfo
+	SkillNames       []string          // legacy; used only when Skills is empty
+	SkillRoots       []string          // absolute skill package roots for fallback path resolution
+	SkillRootsByName map[string]string // activated skill name -> absolute package root
 	MaxTurns         int
 	Stream           bool
 	Thinking         bool
@@ -76,6 +79,32 @@ func NewEngine(config Config) *Engine {
 
 func (e *Engine) UpdateConfig(config Config) {
 	e.config = config
+}
+
+func skillNameFromInput(input json.RawMessage) string {
+	var params struct {
+		Skill string `json:"skill"`
+	}
+	if err := json.Unmarshal(input, &params); err != nil {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(params.Skill))
+}
+
+func orderedSkillRoots(active string, roots []string) []string {
+	active = strings.TrimSpace(active)
+	out := make([]string, 0, len(roots))
+	if active != "" {
+		out = append(out, active)
+	}
+	for _, root := range roots {
+		root = strings.TrimSpace(root)
+		if root == "" || root == active {
+			continue
+		}
+		out = append(out, root)
+	}
+	return out
 }
 
 type RunRequest struct {
@@ -161,11 +190,16 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 	executor := NewToolExecutorWithPermissions(e.config.Tools, e.config.Hooks, e.config.Permissions)
 	builder := ContextBuilder{
 		SystemPrompt: e.config.SystemPrompt,
+		Skills:       e.config.Skills,
 		SkillNames:   e.config.SkillNames,
 		PlanMode:     e.config.Permissions != nil && e.config.Permissions.Mode() == permission.ModePlan,
 	}
 
 	var finalText string
+	// The most recently activated skill owns relative resource paths for the
+	// following tool calls. This avoids ambiguity when multiple user-level
+	// skills all contain references/ or scripts/.
+	activeSkillRoot := ""
 	isMain := cfg.Role == "" || cfg.Role == agent.AgentRoleMain
 	for turn := 0; turnLimit <= 0 || turn < turnLimit; turn++ {
 		if err := ctx.Err(); err != nil {
@@ -248,15 +282,20 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 				Input: input,
 			}, ToolEnv{
 				UseContext: &tool.UseContext{
-					SessionID: nonEmpty(runReq.SessionID, string(cfg.ID)),
-					MessageID: use.ID,
-					WorkDir:   cfg.WorkDir,
-					AgentID:   string(cfg.ID),
-					TodoPath:  e.config.TodoPath,
-					FastModel: e.config.FastModelName,
+					SessionID:  nonEmpty(runReq.SessionID, string(cfg.ID)),
+					MessageID:  use.ID,
+					WorkDir:    cfg.WorkDir,
+					SkillRoots: orderedSkillRoots(activeSkillRoot, e.config.SkillRoots),
+					AgentID:    string(cfg.ID),
+					TodoPath:   e.config.TodoPath,
+					FastModel:  e.config.FastModelName,
 					RecordFileChange: func(changeCtx context.Context, change tool.FileChange) {
 						if e.config.RecordFileChange != nil {
-							e.config.RecordFileChange(changeCtx, &tool.UseContext{SessionID: nonEmpty(runReq.SessionID, string(cfg.ID)), WorkDir: cfg.WorkDir}, change)
+							e.config.RecordFileChange(changeCtx, &tool.UseContext{
+								SessionID:  nonEmpty(runReq.SessionID, string(cfg.ID)),
+								WorkDir:    cfg.WorkDir,
+								SkillRoots: orderedSkillRoots(activeSkillRoot, e.config.SkillRoots),
+							}, change)
 						}
 					},
 					AskUser: e.config.OnAskUser,
@@ -264,6 +303,13 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 			})
 			if err := ctx.Err(); err != nil {
 				return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: err.Error()}, Messages: messages}
+			}
+			if use.Name == tool.SkillToolName && !toolResult.IsError {
+				if name := skillNameFromInput(input); name != "" {
+					if root := e.config.SkillRootsByName[name]; root != "" {
+						activeSkillRoot = root
+					}
+				}
 			}
 			apiResult := toolResultToAPI(use.ID, toolResult)
 			text := apiResult.Text

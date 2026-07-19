@@ -1,3 +1,8 @@
+---
+name: commit
+description: Draft a conventional commit message from the current git changes. Use when the user asks to commit or write a commit message.
+---
+
 # commit
 
 Draft a conventional commit message from the current git changes.

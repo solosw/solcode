@@ -12,9 +12,19 @@ import (
 	"github.com/solosw/solcode/internal/tool"
 )
 
+// SkillInfo is metadata advertised in the system prompt (progressive disclosure L1).
+type SkillInfo struct {
+	Name        string
+	Description string
+}
+
 type ContextBuilder struct {
 	SystemPrompt string
-	SkillNames   []string
+	// Skills lists available skills with short descriptions for discovery.
+	// Prefer this over SkillNames.
+	Skills []SkillInfo
+	// SkillNames is a legacy name-only list used when Skills is empty.
+	SkillNames []string
 	// PlanMode, when true, appends plan-mode instructions to the system prompt.
 	// When false, any leftover plan-mode block is stripped from SystemPrompt.
 	PlanMode bool
@@ -350,7 +360,7 @@ func (b ContextBuilder) systemPrompt(workDir string) string {
 	}
 	parts = append(parts, defaultSystemPrompt())
 	parts = append(parts, toolUsagePrompt())
-	parts = append(parts, skillsPrompt(b.SkillNames))
+	parts = append(parts, skillsPrompt(b.skillCatalog()))
 	if workDir != "" {
 		parts = append(parts, "Working directory: "+workDir)
 	}
@@ -396,17 +406,54 @@ func toolUsagePrompt() string {
 	}, "\n")
 }
 
-func skillsPrompt(skillNames []string) string {
+func (b ContextBuilder) skillCatalog() []SkillInfo {
+	if len(b.Skills) > 0 {
+		return b.Skills
+	}
+	if len(b.SkillNames) == 0 {
+		return nil
+	}
+	out := make([]SkillInfo, 0, len(b.SkillNames))
+	for _, name := range b.SkillNames {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		out = append(out, SkillInfo{Name: name})
+	}
+	return out
+}
+
+func skillsPrompt(skills []SkillInfo) string {
 	base := []string{
 		"Skills:",
-		"- Skills are reusable markdown workflows loaded from the configured skills directories.",
-		"- When the user's request matches one of these workflows, call the Skill tool with the skill name and pass any extra user detail in args.",
+		"- Skills are reusable workflows (Agent Skills packages) loaded from the configured skills directories.",
+		"- Each skill may ship SKILL.md plus optional scripts/, references/, and assets/ under its root (may be outside the project WorkDir).",
+		"- Match the user request against skill descriptions. When one fits, call the Skill tool with that skill name and pass extra user detail in args.",
+		"- The Skill tool returns instructions, Root, and absolute resource paths; load scripts/references/assets only as needed.",
+		"- For bundled skill files prefer absolute paths from the Skill result, or skill-relative paths (scripts/…, references/…, assets/…) which resolve against skill roots—not WorkDir.",
 	}
-	if len(skillNames) == 0 {
+	if len(skills) == 0 {
 		base = append(base, "- No skills are currently loaded.")
 		return strings.Join(base, "\n")
 	}
-	base = append(base, "- Available skills: "+strings.Join(skillNames, ", "))
+	base = append(base, "- Available skills:")
+	for _, sk := range skills {
+		name := strings.TrimSpace(sk.Name)
+		if name == "" {
+			continue
+		}
+		desc := strings.TrimSpace(sk.Description)
+		if desc == "" {
+			base = append(base, "  - "+name)
+			continue
+		}
+		// Keep catalog lines compact for the system prompt.
+		if len(desc) > 160 {
+			desc = desc[:157] + "..."
+		}
+		base = append(base, "  - "+name+": "+desc)
+	}
 	return strings.Join(base, "\n")
 }
 

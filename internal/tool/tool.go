@@ -10,9 +10,13 @@ import (
 
 // UseContext carries contextual information for a tool invocation.
 type UseContext struct {
-	SessionID        string
-	MessageID        string
-	WorkDir          string
+	SessionID string
+	MessageID string
+	WorkDir   string
+	// SkillRoots are absolute skill package directories (Agent Skills roots).
+	// Relative paths like scripts/… or references/… resolve against these
+	// when they are not found under WorkDir (or prefer them when skill-shaped).
+	SkillRoots       []string
 	AgentID          string
 	TodoPath         string
 	FastModel        string

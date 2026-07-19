@@ -4,79 +4,62 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
-	"golang.org/x/net/html"
+	websearch "github.com/proiceremo/websearch"
 )
 
-// WebSearchParams is the input schema for the WebSearch tool.
+const WebSearchToolName = "WebSearch"
+
+// WebSearchParams controls a metasearch query.
 type WebSearchParams struct {
-	Query          string   `json:"query"`
-	MaxResults     int      `json:"max_results,omitempty"`
-	AllowedDomains []string `json:"allowed_domains,omitempty"`
-	BlockedDomains []string `json:"blocked_domains,omitempty"`
+	Query      string `json:"query"`
+	Category   string `json:"category,omitempty"`
+	MaxResults int    `json:"max_results,omitempty"`
 }
 
-// SearchHit is a single web search result.
+// SearchHit is the normalized result used in the tool response.
 type SearchHit struct {
-	Title   string `json:"title"`
-	URL     string `json:"url"`
-	Snippet string `json:"snippet,omitempty"`
+	Title   string
+	URL     string
+	Snippet string
 }
 
-// WebSearchOutput is the structured output of a WebSearch invocation.
-type WebSearchOutput struct {
-	Query           string      `json:"query"`
-	Results         []SearchHit `json:"results"`
-	DurationSeconds float64     `json:"duration_seconds"`
+type webSearcher interface {
+	Search(ctx context.Context, query string, opts websearch.SearchOptions) ([]websearch.SearchResult, error)
 }
 
-const (
-	WebSearchToolName = "WebSearch"
-	DefaultMaxResults = 10
-	MaxResultsCap     = 50
-	SearchHTTPTimeout = 15 * time.Second
-)
+type defaultWebSearcher struct{}
+
+func (defaultWebSearcher) Search(ctx context.Context, query string, opts websearch.SearchOptions) ([]websearch.SearchResult, error) {
+	return websearch.Search(ctx, query, opts)
+}
 
 type webSearchTool struct {
 	BaseTool
-	client *http.Client
-	apiKey string // optional Brave/SerpAPI key
+	searcher webSearcher
+	timeout  time.Duration
 }
 
-var ddgHTMLSearchURL = "https://html.duckduckgo.com/html/"
-
-// NewWebSearchTool creates a new WebSearch tool.
 func NewWebSearchTool() Tool {
-	return &webSearchTool{
-		client: &http.Client{Timeout: SearchHTTPTimeout},
+	return newWebSearchTool(defaultWebSearcher{})
+}
+
+func newWebSearchTool(searcher webSearcher) Tool {
+	if searcher == nil {
+		searcher = defaultWebSearcher{}
 	}
+	return &webSearchTool{searcher: searcher, timeout: 30 * time.Second}
 }
 
-// SetAPIKey sets an optional search API key (Brave Search or SerpAPI).
-func (t *webSearchTool) SetAPIKey(key string) {
-	t.apiKey = key
-}
-
-func (t *webSearchTool) Name() string                           { return WebSearchToolName }
-func (t *webSearchTool) IsReadOnly(json.RawMessage) bool        { return true }
-func (t *webSearchTool) IsConcurrencySafe(json.RawMessage) bool { return true }
-
+func (t *webSearchTool) Name() string { return WebSearchToolName }
 func (t *webSearchTool) Description() string {
-	return `Searches the web for information and returns structured results.
-- Use for: recent events, documentation, anything beyond your knowledge cutoff
-- Returns title, URL, and snippet for each result
-- Supports domain filtering with allowed_domains / blocked_domains
-- Results limited to 10 by default (max 50)
-
-IMPORTANT: After answering based on search results, you MUST include a "Sources:" section
-listing relevant URLs as markdown links. This is mandatory.`
+	return `Search the web using the configured multi-engine metasearch backend and return structured results.
+Use for recent events, documentation, or information beyond your knowledge cutoff.
+Categories: text (default), images, news, videos, books, research.
+After answering from results, include a "Sources:" section with relevant markdown links.`
 }
-
 func (t *webSearchTool) InputSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
@@ -85,263 +68,117 @@ func (t *webSearchTool) InputSchema() map[string]any {
 				"type":        "string",
 				"description": "The search query",
 			},
+			"category": map[string]any{
+				"type":        "string",
+				"enum":        []string{"text", "images", "news", "videos", "books", "research"},
+				"description": "Result category (default: text)",
+			},
 			"max_results": map[string]any{
 				"type":        "integer",
-				"description": fmt.Sprintf("Max results (default %d, max %d)", DefaultMaxResults, MaxResultsCap),
-			},
-			"allowed_domains": map[string]any{
-				"type":        "array",
-				"items":       map[string]string{"type": "string"},
-				"description": "Only include results from these domains",
-			},
-			"blocked_domains": map[string]any{
-				"type":        "array",
-				"items":       map[string]string{"type": "string"},
-				"description": "Never include results from these domains",
+				"description": "Maximum result count (default 10, maximum 50)",
 			},
 		},
 		"required": []string{"query"},
 	}
 }
+func (t *webSearchTool) IsDestructive(_ json.RawMessage) bool     { return false }
+func (t *webSearchTool) IsReadOnly(_ json.RawMessage) bool        { return true }
+func (t *webSearchTool) IsConcurrencySafe(_ json.RawMessage) bool { return true }
 
 func (t *webSearchTool) Invoke(ctx context.Context, uctx *UseContext, input json.RawMessage) (*ContentBlock, error) {
+	_ = uctx
 	var params WebSearchParams
 	if err := json.Unmarshal(input, &params); err != nil {
 		return ErrorResult("invalid parameters: " + err.Error()), nil
 	}
-
+	params.Query = strings.TrimSpace(params.Query)
 	if params.Query == "" {
 		return ErrorResult("query is required"), nil
 	}
-	if len(params.Query) < 2 {
-		return ErrorResult("query must be at least 2 characters"), nil
+	category, err := webSearchCategory(params.Category)
+	if err != nil {
+		return ErrorResult(err.Error()), nil
 	}
-
 	maxResults := params.MaxResults
 	if maxResults <= 0 {
-		maxResults = DefaultMaxResults
+		maxResults = 10
 	}
-	if maxResults > MaxResultsCap {
-		maxResults = MaxResultsCap
+	if maxResults > 50 {
+		maxResults = 50
 	}
 
-	start := time.Now()
-	hits, err := t.search(ctx, params.Query, maxResults, params.AllowedDomains, params.BlockedDomains)
-	elapsed := time.Since(start)
+	timeout := t.timeout
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	searchCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 
+	results, err := t.searcher.Search(searchCtx, params.Query, websearch.SearchOptions{
+		Category:   category,
+		Backend:    "auto",
+		MaxResults: maxResults,
+		Timeout:    int(timeout.Seconds()),
+	})
 	if err != nil {
-		return &ContentBlock{
-			Type: "text",
-			Text: "Web search failed: " + err.Error(),
-		}, nil
+		return ErrorResult("web search failed: " + err.Error()), nil
 	}
 
-	// Build readable text output for the model
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Web search results for: %q (%d results in %.1fs)\n\n", params.Query, len(hits), elapsed.Seconds()))
+	hits := normalizeSearchResults(results, maxResults)
+	if len(hits) == 0 {
+		return Result("No results found."), nil
+	}
+
+	var b strings.Builder
 	for i, hit := range hits {
-		sb.WriteString(fmt.Sprintf("[%d] %s\n   %s\n", i+1, hit.Title, hit.URL))
-		if hit.Snippet != "" {
-			sb.WriteString(fmt.Sprintf("   %s\n", hit.Snippet))
-		}
-		sb.WriteString("\n")
+		fmt.Fprintf(&b, "%d. %s\n   %s\n   %s\n", i+1, hit.Title, hit.URL, hit.Snippet)
 	}
-	sb.WriteString("REMINDER: Include relevant sources as markdown links in your answer.")
-
-	return Result(sb.String()), nil
+	b.WriteString("\nREMINDER: Include a relevant Sources: section with markdown links in your final answer.")
+	return Result(b.String()), nil
 }
 
-// search dispatches to the configured backend.
-func (t *webSearchTool) search(ctx context.Context, query string, maxResults int, allowed, blocked []string) ([]SearchHit, error) {
-	return searchDuckDuckGo(ctx, t.client, query, maxResults, allowed, blocked)
+func webSearchCategory(raw string) (websearch.Category, error) {
+	category := strings.ToLower(strings.TrimSpace(raw))
+	if category == "" {
+		return websearch.CategoryText, nil
+	}
+	switch websearch.Category(category) {
+	case websearch.CategoryText,
+		websearch.CategoryImages,
+		websearch.CategoryNews,
+		websearch.CategoryVideos,
+		websearch.CategoryBooks,
+		websearch.CategoryResearch:
+		return websearch.Category(category), nil
+	default:
+		return "", fmt.Errorf("unsupported category %q; use text, images, news, videos, books, or research", raw)
+	}
 }
 
-// searchDuckDuckGo scrapes DuckDuckGo HTML search results.
-func searchDuckDuckGo(ctx context.Context, client *http.Client, query string, maxResults int, allowed, blocked []string) ([]SearchHit, error) {
-	form := url.Values{"q": {query}}
-	reqURL := ddgHTMLSearchURL
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, strings.NewReader(form.Encode()))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36")
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Accept", "text/html")
-	req.Header.Set("Accept-Language", "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("search request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		if resp.StatusCode == 202 || resp.StatusCode == 403 {
-			return nil, fmt.Errorf("search blocked (CAPTCHA/rate-limit, HTTP %d). "+
-				"Try a different query or wait a moment", resp.StatusCode)
-		}
-		return nil, fmt.Errorf("search returned HTTP %d", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1MB max
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
-	}
-
-	hits, err := parseDDGHTML(body, maxResults, allowed, blocked)
-	if err != nil {
-		return nil, err
-	}
-
-	// Detect CAPTCHA
-	if len(hits) == 0 && detectDDGCaptcha(body) {
-		return nil, fmt.Errorf("search engine returned a CAPTCHA page (too many requests). " +
-			"Try a different query or wait a moment")
-	}
-
-	return hits, nil
-}
-
-func parseDDGHTML(body []byte, maxResults int, allowed, blocked []string) ([]SearchHit, error) {
-	doc, err := html.Parse(strings.NewReader(string(body)))
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse HTML: %w", err)
-	}
-
-	allowedSet := strSet(allowed)
-	blockedSet := strSet(blocked)
-
-	var hits []SearchHit
-	var walk func(*html.Node)
-	walk = func(n *html.Node) {
-		if len(hits) >= maxResults {
-			return
-		}
-
-		if n.Type == html.ElementNode && n.Data == "a" {
-			class := getAttr(n, "class")
-			if strings.Contains(class, "result__a") {
-				hit := extractDDGResult(n)
-				if hit.URL != "" && hit.Title != "" {
-					if domainMatches(hit.URL, allowedSet, blockedSet) {
-						hits = append(hits, hit)
-					}
-				}
-				return // don't recurse into result links
-			}
-		}
-
-		for c := n.FirstChild; c != nil; c = c.NextSibling {
-			walk(c)
-		}
-	}
-	walk(doc)
-
-	return hits, nil
-}
-
-func extractDDGResult(n *html.Node) SearchHit {
-	var hit SearchHit
-	var extract func(*html.Node)
-	extract = func(node *html.Node) {
-		if node.Type == html.ElementNode && node.Data == "a" {
-			class := getAttr(node, "class")
-			if strings.Contains(class, "result__a") {
-				hit.URL = getAttr(node, "href")
-				hit.Title = textContent(node)
-				// DDG redirect URL: extract real URL from uddg= param
-				if strings.Contains(hit.URL, "uddg=") {
-					if u, err := url.Parse(hit.URL); err == nil {
-						if real := u.Query().Get("uddg"); real != "" {
-							hit.URL = real
-						}
-					}
-				}
-				return
-			}
-		}
-		if node.Type == html.ElementNode && node.Data == "a" {
-			class := getAttr(node, "class")
-			if strings.Contains(class, "result__snippet") {
-				hit.Snippet = textContent(node)
-			}
-		}
-		for c := node.FirstChild; c != nil; c = c.NextSibling {
-			extract(c)
-		}
-	}
-	extract(n)
-	return hit
-}
-
-func getAttr(n *html.Node, key string) string {
-	for _, attr := range n.Attr {
-		if attr.Key == key {
-			return attr.Val
-		}
-	}
-	return ""
-}
-
-func textContent(n *html.Node) string {
-	var sb strings.Builder
-	var walk func(*html.Node)
-	walk = func(node *html.Node) {
-		if node.Type == html.TextNode {
-			sb.WriteString(node.Data)
-		}
-		for c := node.FirstChild; c != nil; c = c.NextSibling {
-			walk(c)
-		}
-	}
-	walk(n)
-	return strings.TrimSpace(sb.String())
-}
-
-func strSet(list []string) map[string]bool {
-	if len(list) == 0 {
+func normalizeSearchResults(results []websearch.SearchResult, limit int) []SearchHit {
+	if limit <= 0 {
 		return nil
 	}
-	m := make(map[string]bool, len(list))
-	for _, s := range list {
-		m[strings.ToLower(s)] = true
-	}
-	return m
-}
-
-func domainMatches(rawURL string, allowed, blocked map[string]bool) bool {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return true // can't parse, let it through
-	}
-	host := strings.ToLower(u.Hostname())
-
-	if len(allowed) > 0 {
-		for domain := range allowed {
-			if host == domain || strings.HasSuffix(host, "."+domain) {
-				return true
-			}
+	out := make([]SearchHit, 0, min(limit, len(results)))
+	seen := make(map[string]bool, len(results))
+	for _, result := range results {
+		rawURL := strings.TrimSpace(result.Href())
+		if rawURL == "" || seen[rawURL] {
+			continue
 		}
-		return false
-	}
-
-	if len(blocked) > 0 {
-		for domain := range blocked {
-			if host == domain || strings.HasSuffix(host, "."+domain) {
-				return false
-			}
+		seen[rawURL] = true
+		title := strings.TrimSpace(result.Title())
+		if title == "" {
+			title = rawURL
+		}
+		out = append(out, SearchHit{
+			Title:   title,
+			URL:     rawURL,
+			Snippet: strings.TrimSpace(result.Body()),
+		})
+		if len(out) == limit {
+			break
 		}
 	}
-	return true
-}
-
-func detectDDGCaptcha(body []byte) bool {
-	s := strings.ToLower(string(body))
-	for _, indicator := range []string{"captcha", "challenge", "blocked", "unusual traffic", "robot"} {
-		if strings.Contains(s, indicator) {
-			return true
-		}
-	}
-	return false
+	return out
 }

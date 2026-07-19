@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/sergi/go-diff/diffmatchpatch"
@@ -93,9 +92,9 @@ func (p *patchTool) Invoke(ctx context.Context, uctx *UseContext, input json.Raw
 		return ErrorResult(errText), nil
 	}
 
-	filePath := params.FilePath
-	if !filepath.IsAbs(filePath) {
-		filePath = filepath.Join(uctx.WorkDir, filePath)
+	filePath := ResolvePath(uctx, params.FilePath)
+	if err := CheckAllowedPath(uctx, filePath); err != nil {
+		return ErrorResult(err.Error()), nil
 	}
 
 	// Read current file content

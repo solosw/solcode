@@ -81,10 +81,8 @@ func (g *globTool) Invoke(ctx context.Context, uctx *UseContext, input json.RawM
 	if searchPath == "" {
 		searchPath = "."
 	}
-	if !filepath.IsAbs(searchPath) {
-		searchPath = filepath.Join(uctx.WorkDir, searchPath)
-	}
-	if err := CheckWithinWorkDir(uctx.WorkDir, searchPath); err != nil {
+	searchPath = ResolvePath(uctx, searchPath)
+	if err := CheckAllowedPath(uctx, searchPath); err != nil {
 		return ErrorResult(err.Error()), nil
 	}
 

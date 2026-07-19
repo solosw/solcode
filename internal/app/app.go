@@ -882,6 +882,7 @@ func (a *App) estimateSessionContextTokens(ctx context.Context, current *session
 	messages := session.StripEphemeralContextMessages(current.CopyMessages())
 	builder := engine.ContextBuilder{
 		SystemPrompt: a.Config.SystemPrompt,
+		Skills:       skillInfos(a.SkillRegistry),
 		SkillNames:   skillNames(a.SkillRegistry),
 		PlanMode:     a.Permissions != nil && a.Permissions.Mode() == permission.ModePlan,
 	}
@@ -2517,7 +2518,10 @@ func engineConfig(cfg config.Config, client *cpanthropic.Client, runtime *hook.R
 		MaxContextTokens: cfg.MaxContextTokens,
 		MaxTokens:        cfg.MaxTokens,
 		SystemPrompt:     cfg.SystemPrompt,
+		Skills:           skillInfos(skillRegistry),
 		SkillNames:       skillNames(skillRegistry),
+		SkillRoots:       skillRoots(skillRegistry),
+		SkillRootsByName: skillRootsByName(skillRegistry),
 		MaxTurns:         cfg.MaxTurns,
 		Stream:           cfg.Stream,
 		Thinking:         cfg.Thinking,
@@ -2708,6 +2712,58 @@ func skillNames(registry *skill.Registry) []string {
 	out := make([]string, 0, len(defs))
 	for _, def := range defs {
 		out = append(out, def.Name)
+	}
+	return out
+}
+
+func skillInfos(registry *skill.Registry) []engine.SkillInfo {
+	if registry == nil {
+		return nil
+	}
+	defs := registry.All()
+	out := make([]engine.SkillInfo, 0, len(defs))
+	for _, def := range defs {
+		out = append(out, engine.SkillInfo{
+			Name:        def.Name,
+			Description: def.Description,
+		})
+	}
+	return out
+}
+
+func skillRoots(registry *skill.Registry) []string {
+	if registry == nil {
+		return nil
+	}
+	defs := registry.All()
+	out := make([]string, 0, len(defs))
+	seen := map[string]bool{}
+	for _, def := range defs {
+		if !def.IsPackage() {
+			continue
+		}
+		root := strings.TrimSpace(def.Root())
+		if root == "" || seen[root] {
+			continue
+		}
+		seen[root] = true
+		out = append(out, root)
+	}
+	return out
+}
+
+func skillRootsByName(registry *skill.Registry) map[string]string {
+	if registry == nil {
+		return nil
+	}
+	out := map[string]string{}
+	for _, def := range registry.All() {
+		if !def.IsPackage() {
+			continue
+		}
+		if root := strings.TrimSpace(def.Root()); root != "" {
+			out[def.Name] = root
+		}
 	}
 	return out
 }

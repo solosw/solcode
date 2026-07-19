@@ -1,3 +1,8 @@
+---
+name: test-fix
+description: Diagnose and fix failing tests. Use when tests fail or the user asks to make tests pass.
+---
+
 # test-fix
 
 Diagnose and fix failing tests with a tight loop: reproduce → root cause → minimal fix → re-run.

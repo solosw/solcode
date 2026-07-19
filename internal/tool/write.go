@@ -92,8 +92,9 @@ func (w *writeTool) Invoke(ctx context.Context, uctx *UseContext, input json.Raw
 	}
 
 	filePath := params.FilePath
-	if !filepath.IsAbs(filePath) {
-		filePath = filepath.Join(uctx.WorkDir, filePath)
+	filePath = ResolvePath(uctx, filePath)
+	if err := CheckAllowedPath(uctx, filePath); err != nil {
+		return ErrorResult(err.Error()), nil
 	}
 
 	// Check if it's a directory
