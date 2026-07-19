@@ -3,7 +3,9 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"time"
 
@@ -36,21 +38,38 @@ func (defaultWebSearcher) Search(ctx context.Context, query string, opts websear
 	return websearch.Search(ctx, query, opts)
 }
 
+// baiduSearcher is a text-search fallback used only when the metasearch call
+// times out. It intentionally performs one normal request; it does not try to
+// bypass rate limits or CAPTCHA challenges.
+type baiduSearcher interface {
+	Search(ctx context.Context, query string, maxResults int) ([]SearchHit, error)
+}
+
 type webSearchTool struct {
 	BaseTool
-	searcher webSearcher
-	timeout  time.Duration
+	searcher        webSearcher
+	baiduFallback   baiduSearcher
+	timeout         time.Duration
+	fallbackTimeout time.Duration
 }
 
 func NewWebSearchTool() Tool {
-	return newWebSearchTool(defaultWebSearcher{})
+	return newWebSearchTool(defaultWebSearcher{}, newBaiduJSONSearcher(nil))
 }
 
-func newWebSearchTool(searcher webSearcher) Tool {
+func newWebSearchTool(searcher webSearcher, fallback baiduSearcher) Tool {
 	if searcher == nil {
 		searcher = defaultWebSearcher{}
 	}
-	return &webSearchTool{searcher: searcher, timeout: 30 * time.Second}
+	if fallback == nil {
+		fallback = newBaiduJSONSearcher(nil)
+	}
+	return &webSearchTool{
+		searcher:        searcher,
+		baiduFallback:   fallback,
+		timeout:         30 * time.Second,
+		fallbackTimeout: 10 * time.Second,
+	}
 }
 
 func (t *webSearchTool) Name() string { return WebSearchToolName }
@@ -107,24 +126,38 @@ func (t *webSearchTool) Invoke(ctx context.Context, uctx *UseContext, input json
 		maxResults = 50
 	}
 
-	timeout := t.timeout
-	if timeout <= 0 {
-		timeout = 30 * time.Second
+	primaryTimeout := t.timeout
+	if primaryTimeout <= 0 {
+		primaryTimeout = 30 * time.Second
 	}
-	searchCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
+	searchCtx, cancel := context.WithTimeout(ctx, primaryTimeout)
 	results, err := t.searcher.Search(searchCtx, params.Query, websearch.SearchOptions{
 		Category:   category,
 		Backend:    "auto",
 		MaxResults: maxResults,
-		Timeout:    int(timeout.Seconds()),
+		Timeout:    int(primaryTimeout.Seconds()),
 	})
-	if err != nil {
-		return ErrorResult("web search failed: " + err.Error()), nil
-	}
+	cancel()
 
-	hits := normalizeSearchResults(results, maxResults)
+	var hits []SearchHit
+	if err != nil {
+		if category == websearch.CategoryText && isTimeoutError(err) && t.baiduFallback != nil {
+			fallbackTimeout := t.fallbackTimeout
+			if fallbackTimeout <= 0 {
+				fallbackTimeout = 10 * time.Second
+			}
+			fallbackCtx, fallbackCancel := context.WithTimeout(ctx, fallbackTimeout)
+			hits, err = t.baiduFallback.Search(fallbackCtx, params.Query, maxResults)
+			fallbackCancel()
+			if err != nil {
+				return ErrorResult("web search timed out and Baidu fallback failed: " + err.Error()), nil
+			}
+		} else {
+			return ErrorResult("web search failed: " + err.Error()), nil
+		}
+	} else {
+		hits = normalizeSearchResults(results, maxResults)
+	}
 	if len(hits) == 0 {
 		return Result("No results found."), nil
 	}
@@ -153,6 +186,14 @@ func webSearchCategory(raw string) (websearch.Category, error) {
 	default:
 		return "", fmt.Errorf("unsupported category %q; use text, images, news, videos, books, or research", raw)
 	}
+}
+
+func isTimeoutError(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 func normalizeSearchResults(results []websearch.SearchResult, limit int) []SearchHit {
