@@ -129,12 +129,30 @@ type Config struct {
 	Workflows        WorkflowsConfig      `json:"workflows,omitempty"`
 	MCP              MCPConfig            `json:"mcp,omitempty"`
 	MCPServers       []MCPServerConfig    `json:"mcp_servers,omitempty"`
+	LSP              LSPConfig            `json:"lsp,omitempty"`
 	Session          SessionConfig        `json:"session,omitempty"`
 	Memory           MemoryConfig         `json:"memory,omitempty"`
 	KnowledgeGraph   KnowledgeGraphConfig `json:"knowledge_graph,omitempty"`
 
 	Provider  string           `json:"provider,omitempty"`
 	Providers []ProviderConfig `json:"providers,omitempty"`
+}
+
+// LSPConfig configures language-server backends for the LSP tool.
+// When Enabled is nil, LSP is on. When IncludeDefaults is nil, built-in
+// language mappings (gopls, pyright, …) are merged if the binary is on PATH.
+type LSPConfig struct {
+	Enabled         *bool            `json:"enabled,omitempty"`
+	IncludeDefaults *bool            `json:"include_defaults,omitempty"`
+	Servers         []LSPServerConfig `json:"servers,omitempty"`
+}
+
+// LSPServerConfig describes one language server launch command.
+type LSPServerConfig struct {
+	Language   string   `json:"language"`
+	Extensions []string `json:"extensions"`
+	Command    []string `json:"command"`
+	Disabled   bool     `json:"disabled,omitempty"`
 }
 
 // TUIConfig customizes the terminal interface palette. Colors accept any
@@ -402,6 +420,8 @@ func (cfg *Config) Normalize() error {
 	}
 	cfg.MCP.Servers = defaultMCPServers(cfg.WorkDir, normalizeMCPServers(cfg.MCP.Servers))
 	cfg.MCPServers = cloneMCPServers(cfg.MCP.Servers)
+
+	cfg.LSP = normalizeLSPConfig(cfg.LSP)
 
 	cfg.normalizeSessionMemory()
 	ensureDefaultToolResultCompressHook(cfg)
@@ -1288,6 +1308,72 @@ func cloneMCPServers(servers []MCPServerConfig) []MCPServerConfig {
 		out[i].Env = cleanStringMap(out[i].Env)
 	}
 	return out
+}
+
+func normalizeLSPConfig(cfg LSPConfig) LSPConfig {
+	out := LSPConfig{
+		Enabled:         cfg.Enabled,
+		IncludeDefaults: cfg.IncludeDefaults,
+	}
+	if len(cfg.Servers) == 0 {
+		return out
+	}
+	servers := make([]LSPServerConfig, 0, len(cfg.Servers))
+	for _, s := range cfg.Servers {
+		if s.Disabled {
+			continue
+		}
+		s.Language = strings.TrimSpace(s.Language)
+		exts := make([]string, 0, len(s.Extensions))
+		seen := map[string]struct{}{}
+		for _, e := range s.Extensions {
+			e = strings.TrimSpace(strings.ToLower(e))
+			if e == "" {
+				continue
+			}
+			if !strings.HasPrefix(e, ".") {
+				e = "." + e
+			}
+			if _, ok := seen[e]; ok {
+				continue
+			}
+			seen[e] = struct{}{}
+			exts = append(exts, e)
+		}
+		s.Extensions = exts
+		cmd := make([]string, 0, len(s.Command))
+		for _, a := range s.Command {
+			a = strings.TrimSpace(a)
+			if a != "" {
+				cmd = append(cmd, a)
+			}
+		}
+		s.Command = cmd
+		if s.Language == "" || len(s.Command) == 0 || len(s.Extensions) == 0 {
+			continue
+		}
+		servers = append(servers, s)
+	}
+	out.Servers = servers
+	return out
+}
+
+// LSPEnabled reports whether the LSP tool should be registered.
+// Default is enabled when Enabled is nil.
+func (c Config) LSPEnabled() bool {
+	if c.LSP.Enabled == nil {
+		return true
+	}
+	return *c.LSP.Enabled
+}
+
+// LSPIncludeDefaults reports whether built-in language server mappings are merged.
+// Default is true when IncludeDefaults is nil.
+func (c Config) LSPIncludeDefaults() bool {
+	if c.LSP.IncludeDefaults == nil {
+		return true
+	}
+	return *c.LSP.IncludeDefaults
 }
 
 func cleanAndExpandPaths(paths []string) []string {

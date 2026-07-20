@@ -15,7 +15,7 @@ A terminal-based coding agent powered by Claude (Anthropic API) that can read, w
 - **Hook system** — Execute shell commands on agent events (tool calls, results, completion).
 - **Permission modes** — `auto`, `accept_edits`, `bypass`, `yolo`, `plan` — control how tools are authorized.
 - **Sub-agent coordinator** — The `task` tool spawns isolated sub-agents for parallel or independent work.
-- **LSP integration** — Go-to-definition, references, hover, and workspace symbols from your language servers.
+- **LSP integration** — Multi-language code intelligence via Language Server Protocol: go-to-definition, find references, hover, document/workspace symbols, and go-to-implementation. Language servers are launched by file extension (gopls, pyright, typescript-language-server, …); binaries on `PATH` are auto-detected, and you can override commands in settings.
 - **Inline diff rendering** — File edits (Edit/Write/Patch) show colored unified diffs directly in the TUI.
 - **Syntax highlighting** — File content displayed in the TUI is syntax-highlighted via Chroma for 200+ languages.
 
@@ -88,6 +88,7 @@ Local build:
 
 - An Anthropic API key (set `ANTHROPIC_API_KEY` environment variable)
 - For source builds only: Go 1.25+
+- Optional: language servers on `PATH` for the [LSP](#lsp-language-server-protocol) tool (e.g. `gopls`, `pyright-langserver`)
 
 ### First run
 
@@ -319,6 +320,80 @@ Disable:
 
 Hook scripts (multi-language): PreToolUse bash guard & input wrap, PostToolUse log/trim, UserPromptSubmit prefix, plus builtin `compress_tool_result`.
 
+## LSP (Language Server Protocol)
+
+solcode talks to **external language servers** over stdio (JSON-RPC). The agent uses one built-in `LSP` tool; which server runs depends on the file extension.
+
+### Operations
+
+| Operation | Purpose |
+|-----------|---------|
+| `go_to_definition` | Jump to symbol definition |
+| `find_references` | List references (impact analysis / rename prep) |
+| `hover` | Type / signature / docs at a position |
+| `document_symbol` | Outline symbols in a file |
+| `workspace_symbol` | Search symbols across the workspace |
+| `go_to_implementation` | Find interface implementations |
+
+Positions are **1-based** (`line` / `character`), matching editor conventions.
+
+### Defaults (auto if binary is on PATH)
+
+| Language | Extensions | Command |
+|----------|------------|---------|
+| Go | `.go` | `gopls` |
+| Python | `.py`, `.pyi` | `pyright-langserver --stdio` |
+| TypeScript / JS | `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs` | `typescript-language-server --stdio` |
+| Rust | `.rs` | `rust-analyzer` |
+| C / C++ | `.c`, `.h`, `.cpp`, `.cc`, `.cxx`, `.hpp`, `.hxx` | `clangd` |
+| Java | `.java` | `jdtls` |
+
+Install the server yourself (examples):
+
+```bash
+go install golang.org/x/tools/gopls@latest
+npm install -g pyright typescript typescript-language-server
+# rustup component add rust-analyzer   # or install rust-analyzer binary
+```
+
+If no server is registered for a file type (or the binary is missing), the tool returns `language server is not available` and the agent can fall back to Grep/View.
+
+### Configuration
+
+In `~/.solcode/settings.json` or project `.solcode/settings.json`:
+
+```json
+{
+  "lsp": {
+    "enabled": true,
+    "include_defaults": true,
+    "servers": [
+      {
+        "language": "go",
+        "extensions": [".go"],
+        "command": ["gopls"]
+      },
+      {
+        "language": "python",
+        "extensions": [".py", ".pyi"],
+        "command": ["pyright-langserver", "--stdio"]
+      }
+    ]
+  }
+}
+```
+
+| Field | Default | Meaning |
+|-------|---------|---------|
+| `enabled` | `true` | Register the LSP tool |
+| `include_defaults` | `true` | Merge built-in language mappings (only if the binary exists on `PATH`) |
+| `servers` | `[]` | User-defined servers; same language or overlapping extensions **override** defaults |
+| `servers[].disabled` | `false` | Skip this entry |
+
+Sessions are reused per `(workDir, language)` for the life of the process and shut down on app exit / feature reload.
+
+See also [`examples/settings/settings.full.example.json`](examples/settings/settings.full.example.json).
+
 ## Built-in Tools
 
 | Tool | Description |
@@ -335,7 +410,7 @@ Hook scripts (multi-language): PreToolUse bash guard & input wrap, PostToolUse l
 | `patch` | Apply unified diff patches |
 | `fetch` | Fetch content from URLs |
 | `web_search` | Search the web and return structured results |
-| `lsp` | Language server operations (definitions, references, hover, symbols) |
+| `LSP` | Language intelligence: definition, references, hover, symbols (see [LSP](#lsp-language-server-protocol)) |
 | `mcp` | Invoke MCP server tools |
 | `todo_write` | Manage structured task lists |
 | `ask_user` | Ask user questions in interactive dialogs |

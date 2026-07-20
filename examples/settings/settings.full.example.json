@@ -69,6 +69,17 @@
       "disabled": true
     }
   ],
+  "lsp": {
+    "enabled": true,
+    "include_defaults": true,
+    "servers": [
+      {
+        "language": "go",
+        "extensions": [".go"],
+        "command": ["gopls"]
+      }
+    ]
+  },
   "session": {
     "enabled": true,
     "persist": true,

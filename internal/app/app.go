@@ -43,6 +43,7 @@ type App struct {
 	SkillRegistry    *skill.Registry
 	WorkflowRegistry *workflow.Registry
 	MCPRegistry      *mcp.Registry
+	lspManager       *lsp.Manager
 	ChangeGraph      *changegraph.Store
 	summaryWriter    session.SummaryWriter
 	summaryRefresh   sync.Mutex
@@ -77,9 +78,10 @@ type options struct {
 	queuedPrompts   func() []string
 }
 
-func buildToolState(cfg config.Config, mcpFactory mcp.ClientFactory) (*tool.Registry, *skill.Registry, *mcp.Registry, error) {
+func buildToolState(cfg config.Config, mcpFactory mcp.ClientFactory) (*tool.Registry, *skill.Registry, *mcp.Registry, *lsp.Manager, error) {
 	registry := tool.NewRegistry()
-	registerBuiltins(registry)
+	lspManager := newLSPManager(cfg)
+	registerBuiltins(registry, lspManager)
 
 	skillRegistry := loadSkills(cfg)
 	if defs := skillRegistry.All(); len(defs) > 0 {
@@ -91,12 +93,12 @@ func buildToolState(cfg config.Config, mcpFactory mcp.ClientFactory) (*tool.Regi
 		mcpRegistry.SetClientFactory(mcpFactory)
 	}
 	if err := mcpRegistry.Load(); err != nil {
-		return nil, nil, nil, fmt.Errorf("load mcp registry: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("load mcp registry: %w", err)
 	}
 	if mcpTools := mcpRegistry.Tools(); len(mcpTools) > 0 {
 		registry.Register(mcpTools...)
 	}
-	return registry, skillRegistry, mcpRegistry, nil
+	return registry, skillRegistry, mcpRegistry, lspManager, nil
 }
 
 func WithMCPClientFactory(factory mcp.ClientFactory) Option {
@@ -153,7 +155,7 @@ func New(cfg config.Config, opts ...Option) (*App, error) {
 		}
 	}
 
-	registry, skillRegistry, mcpRegistry, err := buildToolState(cfg, options.mcpFactory)
+	registry, skillRegistry, mcpRegistry, lspManager, err := buildToolState(cfg, options.mcpFactory)
 	if err != nil {
 		return nil, err
 	}
@@ -185,6 +187,7 @@ func New(cfg config.Config, opts ...Option) (*App, error) {
 		SkillRegistry:    skillRegistry,
 		WorkflowRegistry: loadWorkflows(cfg),
 		MCPRegistry:      mcpRegistry,
+		lspManager:       lspManager,
 		ChangeGraph:      graphStore,
 		mcpFactory:       options.mcpFactory,
 		onTextDelta:      options.onTextDelta,
@@ -292,6 +295,9 @@ func openChangeGraph(cfg config.Config) (*changegraph.Store, error) {
 }
 
 func (a *App) Close() error {
+	if a.lspManager != nil {
+		_ = a.lspManager.Close()
+	}
 	if a == nil {
 		return nil
 	}
@@ -342,7 +348,7 @@ func (a *App) ReloadFeatures(cfg config.Config, mcpFactory mcp.ClientFactory) er
 	if mcpFactory == nil {
 		mcpFactory = a.mcpFactory
 	}
-	registry, skillRegistry, mcpRegistry, err := buildToolState(cfg, mcpFactory)
+	registry, skillRegistry, mcpRegistry, lspManager, err := buildToolState(cfg, mcpFactory)
 	if err != nil {
 		return err
 	}
@@ -354,6 +360,9 @@ func (a *App) ReloadFeatures(cfg config.Config, mcpFactory mcp.ClientFactory) er
 	if a.MCPRegistry != nil {
 		_ = a.MCPRegistry.Close()
 	}
+	if a.lspManager != nil {
+		_ = a.lspManager.Close()
+	}
 	if a.ChangeGraph != nil {
 		_ = a.ChangeGraph.Close()
 	}
@@ -362,6 +371,7 @@ func (a *App) ReloadFeatures(cfg config.Config, mcpFactory mcp.ClientFactory) er
 	a.SkillRegistry = skillRegistry
 	a.WorkflowRegistry = loadWorkflows(cfg)
 	a.MCPRegistry = mcpRegistry
+	a.lspManager = lspManager
 	a.ChangeGraph = graphStore
 	registry.Register(tool.NewTaskTool(a.Coordinator))
 	if cfg.Memory.Enabled {
@@ -2567,8 +2577,8 @@ func newFileChangeRecorder(store *changegraph.Store) func(context.Context, *tool
 	}
 }
 
-func registerBuiltins(registry *tool.Registry) {
-	registry.Register(
+func registerBuiltins(registry *tool.Registry, lspManager *lsp.Manager) {
+	tools := []tool.Tool{
 		tool.NewAskUserTool(),
 		tool.NewBashTool(),
 		tool.NewDiffTool(),
@@ -2577,14 +2587,32 @@ func registerBuiltins(registry *tool.Registry) {
 		tool.NewGlobTool(),
 		tool.NewGrepTool(),
 		tool.NewLsTool(),
-		tool.NewLSPTool(lsp.NewManager(nil, nil)),
 		tool.NewPatchTool(),
 		tool.NewTodoWriteTool(),
 		tool.NewViewImageTool(),
 		tool.NewViewTool(),
 		tool.NewWebSearchTool(),
 		tool.NewWriteTool(),
-	)
+	}
+	if lspManager != nil {
+		tools = append(tools, tool.NewLSPTool(lspManager))
+	}
+	registry.Register(tools...)
+}
+
+func newLSPManager(cfg config.Config) *lsp.Manager {
+	if !cfg.LSPEnabled() {
+		return nil
+	}
+	user := make([]lsp.ServerCommand, 0, len(cfg.LSP.Servers))
+	for _, s := range cfg.LSP.Servers {
+		user = append(user, lsp.ServerCommand{
+			Language:   s.Language,
+			Extensions: append([]string(nil), s.Extensions...),
+			Command:    append([]string(nil), s.Command...),
+		})
+	}
+	return lsp.NewManagerFromCommands(user, cfg.LSPIncludeDefaults())
 }
 
 func loadWorkflows(cfg config.Config) *workflow.Registry {

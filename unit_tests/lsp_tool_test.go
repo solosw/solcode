@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/solosw/solcode/internal/config"
 	"github.com/solosw/solcode/internal/lsp"
 	"github.com/solosw/solcode/internal/tool"
 )
@@ -39,5 +40,30 @@ func TestLSPToolValidateInput(t *testing.T) {
 	})
 	if err := lspTool.ValidateInput(context.Background(), input); err != nil {
 		t.Fatalf("expected valid input: %v", err)
+	}
+}
+
+func TestLSPConfigNormalizeAndDefaults(t *testing.T) {
+	cfg := config.Default()
+	cfg.LSP = config.LSPConfig{
+		Servers: []config.LSPServerConfig{
+			{Language: "go", Extensions: []string{"go"}, Command: []string{"gopls"}},
+			{Language: "skip", Extensions: []string{".py"}, Command: []string{"pyright-langserver"}, Disabled: true},
+		},
+	}
+	if err := cfg.Normalize(); err != nil {
+		t.Fatalf("Normalize: %v", err)
+	}
+	if !cfg.LSPEnabled() {
+		t.Fatal("expected LSP enabled by default")
+	}
+	if !cfg.LSPIncludeDefaults() {
+		t.Fatal("expected include_defaults true by default")
+	}
+	if len(cfg.LSP.Servers) != 1 {
+		t.Fatalf("servers = %#v", cfg.LSP.Servers)
+	}
+	if cfg.LSP.Servers[0].Extensions[0] != ".go" {
+		t.Fatalf("extension normalize = %#v", cfg.LSP.Servers[0].Extensions)
 	}
 }

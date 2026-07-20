@@ -46,10 +46,11 @@ Per-model overrides win over top-level defaults when set:
 
 Switch at runtime: `/model`, `/provider`, `/effort`.
 
-## Skills / hooks / MCP
+## Skills / hooks / MCP / LSP
 
 - **skills.paths** — directories scanned for `SKILL.md` folders or `*.md` files (see [`../skills/`](../skills/))
 - **hooks.events** — `UserPromptSubmit` / `PreToolUse` / `PostToolUse` / … (see [`../hooks/`](../hooks/))
 - **mcp_servers** — stdio or HTTP MCP tools (`/mcp` to toggle)
+- **lsp** — language servers for the `LSP` tool (`enabled`, `include_defaults`, `servers[]` with `language` / `extensions` / `command`). Defaults auto-detect `gopls`, `pyright-langserver`, etc. when on `PATH`. See root [README LSP section](../../README.md#lsp-language-server-protocol) and [`settings.full.example.json`](settings.full.example.json).
 
 Hook `command` strings run via the host shell (`bash -c` / `cmd /c`) with **cwd = agent workdir**, so relative paths like `node examples/hooks/...` work when you start solcode from the repo root. For installed binaries, use absolute paths or copy scripts into `~/.solcode/hooks/`.
