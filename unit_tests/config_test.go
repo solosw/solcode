@@ -806,6 +806,62 @@ func TestConfigListModelsAndWithModel(t *testing.T) {
 	}
 }
 
+func TestListModelsOnlyCurrentProvider(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	writeFile(t, path, `{
+		"provider": "anthropic",
+		"model": "sonnet",
+		"providers": [
+			{
+				"name": "anthropic",
+				"models": [
+					{"name":"sonnet","id":"claude-sonnet-4-6","display_name":"Sonnet"},
+					{"name":"opus","id":"claude-opus-4-8","display_name":"Opus"}
+				]
+			},
+			{
+				"name": "proxy",
+				"models": [
+					{"name":"proxy-model","id":"proxy-model-id","display_name":"Proxy Model"}
+				]
+			}
+		]
+	}`)
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load(%q) = %v", path, err)
+	}
+	models := cfg.ListModels()
+	if len(models) != 2 {
+		t.Fatalf("ListModels len = %d, want 2 (current provider only)", len(models))
+	}
+	for _, m := range models {
+		if m.Provider != "anthropic" {
+			t.Fatalf("unexpected provider in model list: %#v", m)
+		}
+	}
+
+	switched, err := cfg.WithProvider("proxy")
+	if err != nil {
+		t.Fatalf("WithProvider(proxy) = %v", err)
+	}
+	proxyModels := switched.ListModels()
+	if len(proxyModels) != 1 || proxyModels[0].Name != "proxy-model" {
+		t.Fatalf("proxy ListModels = %#v", proxyModels)
+	}
+
+	// Switching model within anthropic should keep provider.
+	next, err := cfg.WithModel("opus")
+	if err != nil {
+		t.Fatalf("WithModel(opus) = %v", err)
+	}
+	if next.Provider != "anthropic" {
+		t.Fatalf("WithModel should keep current provider, got %q", next.Provider)
+	}
+}
+
 func TestLoadInvalidJSON(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")

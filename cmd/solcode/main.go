@@ -414,6 +414,7 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 	model.SetDialogCallbacks(func(kind tui.DialogKind) []tui.DialogItem {
 		switch kind {
 		case tui.DialogModel:
+			// ListModels is scoped to the current provider (switch provider via /provider).
 			models := cfg.ListModels()
 			items := make([]tui.DialogItem, 0, len(models)+1)
 			for _, m := range models {
@@ -422,9 +423,6 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 					label = m.DisplayName
 				}
 				subtitle := m.ID
-				if m.Provider != "" {
-					subtitle += " · " + m.Provider
-				}
 				if m.Default {
 					subtitle += " · default"
 				}

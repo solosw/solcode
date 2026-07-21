@@ -510,24 +510,37 @@ type ModelInfo struct {
 	Current     bool
 }
 
+// ListModels returns models for the currently selected provider only.
+// Use /provider to switch providers before listing other providers' models.
 func (cfg Config) ListModels() []ModelInfo {
 	if len(cfg.Providers) == 0 {
 		return []ModelInfo{{Name: cfg.Model, ID: cfg.Model, Current: true}}
 	}
+	providerName := strings.TrimSpace(cfg.Provider)
+	if providerName == "" {
+		if prov, _, err := cfg.resolveActive(); err == nil {
+			providerName = prov.Name
+		}
+	}
+	if providerName == "" {
+		for _, p := range cfg.Providers {
+			if len(p.Models) > 0 {
+				providerName = p.Name
+				break
+			}
+		}
+	}
 	active := cfg.Model
 	models := make([]ModelInfo, 0)
-	for _, provider := range cfg.Providers {
-		for _, model := range provider.Models {
-			id := model.ID
-			models = append(models, ModelInfo{
-				Provider:    provider.Name,
-				Name:        model.Name,
-				ID:          id,
-				DisplayName: model.DisplayName,
-				Default:     model.Default,
-				Current:     model.Name == active || model.ID == active,
-			})
-		}
+	for _, model := range cfg.modelsOf(providerName) {
+		models = append(models, ModelInfo{
+			Provider:    providerName,
+			Name:        model.Name,
+			ID:          model.ID,
+			DisplayName: model.DisplayName,
+			Default:     model.Default,
+			Current:     model.Name == active || model.ID == active,
+		})
 	}
 	return models
 }
@@ -539,8 +552,29 @@ func (cfg Config) WithModel(model string) (Config, error) {
 	}
 	next := cfg
 	next.Model = model
+	// Keep the active provider so /model only switches within the current provider.
+	// If the model is not on that provider, fall back to resolving by model name.
 	if len(next.Providers) > 0 {
-		next.Provider = ""
+		providerName := strings.TrimSpace(cfg.Provider)
+		if providerName == "" {
+			if prov, _, err := cfg.resolveActive(); err == nil {
+				providerName = prov.Name
+			}
+		}
+		if providerName != "" {
+			found := false
+			for _, m := range cfg.modelsOf(providerName) {
+				if m.Name == model || m.ID == model {
+					found = true
+					break
+				}
+			}
+			if found {
+				next.Provider = providerName
+			} else {
+				next.Provider = ""
+			}
+		}
 	}
 	if err := next.Normalize(); err != nil {
 		return cfg, err

@@ -41,7 +41,7 @@ func slashHelpText() string {
 		"Available commands:",
 		"/help — show this help",
 		"/clear — clear the current TUI transcript",
-		"/model — select a model via dialog",
+		"/model — select a model from the current provider",
 		"/provider — select a provider via dialog",
 		"/effort — select thinking effort via dialog",
 		"/sessions — list saved sessions",

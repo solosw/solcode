@@ -8,7 +8,7 @@ A terminal-based coding agent powered by Claude (Anthropic API) that can read, w
 - **@ file attachments** — Type `@` to autocomplete and attach files from the working directory. Text files are inlined into the prompt; images are converted to multimodal image blocks for the model.
 - **Persistent sessions** — Reload saved conversation history with its original message timestamps.
 - **Batch mode** — Run one-shot prompts non-interactively via `-prompt`.
-- **Multi-model support** — Configure multiple LLM providers and models, switch at runtime with `/model` and `/provider`, or add them directly from their dialogs.
+- **Multi-model support** — Configure multiple LLM providers and models, switch at runtime with `/model` (current provider only) and `/provider`, or add them directly from their dialogs.
 - **20+ built-in tools** — Bash, Edit, Write, View, ViewImage, Grep, Glob, LS, Diff, Patch, Fetch, WebSearch, LSP, MCP, TodoWrite, AskUser, Task (sub-agents), and more.
 - **MCP (Model Context Protocol)** — Connect to external MCP servers over stdio or HTTP.
 - **Custom skills** — Define reusable skill files loaded from configurable directories.
@@ -178,7 +178,7 @@ Type `/` in the input to access commands:
 |---------|-------------|
 | `/help` | Show available commands |
 | `/clear` | Clear the current TUI transcript |
-| `/model` | Select a configured model or add a custom model ID via dialog |
+| `/model` | Select a model from the **current provider**, or add a custom model ID via dialog |
 | `/provider` | Select a configured provider or add a custom provider via dialog |
 | `/effort` | Select thinking effort (low/medium/high) |
 | `/sessions` | List and load saved sessions |
