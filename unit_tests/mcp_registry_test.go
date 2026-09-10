@@ -145,10 +145,18 @@ func TestMCPRegistryAcceptsSSEAndHTTPConfigs(t *testing.T) {
 	for _, server := range []config.MCPServerConfig{
 		{Name: "remote-sse", Transport: "sse", URL: "https://example.com/sse"},
 		{Name: "remote-http", Transport: "http", URL: "https://example.com/mcp"},
+		{Name: "remote-streamable", Transport: config.MCPTransportStreamableHTTP, URL: "https://mcp.deepwiki.com/mcp"},
 	} {
 		fake := &fakeMCPClient{tools: []fakeToolDef{{name: "ping", description: "Ping", result: "pong"}}}
-		registry := internalmcp.NewRegistry([]config.MCPServerConfig{server})
-		registry.SetClientFactory(func(server config.MCPServerConfig) internalmcp.Client { return fake })
+		normalized := server
+		normalized.Transport = config.NormalizeMCPTransport(server.Transport)
+		registry := internalmcp.NewRegistry([]config.MCPServerConfig{normalized})
+		registry.SetClientFactory(func(server config.MCPServerConfig) internalmcp.Client {
+			if server.Transport != config.MCPTransportStreamableHTTP {
+				t.Fatalf("factory got transport %q, want %q", server.Transport, config.MCPTransportStreamableHTTP)
+			}
+			return fake
+		})
 		if err := registry.Load(); err != nil {
 			t.Fatalf("Load(%q) = %v", server.Transport, err)
 		}

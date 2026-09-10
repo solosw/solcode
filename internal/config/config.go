@@ -1303,6 +1303,10 @@ func parseMCPServers(data []byte) ([]MCPServerConfig, error) {
 	return normalizeMCPServers(servers), nil
 }
 
+// Canonical MCP remote transport. Legacy config values "sse" and "http" are
+// normalized to this name because the old SSE/HTTP transports are deprecated.
+const MCPTransportStreamableHTTP = "STREAMABLE_HTTP"
+
 func normalizeMCPServers(servers []MCPServerConfig) []MCPServerConfig {
 	if len(servers) == 0 {
 		return nil
@@ -1319,6 +1323,8 @@ func normalizeMCPServers(servers []MCPServerConfig) []MCPServerConfig {
 		if server.Transport == "" {
 			server.Transport = "stdio"
 		}
+		server.Transport = NormalizeMCPTransport(server.Transport)
+		server.Type = server.Transport
 		server.Command = expandPath(server.Command)
 		server.URL = strings.TrimSpace(server.URL)
 		server.Args = cleanStringSlice(server.Args)
@@ -1330,6 +1336,26 @@ func normalizeMCPServers(servers []MCPServerConfig) []MCPServerConfig {
 		return out[i].Name < out[j].Name
 	})
 	return out
+}
+
+// NormalizeMCPTransport maps legacy remote transports onto STREAMABLE_HTTP.
+// Unknown values are returned trimmed so callers can reject them.
+func NormalizeMCPTransport(value string) string {
+	trimmed := strings.TrimSpace(value)
+	switch strings.ToLower(trimmed) {
+	case "":
+		return "stdio"
+	case "stdio":
+		return "stdio"
+	case "sse", "http", "streamable", "streamable_http", "streamable-http":
+		return MCPTransportStreamableHTTP
+	default:
+		// Preserve canonical STREAMABLE_HTTP casing if already provided.
+		if strings.EqualFold(trimmed, MCPTransportStreamableHTTP) {
+			return MCPTransportStreamableHTTP
+		}
+		return trimmed
+	}
 }
 
 func defaultSkillPaths(workDir string, configured []string) []string {

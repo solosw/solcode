@@ -325,13 +325,10 @@ func (s *Server) handleMCPServers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := strings.TrimSpace(req.Name)
-	transport := strings.ToLower(strings.TrimSpace(req.Transport))
+	transport := config.NormalizeMCPTransport(req.Transport)
 	if name == "" {
 		http.Error(w, "MCP server name required", http.StatusBadRequest)
 		return
-	}
-	if transport == "" {
-		transport = "stdio"
 	}
 	switch transport {
 	case "stdio":
@@ -339,13 +336,13 @@ func (s *Server) handleMCPServers(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "stdio MCP server command required", http.StatusBadRequest)
 			return
 		}
-	case "http", "sse":
+	case config.MCPTransportStreamableHTTP:
 		if strings.TrimSpace(req.URL) == "" {
 			http.Error(w, transport+" MCP server URL required", http.StatusBadRequest)
 			return
 		}
 	default:
-		http.Error(w, "MCP transport must be stdio, http, or sse", http.StatusBadRequest)
+		http.Error(w, "MCP transport must be stdio or STREAMABLE_HTTP (http/sse accepted as aliases)", http.StatusBadRequest)
 		return
 	}
 	scope := strings.ToLower(strings.TrimSpace(req.Scope))

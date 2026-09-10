@@ -474,6 +474,10 @@ func TestLoadMCPTransportConfigs(t *testing.T) {
 			"remote-http": {
 				"transport": "http",
 				"url": "https://example.com/mcp"
+			},
+			"remote-streamable": {
+				"transport": "STREAMABLE_HTTP",
+				"url": "https://mcp.deepwiki.com/mcp"
 			}
 		}
 	}`)
@@ -482,8 +486,21 @@ func TestLoadMCPTransportConfigs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load(%q) = %v", path, err)
 	}
-	if len(cfg.MCP.Servers) != 2 {
-		t.Fatalf("MCP.Servers = %#v", cfg.MCP.Servers)
+	byName := map[string]config.MCPServerConfig{}
+	for _, server := range cfg.MCP.Servers {
+		byName[server.Name] = server
+	}
+	for _, name := range []string{"remote-sse", "remote-http", "remote-streamable"} {
+		server, ok := byName[name]
+		if !ok {
+			t.Fatalf("missing MCP server %q in %#v", name, cfg.MCP.Servers)
+		}
+		if server.Transport != config.MCPTransportStreamableHTTP {
+			t.Fatalf("%s.Transport = %q, want %q", name, server.Transport, config.MCPTransportStreamableHTTP)
+		}
+		if server.Type != config.MCPTransportStreamableHTTP {
+			t.Fatalf("%s.Type = %q, want %q", name, server.Type, config.MCPTransportStreamableHTTP)
+		}
 	}
 }
 

@@ -25,9 +25,8 @@ func NewClientFactory() ClientFactory {
 		switch normalizeTransport(server.Transport) {
 		case "", "stdio":
 			return NewStdioClient(server)
-		case "sse":
-			return NewSSEClient(server)
-		case "http", "streamable":
+		case config.MCPTransportStreamableHTTP:
+			// Legacy "sse"/"http" configs are normalized to STREAMABLE_HTTP.
 			return NewStreamableClient(server)
 		default:
 			return &unsupportedClient{server: server}
@@ -123,20 +122,12 @@ func validateServerConfig(server config.MCPServerConfig) error {
 			return fmt.Errorf("mcp server %q stdio transport must not set url", server.Name)
 		}
 		return nil
-	case "sse":
+	case config.MCPTransportStreamableHTTP:
 		if strings.TrimSpace(server.URL) == "" {
-			return fmt.Errorf("mcp server %q requires url for sse transport", server.Name)
+			return fmt.Errorf("mcp server %q requires url for %s transport", server.Name, config.MCPTransportStreamableHTTP)
 		}
 		if strings.TrimSpace(server.Command) != "" {
-			return fmt.Errorf("mcp server %q sse transport must not set command", server.Name)
-		}
-		return nil
-	case "http", "streamable":
-		if strings.TrimSpace(server.URL) == "" {
-			return fmt.Errorf("mcp server %q requires url for http transport", server.Name)
-		}
-		if strings.TrimSpace(server.Command) != "" {
-			return fmt.Errorf("mcp server %q http transport must not set command", server.Name)
+			return fmt.Errorf("mcp server %q %s transport must not set command", server.Name, config.MCPTransportStreamableHTTP)
 		}
 		return nil
 	default:
@@ -145,5 +136,5 @@ func validateServerConfig(server config.MCPServerConfig) error {
 }
 
 func normalizeTransport(value string) string {
-	return strings.TrimSpace(strings.ToLower(value))
+	return config.NormalizeMCPTransport(value)
 }
