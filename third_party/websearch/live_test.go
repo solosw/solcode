@@ -187,6 +187,29 @@ func TestLive_SearchText_DuckDuckGo(t *testing.T) {
 	}
 }
 
+// TestLive_SearchText_Bing verifies the Bing HTML text scraper.
+func TestLive_SearchText_Bing(t *testing.T) {
+	ctx, cancel := liveCtx(t)
+	defer cancel()
+
+	results, err := Search(ctx, "golang", SearchOptions{
+		Category:   CategoryText,
+		Backend:    "bing",
+		MaxResults: 5,
+		Timeout:    20,
+	})
+	skipIfNetworkUnreachable(t, err)
+	if err != nil {
+		t.Skipf("Bing unavailable (likely rate-limited): %v", err)
+	}
+	if len(results) == 0 {
+		t.Skip("Bing returned 0 results — likely rate-limited or anti-bot challenge")
+	}
+	for _, r := range results {
+		assertTextResult(t, r)
+	}
+}
+
 func TestLive_SearchResearch_Arxiv(t *testing.T) {
 	ctx, cancel := liveCtx(t)
 	defer cancel()

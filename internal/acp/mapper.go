@@ -248,6 +248,8 @@ func toolKind(name string) string {
 		return "execute"
 	case "websearch", "fetch":
 		return "fetch"
+	case "task", "subagent":
+		return "think"
 	case "imagegenerate", "imageedit":
 		return "other"
 	default:

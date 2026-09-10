@@ -50,6 +50,7 @@ func sampleTools() []tool.Tool {
 		&stubTool{name: tool.EditToolName, desc: "edit files by replacing text"},
 		&stubTool{name: tool.ViewToolName, desc: "read files"},
 		&stubTool{name: tool.WaitToolName, desc: "wait for background bash jobs"},
+		&stubTool{name: tool.SubagentToolName, desc: "run one internal sub-agent"},
 		&stubTool{name: tool.WriteToolName, desc: "write files"},
 		&stubTool{name: tool.ToolSearchToolName, desc: "search tools"},
 		&stubTool{name: tool.GlobToolName, desc: "find files by pattern"},
@@ -83,8 +84,8 @@ func TestSelectToolsForTurnCoreOnlyByDefault(t *testing.T) {
 	if !got[tool.BashToolName] || !got[tool.EditToolName] || !got[tool.ToolSearchToolName] {
 		t.Fatalf("core tools missing: %#v", got)
 	}
-	if got[tool.WaitToolName] {
-		t.Fatalf("Wait must not be model-visible: %#v", got)
+	if got[tool.WaitToolName] || got[tool.SubagentToolName] {
+		t.Fatalf("Wait/Subagent must not be model-visible: %#v", got)
 	}
 	if got["mcp__docs__query"] || got["mcp__office__cli"] || got["WebSearch"] {
 		t.Fatalf("dynamic tools should be omitted without query: %#v", got)
@@ -94,17 +95,17 @@ func TestSelectToolsForTurnCoreOnlyByDefault(t *testing.T) {
 	}
 }
 
-func TestSelectToolsDoesNotSurfaceWait(t *testing.T) {
-	selected := SelectToolsForTurn(sampleTools(), nil, "wait for background bash jobs", map[string]bool{tool.WaitToolName: true})
+func TestSelectToolsDoesNotSurfaceWaitOrSubagent(t *testing.T) {
+	selected := SelectToolsForTurn(sampleTools(), nil, "wait for background bash jobs", map[string]bool{tool.WaitToolName: true, tool.SubagentToolName: true})
 	got := namesOf(selected)
-	if got[tool.WaitToolName] {
-		t.Fatalf("Wait must stay hidden (query+sticky): %#v", got)
+	if got[tool.WaitToolName] || got[tool.SubagentToolName] {
+		t.Fatalf("Wait/Subagent must stay hidden (query+sticky): %#v", got)
 	}
-	// Explicit whitelist also cannot expose Wait to the model.
-	selected = SelectToolsForTurn(sampleTools(), []string{tool.BashToolName, tool.WaitToolName}, "", nil)
+	// Explicit whitelist also cannot expose internal helpers to the model.
+	selected = SelectToolsForTurn(sampleTools(), []string{tool.BashToolName, tool.WaitToolName, tool.SubagentToolName}, "", nil)
 	got = namesOf(selected)
-	if got[tool.WaitToolName] || !got[tool.BashToolName] {
-		t.Fatalf("whitelist should drop Wait only: %#v", got)
+	if got[tool.WaitToolName] || got[tool.SubagentToolName] || !got[tool.BashToolName] {
+		t.Fatalf("whitelist should drop Wait/Subagent only: %#v", got)
 	}
 }
 

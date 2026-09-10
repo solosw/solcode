@@ -70,9 +70,10 @@ type Config struct {
 	TextFileSystem   tool.TextFileSystem
 	OnTextDelta      func(string)
 	OnThinkingDelta  func(string)
-	OnToolStart      func(name string, input json.RawMessage)
-	OnToolDone       func(name string, output string, isError bool)
+	OnToolStart      func(name string, input json.RawMessage, toolUseID string)
+	OnToolDone       func(name string, output string, isError bool, toolUseID string)
 	OnStatus         func(string)
+	OnAgentProgress  func(tool.AgentProgressEvent)
 	OnUsage          func(Usage)
 	OnAskUser        func(ctx context.Context, params tool.AskUserParams) (map[string]string, error)
 	QueuedPrompts    func() []string
@@ -216,6 +217,24 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 	// skills all contain references/ or scripts/.
 	activeSkillRoot := ""
 	isMain := cfg.Role == "" || cfg.Role == agent.AgentRoleMain
+	isTask := cfg.Role == agent.AgentRoleTask
+	emitProgress := func(kind, toolName, toolInput, output string, isError bool) {
+		if !isTask || e.config.OnAgentProgress == nil {
+			return
+		}
+		e.config.OnAgentProgress(tool.AgentProgressEvent{
+			Kind:            kind,
+			AgentID:         string(cfg.ID),
+			ParentAgentID:   string(cfg.ParentID),
+			ParentToolUseID: cfg.ParentToolUseID,
+			TaskID:          cfg.TaskID,
+			Description:     cfg.Description,
+			ToolName:        toolName,
+			ToolInput:       toolInput,
+			Output:          output,
+			IsError:         isError,
+		})
+	}
 	for turn := 0; turnLimit <= 0 || turn < turnLimit; turn++ {
 		if err := ctx.Err(); err != nil {
 			return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: err.Error()}, Messages: messages}
@@ -336,8 +355,9 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 			}
 			input := cpanthropic.RawInput(use.Input)
 			if isMain && e.config.OnToolStart != nil {
-				e.config.OnToolStart(use.Name, input)
+				e.config.OnToolStart(use.Name, input, use.ID)
 			}
+			emitProgress("tool_start", use.Name, string(input), "", false)
 			toolResult := executor.Execute(ctx, ToolCall{
 				Name:  use.Name,
 				Input: input,
@@ -356,6 +376,7 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 							e.config.OnStatus(status)
 						}
 					},
+					OnAgentProgress: e.config.OnAgentProgress,
 					RecordFileChange: func(changeCtx context.Context, change tool.FileChange) {
 						if e.config.RecordFileChange != nil {
 							e.config.RecordFileChange(changeCtx, &tool.UseContext{
@@ -392,8 +413,9 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 			isError := apiResult.IsError
 			if isMain && e.config.OnToolDone != nil {
 				// UI gets caption text only — never dump base64 image payloads.
-				e.config.OnToolDone(use.Name, text, isError)
+				e.config.OnToolDone(use.Name, text, isError, use.ID)
 			}
+			emitProgress("tool_done", use.Name, "", text, isError)
 			// Tool failures/timeouts (and Task tool errors) must not abort the agent
 			// loop — especially Task sub-agents, which should keep running and recover
 			// from is_error tool_results. Only context cancel / model errors stop the run.

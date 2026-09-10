@@ -379,8 +379,57 @@ func TestTUIModelAgentStatusRenders(t *testing.T) {
 	updated, _ := model.Update(tui.AgentStatusMsg{ID: "task-1", Role: "task", State: "completed", Description: "Review files", Output: "looks good"})
 	model = updated.(tui.Model)
 	view := model.View().Content
-	if !strings.Contains(view, "Agents") || !strings.Contains(view, "Completed Review files") || !strings.Contains(view, "looks good") {
-		t.Fatalf("expected agent panel status in view: %s", view)
+	if !strings.Contains(view, "Review files") || !strings.Contains(view, "looks good") {
+		t.Fatalf("expected per-subagent panel status in view: %s", view)
+	}
+}
+
+func TestTUIModelAgentProgressStreamsNestedTools(t *testing.T) {
+	model := newTUI(t)
+	updated, _ := model.Update(tui.ToolStartMsg{
+		Name:      "Task",
+		Input:     `{"description":"Explore"}`,
+		ToolUseID: "toolu_task",
+	})
+	model = updated.(tui.Model)
+	updated, _ = model.Update(tui.AgentProgressMsg{
+		Kind:            "started",
+		AgentID:         "task-1",
+		ParentToolUseID: "toolu_task",
+		TaskID:          "a",
+		Description:     "Explore A",
+	})
+	model = updated.(tui.Model)
+	updated, _ = model.Update(tui.AgentProgressMsg{
+		Kind:            "tool_start",
+		AgentID:         "task-1",
+		ParentToolUseID: "toolu_task",
+		TaskID:          "a",
+		Description:     "Explore A",
+		ToolName:        "View",
+		ToolInput:       `{"path":"README.md"}`,
+	})
+	model = updated.(tui.Model)
+	updated, _ = model.Update(tui.AgentProgressMsg{
+		Kind:            "started",
+		AgentID:         "task-2",
+		ParentToolUseID: "toolu_task",
+		TaskID:          "b",
+		Description:     "Explore B",
+	})
+	model = updated.(tui.Model)
+	view := model.View().Content
+	if !strings.Contains(view, "Explore A") || !strings.Contains(view, "Explore B") {
+		t.Fatalf("expected separate subagent panels: %s", view)
+	}
+	if !strings.Contains(view, "started") || !strings.Contains(view, "→ View") {
+		t.Fatalf("expected process lines on subagent panels: %s", view)
+	}
+	if strings.Contains(view, "Explore A started") {
+		t.Fatalf("did not expect process lines nested under Task tool: %s", view)
+	}
+	if strings.Contains(view, "Subagents") {
+		t.Fatalf("expected no shared Subagents header: %s", view)
 	}
 }
 

@@ -250,14 +250,14 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 			program.Send(tui.StreamThinkingMsg{Text: text})
 		}
 	}
-	onToolStart := func(name string, input json.RawMessage) {
+	onToolStart := func(name string, input json.RawMessage, toolUseID string) {
 		if program != nil {
-			program.Send(tui.ToolStartMsg{Name: name, Input: string(input)})
+			program.Send(tui.ToolStartMsg{Name: name, Input: string(input), ToolUseID: toolUseID})
 		}
 	}
-	onToolDone := func(name string, output string, isError bool) {
+	onToolDone := func(name string, output string, isError bool, toolUseID string) {
 		if program != nil {
-			program.Send(tui.ToolDoneMsg{Name: name, Output: output, IsError: isError})
+			program.Send(tui.ToolDoneMsg{Name: name, Output: output, IsError: isError, ToolUseID: toolUseID})
 		}
 	}
 	sendUsage := func(usage engine.Usage, sessionTotals bool) {
@@ -283,6 +283,23 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 			program.Send(tui.StatusTextMsg{Text: status})
 		}
 	}
+	onAgentProgress := func(event tool.AgentProgressEvent) {
+		if program == nil {
+			return
+		}
+		program.Send(tui.AgentProgressMsg{
+			Kind:            event.Kind,
+			AgentID:         event.AgentID,
+			ParentID:        event.ParentAgentID,
+			ParentToolUseID: event.ParentToolUseID,
+			TaskID:          event.TaskID,
+			Description:     event.Description,
+			ToolName:        event.ToolName,
+			ToolInput:       event.ToolInput,
+			Output:          event.Output,
+			IsError:         event.IsError,
+		})
+	}
 	onAskUser := func(ctx context.Context, params tool.AskUserParams) (map[string]string, error) {
 		if program == nil {
 			return nil, fmt.Errorf("AskUser is not available outside interactive TUI")
@@ -305,6 +322,7 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 		app.WithToolCallbacks(onToolStart, onToolDone),
 		app.WithUsageCallback(onUsage),
 		app.WithStatusCallback(onStatus),
+		app.WithAgentProgressCallback(onAgentProgress),
 		app.WithModeChangeCallback(func(mode permission.Mode) error {
 			cfg.PermissionMode = mode
 			cfg.Permissions.Mode = mode
@@ -332,13 +350,15 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 			isError = true
 		}
 		program.Send(tui.AgentStatusMsg{
-			ID:          string(event.Status.ID),
-			ParentID:    string(event.Status.ParentID),
-			Role:        string(event.Status.Role),
-			State:       string(event.Status.State),
-			Description: event.Description,
-			Output:      output,
-			IsError:     isError,
+			ID:              string(event.Status.ID),
+			ParentID:        string(event.Status.ParentID),
+			ParentToolUseID: event.ParentToolUseID,
+			TaskID:          event.TaskID,
+			Role:            string(event.Status.Role),
+			State:           string(event.Status.State),
+			Description:     event.Description,
+			Output:          output,
+			IsError:         isError,
 		})
 	})
 

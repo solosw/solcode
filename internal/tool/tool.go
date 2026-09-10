@@ -35,6 +35,22 @@ type UseContext struct {
 	TextFileSystem   TextFileSystem
 	RecordFileChange func(ctx context.Context, change FileChange)
 	AskUser          func(ctx context.Context, params AskUserParams) (map[string]string, error)
+	// OnAgentProgress reports nested sub-agent lifecycle / tool activity to the UI.
+	OnAgentProgress func(AgentProgressEvent)
+}
+
+// AgentProgressEvent describes a Task/Subagent progress update for interactive UIs.
+type AgentProgressEvent struct {
+	Kind            string // started | completed | failed | cancelled | retry | tool_start | tool_done
+	AgentID         string
+	ParentAgentID   string
+	ParentToolUseID string
+	TaskID          string
+	Description     string
+	ToolName        string
+	ToolInput       string
+	Output          string
+	IsError         bool
 }
 
 // FileChange describes a successful file mutation for optional project-level

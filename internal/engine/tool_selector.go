@@ -38,7 +38,8 @@ var coreToolNames = map[string]bool{
 // hiddenFromModel tools stay registered for execution/tests but are never
 // exposed on the model tool list (including ToolSearch sticky enable).
 var hiddenFromModel = map[string]bool{
-	tool.WaitToolName: true, // Bash timeout > 3m auto-waits; Wait is internal
+	tool.WaitToolName:     true, // Bash timeout > 3m auto-waits; Wait is internal
+	tool.SubagentToolName: true, // Task orchestrates Subagent; not model-visible
 }
 
 // SelectToolsForTurn keeps the full registry available for execution and
@@ -49,7 +50,7 @@ var hiddenFromModel = map[string]bool{
 // allowed semantics match Registry.Filter for non-empty whitelists: a non-empty
 // allowed list is treated as an explicit restriction (for example Task
 // sub-agents). nil or empty allowed enables dynamic routing over all tools.
-// Wait is never model-visible (see hiddenFromModel).
+// Wait and Subagent are never model-visible (see hiddenFromModel).
 func SelectToolsForTurn(all []tool.Tool, allowed []string, query string, enabled map[string]bool) []tool.Tool {
 	if len(allowed) > 0 {
 		return filterTools(all, allowed)

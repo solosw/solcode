@@ -14,6 +14,7 @@ func AllEngines() map[Category][]SearchEngine {
 		CategoryText: {
 			NewWikipediaText(),
 			NewGrokipedia(),
+			NewBingText(), // prefer direct Bing before DDG/Yahoo (same provider family)
 			NewDuckDuckGoText(),
 			NewBraveText(),
 			NewYahooText(),

@@ -49,23 +49,41 @@ type TokenUsageMsg struct {
 }
 
 type ToolStartMsg struct {
-	Name  string
-	Input string
+	Name      string
+	Input     string
+	ToolUseID string
 }
 type ToolDoneMsg struct {
-	Name    string
-	Output  string
-	IsError bool
+	Name      string
+	Output    string
+	IsError   bool
+	ToolUseID string
 }
 
 type AgentStatusMsg struct {
-	ID          string
-	ParentID    string
-	Role        string
-	State       string
-	Description string
-	Output      string
-	IsError     bool
+	ID              string
+	ParentID        string
+	ParentToolUseID string
+	TaskID          string
+	Role            string
+	State           string
+	Description     string
+	ToolName        string
+	Output          string
+	IsError         bool
+}
+
+type AgentProgressMsg struct {
+	Kind            string
+	AgentID         string
+	ParentID        string
+	ParentToolUseID string
+	TaskID          string
+	Description     string
+	ToolName        string
+	ToolInput       string
+	Output          string
+	IsError         bool
 }
 
 type PermissionRequestMsg struct {
@@ -97,6 +115,7 @@ type ChatMessage struct {
 	Content        string
 	DisplayContent string
 	ToolName       string
+	ToolUseID      string
 	IsError        bool
 	Collapsed      bool
 	TimeStamp      time.Time
@@ -205,14 +224,19 @@ type ToolActivity struct {
 }
 
 type AgentActivity struct {
-	ID          string
-	ParentID    string
-	Role        string
-	State       string
-	Description string
-	Output      string
-	IsError     bool
-	UpdatedAt   time.Time
+	ID              string
+	ParentID        string
+	ParentToolUseID string
+	TaskID          string
+	Role            string
+	State           string
+	Description     string
+	ToolName        string
+	Output          string
+	IsError         bool
+	// ProcessLines are live execution lines for this subagent panel.
+	ProcessLines []string
+	UpdatedAt    time.Time
 }
 
 type TokenUsage struct {
@@ -784,6 +808,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case AgentStatusMsg:
 		m.updateAgentActivity(msg)
+		m.resize()
+		m.refreshViewport()
+		return m, nil
+	case AgentProgressMsg:
+		m.applyAgentProgress(msg)
 		m.resize()
 		m.refreshViewport()
 		return m, nil
@@ -1599,6 +1628,7 @@ func (m *Model) startToolActivity(msg ToolStartMsg) {
 	m.messages = append(m.messages, ChatMessage{
 		Role:      "tool",
 		ToolName:  msg.Name,
+		ToolUseID: strings.TrimSpace(msg.ToolUseID),
 		Content:   msg.Input,
 		Collapsed: true,
 		TimeStamp: time.Now(),
@@ -1611,6 +1641,7 @@ func (m *Model) finishToolActivity(msg ToolDoneMsg) {
 	m.messages = append(m.messages, ChatMessage{
 		Role:      "tool-done",
 		ToolName:  msg.Name,
+		ToolUseID: strings.TrimSpace(msg.ToolUseID),
 		Content:   msg.Output,
 		IsError:   msg.IsError,
 		Collapsed: defaultToolCollapsed(msg.Name),
@@ -1665,25 +1696,167 @@ func (m Model) WithTodosForTest(todos []TodoViewItem) Model {
 func (m *Model) updateAgentActivity(msg AgentStatusMsg) {
 	now := time.Now()
 	activity := AgentActivity{
-		ID:          msg.ID,
-		ParentID:    msg.ParentID,
-		Role:        msg.Role,
-		State:       msg.State,
-		Description: msg.Description,
-		Output:      msg.Output,
-		IsError:     msg.IsError,
-		UpdatedAt:   now,
+		ID:              msg.ID,
+		ParentID:        msg.ParentID,
+		ParentToolUseID: msg.ParentToolUseID,
+		TaskID:          msg.TaskID,
+		Role:            msg.Role,
+		State:           msg.State,
+		Description:     msg.Description,
+		ToolName:        msg.ToolName,
+		Output:          msg.Output,
+		IsError:         msg.IsError,
+		UpdatedAt:       now,
 	}
 	for i := range m.agentActivities {
 		if m.agentActivities[i].ID == msg.ID {
+			prev := m.agentActivities[i]
+			if activity.ParentToolUseID == "" {
+				activity.ParentToolUseID = prev.ParentToolUseID
+			}
+			if activity.TaskID == "" {
+				activity.TaskID = prev.TaskID
+			}
+			if activity.ToolName == "" {
+				activity.ToolName = prev.ToolName
+			}
+			if activity.Description == "" {
+				activity.Description = prev.Description
+			}
+			activity.ProcessLines = prev.ProcessLines
 			m.agentActivities[i] = activity
 			return
 		}
 	}
 	m.agentActivities = append(m.agentActivities, activity)
-	if len(m.agentActivities) > 8 {
-		m.agentActivities = m.agentActivities[len(m.agentActivities)-8:]
+	if len(m.agentActivities) > 12 {
+		m.agentActivities = m.agentActivities[len(m.agentActivities)-12:]
 	}
+}
+
+func (m *Model) applyAgentProgress(msg AgentProgressMsg) {
+	state := msg.Kind
+	switch strings.ToLower(strings.TrimSpace(msg.Kind)) {
+	case "started":
+		state = "running"
+	case "tool_start":
+		state = "running"
+	case "tool_done":
+		state = "running"
+	case "completed":
+		state = "completed"
+	case "failed":
+		state = "failed"
+	case "cancelled", "canceled":
+		state = "cancelled"
+	case "retry":
+		state = "running"
+	}
+	output := strings.TrimSpace(msg.Output)
+	if msg.Kind == "tool_start" && msg.ToolName != "" {
+		output = "running " + msg.ToolName
+	}
+	if msg.Kind == "tool_done" && msg.ToolName != "" {
+		if msg.IsError {
+			output = msg.ToolName + " failed"
+		} else {
+			output = msg.ToolName + " done"
+		}
+		if summary := oneLine(msg.Output); summary != "" {
+			output += ": " + truncate(summary, 80)
+		}
+	}
+	m.updateAgentActivity(AgentStatusMsg{
+		ID:              msg.AgentID,
+		ParentID:        msg.ParentID,
+		ParentToolUseID: msg.ParentToolUseID,
+		TaskID:          msg.TaskID,
+		Role:            "task",
+		State:           state,
+		Description:     msg.Description,
+		ToolName:        msg.ToolName,
+		Output:          output,
+		IsError:         msg.IsError,
+	})
+	if line := agentProgressLine(msg); line != "" {
+		m.appendAgentProcessLine(msg.AgentID, line)
+	}
+}
+
+func agentProgressLine(msg AgentProgressMsg) string {
+	switch msg.Kind {
+	case "started":
+		return "started"
+	case "retry":
+		if out := strings.TrimSpace(msg.Output); out != "" {
+			return out
+		}
+		return "retrying"
+	case "tool_start":
+		if msg.ToolName == "" {
+			return ""
+		}
+		return "→ " + msg.ToolName
+	case "tool_done":
+		if msg.ToolName == "" {
+			return ""
+		}
+		line := msg.ToolName + " done"
+		if msg.IsError {
+			line = msg.ToolName + " failed"
+		}
+		if summary := oneLine(msg.Output); summary != "" {
+			line += ": " + truncate(summary, 120)
+		}
+		return line
+	case "completed", "failed", "cancelled", "canceled":
+		line := msg.Kind
+		if summary := oneLine(msg.Output); summary != "" {
+			line += ": " + truncate(summary, 160)
+		}
+		return line
+	default:
+		return ""
+	}
+}
+
+func (m *Model) appendAgentProcessLine(agentID, line string) {
+	line = strings.TrimSpace(line)
+	agentID = strings.TrimSpace(agentID)
+	if line == "" || agentID == "" {
+		return
+	}
+	for i := range m.agentActivities {
+		if m.agentActivities[i].ID != agentID {
+			continue
+		}
+		lines := append(append([]string{}, m.agentActivities[i].ProcessLines...), line)
+		if len(lines) > 12 {
+			lines = lines[len(lines)-12:]
+		}
+		m.agentActivities[i].ProcessLines = lines
+		return
+	}
+}
+
+func summarizeAgentProcess(lines []string) string {
+	if len(lines) == 0 {
+		return ""
+	}
+	keep := lines
+	if len(keep) > 4 {
+		keep = append([]string{keep[0], "…"}, keep[len(keep)-2:]...)
+	}
+	return strings.Join(keep, "\n")
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func (m Model) View() tea.View {
@@ -2404,28 +2577,68 @@ func (m Model) renderTodoPanel() string {
 }
 
 func (m Model) renderAgentPanel() string {
-	if len(m.agentActivities) == 0 {
+	activities := m.visibleAgentActivities()
+	if len(activities) == 0 {
 		return ""
 	}
 	t := m.theme
-	limit := min(2, len(m.agentActivities))
+	sections := make([]string, 0, len(activities))
+	for _, activity := range activities {
+		sections = append(sections, m.renderOneAgentPanel(activity, t))
+	}
+	// Separate each subagent into its own panel block.
+	return strings.Join(sections, "\n")
+}
+
+func (m Model) visibleAgentActivities() []AgentActivity {
+	if len(m.agentActivities) == 0 {
+		return nil
+	}
+	limit := min(4, len(m.agentActivities))
 	start := len(m.agentActivities) - limit
+	return m.agentActivities[start:]
+}
+
+func (m Model) renderOneAgentPanel(activity AgentActivity, t Theme) string {
 	bar := t.PanelBar.Render(glyphs.PanelBar)
-	lines := []string{" " + bar + " " + t.PanelTitle.Render("Agents")}
-	for _, activity := range m.agentActivities[start:] {
-		line := " " + bar + " " + oneLine(agentStatusContent(AgentStatusMsg{
-			ID:          activity.ID,
-			ParentID:    activity.ParentID,
-			Role:        activity.Role,
-			State:       activity.State,
-			Description: activity.Description,
-			Output:      activity.Output,
-			IsError:     activity.IsError,
-		}))
-		lines = append(lines, truncate(line, max(20, m.width-4)))
-		if activity.Output != "" {
-			lines = append(lines, "    "+truncate(oneLine(activity.Output), max(20, m.width-8)))
+	label := firstNonEmpty(activity.Description, activity.TaskID, activity.ID)
+	state := strings.ToLower(strings.TrimSpace(activity.State))
+	marker := t.Muted.Render("•")
+	stateLabel := state
+	switch state {
+	case "running", "started":
+		marker = lipgloss.NewStyle().Foreground(t.Claude).Render("●")
+		stateLabel = "running"
+	case "completed":
+		marker = lipgloss.NewStyle().Foreground(t.Success).Render("✓")
+	case "failed":
+		marker = lipgloss.NewStyle().Foreground(t.Error).Render("✗")
+	case "cancelled", "canceled":
+		marker = t.Muted.Render("○")
+		stateLabel = "cancelled"
+	case "":
+		stateLabel = "idle"
+	}
+	titleWidth := max(12, m.width-18)
+	title := truncateWidth(oneLine(label), titleWidth)
+	lines := []string{" " + bar + " " + t.PanelTitle.Render(title) + " " + marker + " " + t.Muted.Render(stateLabel)}
+
+	process := activity.ProcessLines
+	if len(process) == 0 {
+		if activity.ToolName != "" && (state == "running" || state == "started") {
+			process = []string{"→ " + activity.ToolName}
+		} else if detail := strings.TrimSpace(activity.Output); detail != "" {
+			process = []string{oneLine(detail)}
 		}
+	} else if state != "running" && state != "started" && len(process) > 4 {
+		process = strings.Split(summarizeAgentProcess(process), "\n")
+	}
+	for _, line := range process {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		lines = append(lines, " "+bar+" "+t.Muted.Render(truncate(oneLine(line), max(20, m.width-8))))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -2435,10 +2648,25 @@ func (m Model) activityPanelHeight() int {
 	if len(m.todos) > 0 {
 		height += min(4, len(m.todos)+1)
 	}
-	if len(m.agentActivities) > 0 {
-		height += min(3, len(m.agentActivities)+1)
+	for _, activity := range m.visibleAgentActivities() {
+		height++ // title
+		processCount := len(activity.ProcessLines)
+		if processCount == 0 {
+			state := strings.ToLower(strings.TrimSpace(activity.State))
+			if activity.ToolName != "" && (state == "running" || state == "started") {
+				processCount = 1
+			} else if strings.TrimSpace(activity.Output) != "" {
+				processCount = 1
+			}
+		} else {
+			state := strings.ToLower(strings.TrimSpace(activity.State))
+			if state != "running" && state != "started" && processCount > 4 {
+				processCount = 4
+			}
+		}
+		height += processCount
 	}
-	return min(6, height)
+	return min(16, height)
 }
 
 func (m *Model) resize() {

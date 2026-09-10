@@ -11,6 +11,70 @@ import (
 	"strings"
 )
 
+// NewBingText returns the Bing HTML text search engine.
+func NewBingText() SearchEngine {
+	return &XPathEngine{
+		name:         "bing",
+		category:     CategoryText,
+		provider:     "bing",
+		priority:     1,
+		SearchURL:    "https://www.bing.com/search",
+		SearchMethod: http.MethodGet,
+		ItemsXPath:   "//li[contains(@class,'b_algo')]",
+		ElementsMap: map[string]string{
+			"title": ".//h2//a//text()",
+			"href":  ".//h2//a/@href",
+			"body":  ".//div[contains(@class,'b_caption')]//p//text()",
+		},
+		ExtraHeaders: map[string]string{
+			"Accept-Language": "en-US,en;q=0.9",
+		},
+		BuildPayload: func(query string, opts SearchOptions) (url.Values, url.Values) {
+			params := url.Values{
+				"q": {query},
+			}
+			if opts.Page > 1 {
+				params.Set("first", itoa((opts.Page-1)*10+1))
+			}
+			switch opts.SafeSearch {
+			case "on", "strict":
+				params.Set("adlt", "strict")
+			case "off":
+				params.Set("adlt", "off")
+			}
+			if opts.TimeLimit != "" {
+				// ez1=day, ez2=week, ez3=month; year is approximate via ez5.
+				tlMap := map[string]string{"d": "ez1", "w": "ez2", "m": "ez3", "y": "ez5"}
+				if v, ok := tlMap[opts.TimeLimit]; ok {
+					params.Set("filters", `ex1:"`+v+`"`)
+				}
+			}
+			return params, nil
+		},
+		PostProcess: func(results []SearchResult) []SearchResult {
+			var filtered []SearchResult
+			for _, r := range results {
+				if r.Text == nil {
+					continue
+				}
+				href := strings.TrimSpace(r.Text.Href)
+				if href == "" || strings.HasPrefix(href, "https://www.bing.com/aclick?") {
+					continue
+				}
+				if strings.Contains(href, "bing.com/ck/") || strings.Contains(href, "bing.com/ck/a?") {
+					href = unwrapBingURL(href)
+				}
+				r.Text.Href = href
+				if r.Text.Title == "" && r.Text.Href == "" {
+					continue
+				}
+				filtered = append(filtered, r)
+			}
+			return filtered
+		},
+	}
+}
+
 // NewDuckDuckGoText returns the DuckDuckGo HTML text search engine.
 func NewDuckDuckGoText() SearchEngine {
 	return &XPathEngine{

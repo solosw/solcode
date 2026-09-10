@@ -59,10 +59,11 @@ type App struct {
 
 	onTextDelta     func(string)
 	onThinkingDelta func(string)
-	onToolStart     func(name string, input json.RawMessage)
-	onToolDone      func(name string, output string, isError bool)
+	onToolStart     func(name string, input json.RawMessage, toolUseID string)
+	onToolDone      func(name string, output string, isError bool, toolUseID string)
 	onUsage         func(engine.Usage)
 	onStatus        func(string)
+	onAgentProgress func(tool.AgentProgressEvent)
 	onModeChange    func(permission.Mode) error
 	onAskUser       func(ctx context.Context, params tool.AskUserParams) (map[string]string, error)
 	textFileSystem  tool.TextFileSystem
@@ -75,10 +76,11 @@ type options struct {
 	mcpFactory      mcp.ClientFactory
 	onTextDelta     func(string)
 	onThinkingDelta func(string)
-	onToolStart     func(name string, input json.RawMessage)
-	onToolDone      func(name string, output string, isError bool)
+	onToolStart     func(name string, input json.RawMessage, toolUseID string)
+	onToolDone      func(name string, output string, isError bool, toolUseID string)
 	onUsage         func(engine.Usage)
 	onStatus        func(string)
+	onAgentProgress func(tool.AgentProgressEvent)
 	onModeChange    func(permission.Mode) error
 	onAskUser       func(ctx context.Context, params tool.AskUserParams) (map[string]string, error)
 	textFileSystem  tool.TextFileSystem
@@ -118,7 +120,7 @@ func WithStreamCallbacks(onTextDelta, onThinkingDelta func(string)) Option {
 	}
 }
 
-func WithToolCallbacks(onToolStart func(name string, input json.RawMessage), onToolDone func(name string, output string, isError bool)) Option {
+func WithToolCallbacks(onToolStart func(name string, input json.RawMessage, toolUseID string), onToolDone func(name string, output string, isError bool, toolUseID string)) Option {
 	return func(o *options) {
 		o.onToolStart = onToolStart
 		o.onToolDone = onToolDone
@@ -134,6 +136,12 @@ func WithUsageCallback(onUsage func(engine.Usage)) Option {
 func WithStatusCallback(onStatus func(string)) Option {
 	return func(o *options) {
 		o.onStatus = onStatus
+	}
+}
+
+func WithAgentProgressCallback(onAgentProgress func(tool.AgentProgressEvent)) Option {
+	return func(o *options) {
+		o.onAgentProgress = onAgentProgress
 	}
 }
 
@@ -215,14 +223,16 @@ func New(cfg config.Config, opts ...Option) (*App, error) {
 		onToolDone:       options.onToolDone,
 		onUsage:          options.onUsage,
 		onStatus:         options.onStatus,
+		onAgentProgress:  options.onAgentProgress,
 		onModeChange:     options.onModeChange,
 		onAskUser:        options.onAskUser,
 		textFileSystem:   options.textFileSystem,
 		queuedPrompts:    options.queuedPrompts,
 	}
-	eng := engine.NewEngine(engineConfig(cfg, client, runtime, registry, permissions, options.onTextDelta, options.onThinkingDelta, options.onToolStart, options.onToolDone, application.emitUsage, options.onStatus, options.onAskUser, options.textFileSystem, options.queuedPrompts, recordFileChange, application.compactMessagesMidRun))
+	eng := engine.NewEngine(engineConfig(cfg, client, runtime, registry, permissions, options.onTextDelta, options.onThinkingDelta, options.onToolStart, options.onToolDone, application.emitUsage, options.onStatus, options.onAgentProgress, options.onAskUser, options.textFileSystem, options.queuedPrompts, recordFileChange, application.compactMessagesMidRun))
 	coordinator := agent.NewCoordinator(eng)
-	registry.Register(tool.NewTaskTool(coordinator))
+	subagent := tool.NewSubagentTool(coordinator)
+	registry.Register(subagent, tool.NewTaskToolWithSubagent(subagent))
 	registry.Register(tool.NewModeSwitchToolWithGoal(application.SwitchMode, application.startGoalFlow))
 	application.Engine = eng
 	application.Coordinator = coordinator
@@ -449,7 +459,7 @@ func (a *App) SwitchModel(cfg config.Config) error {
 			PromotionConfidence:      cfg.Memory.PromotionConfidence,
 		}}).WithRetrievalBudget(cfg.Memory.RetrievalM2Limit, cfg.Memory.RetrievalM3Limit, cfg.Memory.RetrievalM4Limit, cfg.Memory.RetrievalM5Limit)
 	}
-	a.Engine.UpdateConfig(engineConfig(cfg, client, a.Hooks, a.Tools, a.Permissions, a.onTextDelta, a.onThinkingDelta, a.onToolStart, a.onToolDone, a.emitUsage, a.onStatus, a.onAskUser, a.textFileSystem, a.queuedPrompts, newFileChangeRecorder(a.ChangeGraph), a.compactMessagesMidRun))
+	a.Engine.UpdateConfig(engineConfig(cfg, client, a.Hooks, a.Tools, a.Permissions, a.onTextDelta, a.onThinkingDelta, a.onToolStart, a.onToolDone, a.emitUsage, a.onStatus, a.onAgentProgress, a.onAskUser, a.textFileSystem, a.queuedPrompts, newFileChangeRecorder(a.ChangeGraph), a.compactMessagesMidRun))
 	return nil
 }
 
@@ -485,7 +495,8 @@ func (a *App) ReloadFeatures(cfg config.Config, mcpFactory mcp.ClientFactory) er
 	a.MCPRegistry = mcpRegistry
 	a.lspManager = lspManager
 	a.ChangeGraph = graphStore
-	registry.Register(tool.NewTaskTool(a.Coordinator))
+	subagent := tool.NewSubagentTool(a.Coordinator)
+	registry.Register(subagent, tool.NewTaskToolWithSubagent(subagent))
 	if cfg.Memory.Enabled {
 		if a.MemoryStore == nil {
 			a.MemoryStore = memory.NewFileStore(cfg.Memory.Dir)
@@ -506,7 +517,7 @@ func (a *App) ReloadFeatures(cfg config.Config, mcpFactory mcp.ClientFactory) er
 	} else {
 		a.MemoryManager = nil
 	}
-	a.Engine.UpdateConfig(engineConfig(cfg, a.Client, a.Hooks, a.Tools, a.Permissions, a.onTextDelta, a.onThinkingDelta, a.onToolStart, a.onToolDone, a.emitUsage, a.onStatus, a.onAskUser, a.textFileSystem, a.queuedPrompts, newFileChangeRecorder(a.ChangeGraph), a.compactMessagesMidRun))
+	a.Engine.UpdateConfig(engineConfig(cfg, a.Client, a.Hooks, a.Tools, a.Permissions, a.onTextDelta, a.onThinkingDelta, a.onToolStart, a.onToolDone, a.emitUsage, a.onStatus, a.onAgentProgress, a.onAskUser, a.textFileSystem, a.queuedPrompts, newFileChangeRecorder(a.ChangeGraph), a.compactMessagesMidRun))
 	return nil
 }
 
@@ -2908,7 +2919,7 @@ func memoryModelName(cfg config.Config) string {
 	return cfg.Model
 }
 
-func engineConfig(cfg config.Config, client *cpanthropic.Client, runtime *hook.Runtime, registry *tool.Registry, permissions *permission.Service, onTextDelta, onThinkingDelta func(string), onToolStart func(name string, input json.RawMessage), onToolDone func(name string, output string, isError bool), onUsage func(engine.Usage), onStatus func(string), onAskUser func(ctx context.Context, params tool.AskUserParams) (map[string]string, error), textFileSystem tool.TextFileSystem, queuedPrompts func() []string, recordFileChange func(ctx context.Context, uctx *tool.UseContext, change tool.FileChange), compactMessages func(ctx context.Context, messages []sdk.MessageParam) ([]sdk.MessageParam, error)) engine.Config {
+func engineConfig(cfg config.Config, client *cpanthropic.Client, runtime *hook.Runtime, registry *tool.Registry, permissions *permission.Service, onTextDelta, onThinkingDelta func(string), onToolStart func(name string, input json.RawMessage, toolUseID string), onToolDone func(name string, output string, isError bool, toolUseID string), onUsage func(engine.Usage), onStatus func(string), onAgentProgress func(tool.AgentProgressEvent), onAskUser func(ctx context.Context, params tool.AskUserParams) (map[string]string, error), textFileSystem tool.TextFileSystem, queuedPrompts func() []string, recordFileChange func(ctx context.Context, uctx *tool.UseContext, change tool.FileChange), compactMessages func(ctx context.Context, messages []sdk.MessageParam) ([]sdk.MessageParam, error)) engine.Config {
 	skillRegistry := loadSkills(cfg)
 	return engine.Config{
 		Client:           client,
@@ -2937,6 +2948,7 @@ func engineConfig(cfg config.Config, client *cpanthropic.Client, runtime *hook.R
 		OnToolStart:      onToolStart,
 		OnToolDone:       onToolDone,
 		OnStatus:         onStatus,
+		OnAgentProgress:  onAgentProgress,
 		OnUsage:          onUsage,
 		OnAskUser:        onAskUser,
 		QueuedPrompts:    queuedPrompts,

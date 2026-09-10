@@ -29,16 +29,18 @@ const (
 )
 
 type AgentConfig struct {
-	ID             AgentID
-	ParentID       AgentID
-	Role           AgentRole
-	Description    string
-	WorkDir        string
-	Prompt         string
-	AllowedTools   []string
-	MaxTurns       int
-	UnlimitedTurns bool
-	Model          string
+	ID              AgentID
+	ParentID        AgentID
+	Role            AgentRole
+	Description     string
+	WorkDir         string
+	Prompt          string
+	AllowedTools    []string
+	MaxTurns        int
+	UnlimitedTurns  bool
+	Model           string
+	ParentToolUseID string
+	TaskID          string
 }
 
 type EventKind string
@@ -51,10 +53,12 @@ const (
 )
 
 type Event struct {
-	Kind        EventKind
-	Status      AgentStatus
-	Result      AgentResult
-	Description string
+	Kind            EventKind
+	Status          AgentStatus
+	Result          AgentResult
+	Description     string
+	ParentToolUseID string
+	TaskID          string
 }
 
 type AgentResult struct {
@@ -131,9 +135,11 @@ func (c *Coordinator) Spawn(ctx context.Context, cfg AgentConfig) (AgentID, erro
 	c.agents[cfg.ID] = running
 	status := running.status
 	description := cfg.Description
+	parentToolUseID := cfg.ParentToolUseID
+	taskID := cfg.TaskID
 	handler := c.eventHandler
 	c.mu.Unlock()
-	c.emit(handler, Event{Kind: EventStarted, Status: status, Description: description})
+	c.emit(handler, Event{Kind: EventStarted, Status: status, Description: description, ParentToolUseID: parentToolUseID, TaskID: taskID})
 
 	go func() {
 		result := c.runner.Run(runCtx, cfg)
@@ -153,9 +159,11 @@ func (c *Coordinator) Spawn(ctx context.Context, cfg AgentConfig) (AgentID, erro
 			}
 		}
 		event = Event{
-			Status:      running.status,
-			Result:      result,
-			Description: description,
+			Status:          running.status,
+			Result:          result,
+			Description:     description,
+			ParentToolUseID: parentToolUseID,
+			TaskID:          taskID,
 		}
 		switch running.status.State {
 		case AgentCancelled:

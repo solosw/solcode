@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/solosw/solcode/internal/agent"
@@ -16,8 +15,6 @@ const TaskToolName = "Task"
 var taskRetryDelay = 10 * time.Second
 
 const taskMaxRetries = 5
-
-var taskIDCounter uint64
 
 type TaskParams struct {
 	Description   string              `json:"description"`
@@ -42,18 +39,23 @@ type TaskItem struct {
 
 type taskTool struct {
 	BaseTool
-	coordinator *agent.Coordinator
+	subagent Tool
 }
 
 func NewTaskTool(coordinator *agent.Coordinator) Tool {
-	return &taskTool{coordinator: coordinator}
+	return &taskTool{subagent: NewSubagentTool(coordinator)}
+}
+
+// NewTaskToolWithSubagent wires Task orchestration to an existing Subagent tool.
+func NewTaskToolWithSubagent(subagent Tool) Tool {
+	return &taskTool{subagent: subagent}
 }
 
 func (t *taskTool) Name() string { return TaskToolName }
 func (t *taskTool) Description() string {
 	return `Launches one or more sub-agents to complete independent or dependent tasks and returns their results.
 Use a single prompt for one bounded task, or pass tasks with dependency edges. Independent tasks run in parallel; dependency chains run serially by level. Set difficulty=easy or model=fast to use the configured fast model when available.
-Give each sub-agent a self-contained prompt with paths, constraints, and the expected return. Do not use Task for a single cheap file read you can do with View/Grep.`
+Each leaf task runs through the internal Subagent tool (including retries). Give each sub-agent a self-contained prompt with paths, constraints, and the expected return. Do not use Task for a single cheap file read you can do with View/Grep.`
 }
 func (t *taskTool) InputSchema() map[string]any {
 	taskSchema := map[string]any{
@@ -255,87 +257,32 @@ func (t *taskTool) runTaskLevel(ctx context.Context, uctx *UseContext, tasks []T
 }
 
 func (t *taskTool) runOneTask(ctx context.Context, uctx *UseContext, task TaskItem, fastModel string) (taskRunResult, error) {
-	retryDelay := taskRetryDelay
-	if uctx != nil && uctx.TaskRetryDelay > 0 {
-		retryDelay = uctx.TaskRetryDelay
+	if t.subagent == nil {
+		return taskRunResult{}, fmt.Errorf("task %s: subagent tool is not configured", task.ID)
 	}
-
-	var lastErr error
-	for attempt := 0; attempt <= taskMaxRetries; attempt++ {
-		result, err := t.runTaskAttempt(ctx, uctx, task, fastModel)
-		if err == nil {
-			return result, nil
-		}
-		if ctx.Err() != nil {
-			return taskRunResult{}, err
-		}
-		lastErr = err
-		if attempt == taskMaxRetries {
-			break
-		}
-		retry := attempt + 1
-		if uctx != nil && uctx.Status != nil {
-			uctx.Status(fmt.Sprintf("retry %d/%d: %s", retry, taskMaxRetries, task.Description))
-		}
-		if err := waitForTaskRetry(ctx, retryDelay); err != nil {
-			return taskRunResult{}, fmt.Errorf("task %s canceled: %w", task.ID, err)
-		}
-	}
-	return taskRunResult{}, lastErr
-}
-
-func (t *taskTool) runTaskAttempt(ctx context.Context, uctx *UseContext, task TaskItem, fastModel string) (taskRunResult, error) {
-	id := agent.AgentID(fmt.Sprintf("task-%d", atomic.AddUint64(&taskIDCounter, 1)))
-	_, err := t.coordinator.Spawn(ctx, agent.AgentConfig{
-		ID:             id,
-		ParentID:       agent.AgentID(uctx.AgentID),
-		Role:           agent.AgentRoleTask,
-		Description:    task.Description,
-		WorkDir:        uctx.WorkDir,
-		Prompt:         task.Prompt,
-		AllowedTools:   task.AllowedTools,
-		UnlimitedTurns: true,
-		Model:          taskModel(task, fastModel),
+	payload, err := json.Marshal(SubagentParams{
+		Description:  task.Description,
+		Prompt:       task.Prompt,
+		AllowedTools: task.AllowedTools,
+		Model:        task.Model,
+		Difficulty:   task.Difficulty,
+		FastModel:    fastModel,
+		TaskID:       task.ID,
 	})
 	if err != nil {
-		return taskRunResult{}, fmt.Errorf("spawn task %s: %w", task.ID, err)
+		return taskRunResult{}, fmt.Errorf("task %s: encode subagent params: %w", task.ID, err)
 	}
-	result, err := t.coordinator.Wait(ctx, id)
+	result, err := t.subagent.Invoke(ctx, uctx, payload)
 	if err != nil {
-		return taskRunResult{}, fmt.Errorf("wait task %s: %w", task.ID, err)
+		return taskRunResult{}, fmt.Errorf("task %s: %w", task.ID, err)
 	}
-	if result.Error != "" {
-		return taskRunResult{}, fmt.Errorf("task %s failed: %s", task.ID, result.Error)
+	if result == nil {
+		return taskRunResult{}, fmt.Errorf("task %s: subagent returned no result", task.ID)
 	}
-	if err := ctx.Err(); err != nil {
-		return taskRunResult{}, fmt.Errorf("task %s canceled: %w", task.ID, err)
+	if result.IsError {
+		return taskRunResult{}, fmt.Errorf("%s", strings.TrimSpace(result.Text))
 	}
-	return taskRunResult{ID: task.ID, Description: task.Description, Output: result.Output}, nil
-}
-
-func waitForTaskRetry(ctx context.Context, delay time.Duration) error {
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
-	}
-}
-
-func taskModel(task TaskItem, fastModel string) string {
-	model := strings.TrimSpace(task.Model)
-	if strings.EqualFold(model, "fast") {
-		return strings.TrimSpace(fastModel)
-	}
-	if model != "" {
-		return model
-	}
-	if strings.EqualFold(task.Difficulty, "easy") || strings.EqualFold(task.Difficulty, "fast") {
-		return strings.TrimSpace(fastModel)
-	}
-	return ""
+	return taskRunResult{ID: task.ID, Description: task.Description, Output: result.Text}, nil
 }
 
 func formatTaskResults(results []taskRunResult) string {

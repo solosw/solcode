@@ -1,6 +1,6 @@
 # websearch
 
-Multi-engine web metasearch library for Go. Aggregates results from DuckDuckGo, Brave, Yahoo, Mojeek, Wikipedia, Grokipedia, Anna's Archive, LibGen, and arXiv. Supports text, images, news, videos, books, and research categories.
+Multi-engine web metasearch library for Go. Aggregates results from Bing, DuckDuckGo, Brave, Yahoo, Mojeek, Wikipedia, Grokipedia, Anna's Archive, LibGen, and arXiv. Supports text, images, news, videos, books, and research categories.
 
 ---
 
@@ -62,7 +62,7 @@ papers, err := websearch.Search(ctx, "Go concurrency patterns", websearch.Search
 ```go
 results, err := websearch.Search(ctx, "query", websearch.SearchOptions{
     Category: websearch.CategoryText,
-    Backend:  "duckduckgo", // or "brave", "wikipedia", "yahoo", "mojeek"
+    Backend:  "bing", // or "duckduckgo", "brave", "wikipedia", "yahoo", "mojeek"
 })
 ```
 
@@ -72,7 +72,7 @@ results, err := websearch.Search(ctx, "query", websearch.SearchOptions{
 
 | Category | Engines | Use Case |
 |----------|---------|----------|
-| `text` | DuckDuckGo, Brave, Yahoo, Mojeek, Wikipedia, Grokipedia | General web search |
+| `text` | Bing, DuckDuckGo, Brave, Yahoo, Mojeek, Wikipedia, Grokipedia | General web search |
 | `images` | DuckDuckGo Images | Image search |
 | `news` | DuckDuckGo News | News articles |
 | `videos` | DuckDuckGo Videos | Video search |
@@ -216,6 +216,7 @@ Search(query, options)
 ### Fan-out
 
 For `CategoryText` with `Backend: "all"`, the library concurrently queries:
+- Bing
 - DuckDuckGo
 - Brave
 - Yahoo
@@ -247,6 +248,7 @@ Results are sorted by score and truncated to `MaxResults`.
 
 | Provider | Categories | Notes |
 |----------|------------|-------|
+| Bing | text | Direct HTML scrape; preferred over DDG/Yahoo in auto |
 | DuckDuckGo | text, images, news, videos | No API key required |
 | Brave | text | Requires API key (not required in metasearch) |
 | Yahoo | text | No API key required |

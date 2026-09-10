@@ -124,8 +124,8 @@ func SearchCapabilities(registry *Registry, skills *skill.Registry, input json.R
 				if candidate.Name() == ToolSearchToolName {
 					continue
 				}
-				if candidate.Name() == WaitToolName {
-					// Wait is internal: Bash timeout > 3m auto-waits.
+				if candidate.Name() == WaitToolName || candidate.Name() == SubagentToolName {
+					// Wait/Subagent are internal helpers, not model-facing tools.
 					continue
 				}
 				score := capabilityScore(query, candidate.Name(), candidate.Description())

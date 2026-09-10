@@ -52,7 +52,7 @@ func timeoutForTool(selected tool.Tool) time.Duration {
 		return defaultToolTimeout
 	}
 	switch selected.Name() {
-	case tool.TaskToolName:
+	case tool.TaskToolName, tool.SubagentToolName:
 		return taskToolTimeout
 	case tool.WaitToolName:
 		// Wait is internal (not model-visible); same ceiling as Bash auto-wait.

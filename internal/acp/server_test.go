@@ -18,6 +18,7 @@ import (
 	"github.com/solosw/solcode/internal/engine"
 	"github.com/solosw/solcode/internal/permission"
 	"github.com/solosw/solcode/internal/session"
+	"github.com/solosw/solcode/internal/tool"
 )
 
 func TestACPInitializeAndPromptStream(t *testing.T) {
@@ -29,16 +30,42 @@ func TestACPInitializeAndPromptStream(t *testing.T) {
 			emit.Text("hello-back")
 		}
 		if emit.ToolStart != nil {
-			emit.ToolStart("Glob", json.RawMessage(`{"pattern":"*.go"}`))
+			emit.ToolStart("Glob", json.RawMessage(`{"pattern":"*.go"}`), "toolu_glob")
 		}
 		if emit.ToolDone != nil {
-			emit.ToolDone("Glob", "ok", false)
+			emit.ToolDone("Glob", "ok", false, "toolu_glob")
 		}
 		if emit.Usage != nil {
 			emit.Usage(engine.Usage{InputTokens: 3, OutputTokens: 2})
 		}
 		if emit.Status != nil {
 			emit.Status("Ready")
+		}
+		if emit.AgentProgress != nil {
+			emit.AgentProgress(tool.AgentProgressEvent{
+				Kind:            "started",
+				AgentID:         "task-9",
+				ParentToolUseID: "toolu_task",
+				TaskID:          "a",
+				Description:     "Explore files",
+			})
+			emit.AgentProgress(tool.AgentProgressEvent{
+				Kind:            "tool_start",
+				AgentID:         "task-9",
+				ParentToolUseID: "toolu_task",
+				TaskID:          "a",
+				Description:     "Explore files",
+				ToolName:        "View",
+				ToolInput:       `{"path":"README.md"}`,
+			})
+			emit.AgentProgress(tool.AgentProgressEvent{
+				Kind:            "completed",
+				AgentID:         "task-9",
+				ParentToolUseID: "toolu_task",
+				TaskID:          "a",
+				Description:     "Explore files",
+				Output:          "done",
+			})
 		}
 		return agent.AgentResult{Output: "hello-back"}, nil
 	})

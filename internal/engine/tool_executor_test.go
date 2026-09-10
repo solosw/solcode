@@ -29,6 +29,9 @@ func TestTimeoutForTaskToolIsThirtyMinutes(t *testing.T) {
 	if got := timeoutForTool(timeoutTestTool{name: tool.TaskToolName}); got != 30*time.Minute {
 		t.Fatalf("Task timeout = %s, want 30m", got)
 	}
+	if got := timeoutForTool(timeoutTestTool{name: tool.SubagentToolName}); got != 30*time.Minute {
+		t.Fatalf("Subagent timeout = %s, want 30m", got)
+	}
 }
 
 func TestTimeoutForBashAndWaitAllowTwentyFourHours(t *testing.T) {

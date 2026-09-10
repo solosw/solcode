@@ -26,12 +26,13 @@ type AppFactory func(cfg config.Config, opts ...app.Option) (*app.App, config.Co
 type PromptFunc func(ctx context.Context, application *app.App, sessionID, prompt, workDir string, maxTurns int, emit StreamEmitter) (agent.AgentResult, error)
 
 type StreamEmitter struct {
-	Text      func(string)
-	Thinking  func(string)
-	ToolStart func(name string, input json.RawMessage)
-	ToolDone  func(name string, output string, isError bool)
-	Usage     func(engine.Usage)
-	Status    func(string)
+	Text          func(string)
+	Thinking      func(string)
+	ToolStart     func(name string, input json.RawMessage, toolUseID string)
+	ToolDone      func(name string, output string, isError bool, toolUseID string)
+	Usage         func(engine.Usage)
+	Status        func(string)
+	AgentProgress func(tool.AgentProgressEvent)
 }
 
 type Server struct {
@@ -60,9 +61,15 @@ type acpSession struct {
 	cancel      context.CancelFunc
 	prompting   bool
 	toolCalls   map[string]string
+	// toolCallsByID maps model tool_use ids (and generated ACP ids) to ACP toolCallIds.
+	toolCallsByID map[string]string
 	// lastToolInput caches the most recent input per tool name for permission diffs.
 	lastToolInput  map[string]json.RawMessage
 	fsCapabilities FSClientCapabilities
+	// agentToolCalls maps nested subagent activity to ACP toolCallIds.
+	agentToolCalls map[string]string
+	// agentProgressLines accumulates process lines keyed by subagent toolCallId.
+	agentProgressLines map[string][]string
 }
 
 func NewServer(cfg config.Config, timeout time.Duration, maxTurns int, version string, newApp AppFactory) *Server {
@@ -290,13 +297,16 @@ func (s *Server) handleSessionPrompt(ctx context.Context, msg jsonrpcMessage) er
 	result, err := runPrompt(runCtx, sess.application, sess.persistID(), prompt, sess.workDir, s.maxTurns, StreamEmitter{
 		Text:      func(text string) { s.emitText(sess, "agent_message_chunk", text) },
 		Thinking:  func(text string) { s.emitText(sess, "agent_thought_chunk", text) },
-		ToolStart: func(name string, input json.RawMessage) { s.emitToolStart(sess, name, input) },
-		ToolDone:  func(name string, output string, isError bool) { s.emitToolDone(sess, name, output, isError) },
+		ToolStart: func(name string, input json.RawMessage, toolUseID string) { s.emitToolStart(sess, name, input, toolUseID) },
+		ToolDone:  func(name string, output string, isError bool, toolUseID string) { s.emitToolDone(sess, name, output, isError, toolUseID) },
 		Usage: func(usage engine.Usage) {
 			s.emitUpdate(sess.id, SessionUpdate{SessionUpdate: "usage_update", Usage: usageUpdate(usage)})
 		},
 		Status: func(status string) {
 			s.emitUpdate(sess.id, SessionUpdate{SessionUpdate: "status_update", Message: status})
+		},
+		AgentProgress: func(event tool.AgentProgressEvent) {
+			s.emitAgentProgress(sess, event)
 		},
 	})
 	stop := stopReason(runCtx, result, err)
@@ -388,13 +398,16 @@ func (s *Server) createSession(ctx context.Context, id, cwd string) (*acpSession
 	}
 	s.mu.Unlock()
 	sess := &acpSession{
-		id:             id,
-		diskID:         id,
-		workDir:        cfg.WorkDir,
-		cfg:            cfg,
-		toolCalls:      make(map[string]string),
-		lastToolInput:  make(map[string]json.RawMessage),
-		fsCapabilities: fsCapabilities,
+		id:                 id,
+		diskID:             id,
+		workDir:            cfg.WorkDir,
+		cfg:                cfg,
+		toolCalls:          make(map[string]string),
+		toolCallsByID:      make(map[string]string),
+		lastToolInput:      make(map[string]json.RawMessage),
+		fsCapabilities:     fsCapabilities,
+		agentToolCalls:     make(map[string]string),
+		agentProgressLines: make(map[string][]string),
 	}
 
 	application, cfg, err := s.newApp(cfg,
@@ -404,8 +417,8 @@ func (s *Server) createSession(ctx context.Context, id, cwd string) (*acpSession
 			func(text string) { s.emitText(sess, "agent_thought_chunk", text) },
 		),
 		app.WithToolCallbacks(
-			func(name string, input json.RawMessage) { s.emitToolStart(sess, name, input) },
-			func(name string, output string, isError bool) { s.emitToolDone(sess, name, output, isError) },
+			func(name string, input json.RawMessage, toolUseID string) { s.emitToolStart(sess, name, input, toolUseID) },
+			func(name string, output string, isError bool, toolUseID string) { s.emitToolDone(sess, name, output, isError, toolUseID) },
 		),
 		app.WithUsageCallback(func(usage engine.Usage) {
 			s.emitUpdate(sess.id, SessionUpdate{
@@ -418,6 +431,9 @@ func (s *Server) createSession(ctx context.Context, id, cwd string) (*acpSession
 				SessionUpdate: "status_update",
 				Message:       status,
 			})
+		}),
+		app.WithAgentProgressCallback(func(event tool.AgentProgressEvent) {
+			s.emitAgentProgress(sess, event)
 		}),
 		app.WithAskUserCallback(func(ctx context.Context, params tool.AskUserParams) (map[string]string, error) {
 			return s.askUser(ctx, sess, params)
@@ -527,13 +543,23 @@ func (s *Server) emitText(sess *acpSession, kind, text string) {
 	s.emitUpdate(sess.id, SessionUpdate{SessionUpdate: kind, Content: &content})
 }
 
-func (s *Server) emitToolStart(sess *acpSession, name string, input json.RawMessage) {
+func (s *Server) emitToolStart(sess *acpSession, name string, input json.RawMessage, toolUseID string) {
 	if sess == nil {
 		return
 	}
-	id := s.nextToolCallID()
+	id := strings.TrimSpace(toolUseID)
+	if id == "" {
+		id = s.nextToolCallID()
+	}
 	sess.mu.Lock()
+	if sess.toolCallsByID == nil {
+		sess.toolCallsByID = make(map[string]string)
+	}
 	sess.toolCalls[name] = id
+	sess.toolCallsByID[id] = id
+	if toolUseID != "" && toolUseID != id {
+		sess.toolCallsByID[toolUseID] = id
+	}
 	// Cache last input so permission prompts can attach the same diff preview.
 	if sess.lastToolInput == nil {
 		sess.lastToolInput = make(map[string]json.RawMessage)
@@ -556,15 +582,24 @@ func (s *Server) emitToolStart(sess *acpSession, name string, input json.RawMess
 	})
 }
 
-func (s *Server) emitToolDone(sess *acpSession, name, output string, isError bool) {
+func (s *Server) emitToolDone(sess *acpSession, name, output string, isError bool, toolUseID string) {
 	if sess == nil {
 		return
 	}
 	sess.mu.Lock()
-	id := sess.toolCalls[name]
+	id := strings.TrimSpace(toolUseID)
+	if id == "" {
+		id = sess.toolCalls[name]
+	} else if mapped := sess.toolCallsByID[id]; mapped != "" {
+		id = mapped
+	}
 	input := append(json.RawMessage(nil), sess.lastToolInput[name]...)
 	delete(sess.toolCalls, name)
 	delete(sess.lastToolInput, name)
+	delete(sess.toolCallsByID, id)
+	if toolUseID != "" {
+		delete(sess.toolCallsByID, toolUseID)
+	}
 	sess.mu.Unlock()
 	if id == "" {
 		id = s.nextToolCallID()
@@ -578,6 +613,8 @@ func (s *Server) emitToolDone(sess *acpSession, name, output string, isError boo
 	s.emitUpdate(sess.id, SessionUpdate{
 		SessionUpdate: "tool_call_update",
 		ToolCallID:    id,
+		Title:         name,
+		Kind:          toolKind(name),
 		Status:        status,
 		RawOutput:     raw,
 		ToolContent:   toolContent,
@@ -586,6 +623,133 @@ func (s *Server) emitToolDone(sess *acpSession, name, output string, isError boo
 	if name == tool.TodoWriteToolName && !isError {
 		s.emitPlanUpdate(sess, input)
 	}
+}
+
+func (s *Server) emitAgentProgress(sess *acpSession, event tool.AgentProgressEvent) {
+	if sess == nil {
+		return
+	}
+	agentKey := strings.TrimSpace(event.AgentID)
+	if agentKey == "" {
+		agentKey = strings.TrimSpace(event.TaskID)
+	}
+	if agentKey == "" {
+		agentKey = "subagent"
+	}
+	label := strings.TrimSpace(event.Description)
+	if label == "" {
+		label = strings.TrimSpace(event.TaskID)
+	}
+	if label == "" {
+		label = agentKey
+	}
+	title := label
+	line := ""
+	status := ToolCallInProgress
+	switch strings.ToLower(strings.TrimSpace(event.Kind)) {
+	case "started":
+		line = "started"
+	case "retry":
+		line = strings.TrimSpace(event.Output)
+		if line == "" {
+			line = "retrying"
+		}
+	case "tool_start":
+		line = "→ " + event.ToolName
+		if event.ToolName != "" {
+			title = label + " · " + event.ToolName
+		}
+	case "tool_done":
+		if event.IsError {
+			line = event.ToolName + " failed"
+		} else {
+			line = event.ToolName + " done"
+		}
+		if summary := oneLine(event.Output); summary != "" {
+			line += ": " + truncateRunes(summary, 120)
+		}
+	case "completed", "failed", "cancelled", "canceled":
+		line = event.Kind
+		if summary := oneLine(event.Output); summary != "" {
+			line += ": " + truncateRunes(summary, 160)
+		}
+		status = ToolCallCompleted
+		if event.IsError || event.Kind == "failed" {
+			status = ToolCallFailed
+		}
+	default:
+		line = strings.TrimSpace(event.Output)
+		if line == "" {
+			line = event.Kind
+		}
+	}
+
+	id := s.ensureAgentToolCall(sess, agentKey, title, ToolCallInProgress, nil)
+	sess.mu.Lock()
+	if sess.agentProgressLines == nil {
+		sess.agentProgressLines = make(map[string][]string)
+	}
+	lines := append(append([]string{}, sess.agentProgressLines[id]...), line)
+	if len(lines) > 40 {
+		lines = lines[len(lines)-40:]
+	}
+	sess.agentProgressLines[id] = lines
+	body := strings.Join(lines, "\n")
+	if status == ToolCallCompleted || status == ToolCallFailed {
+		delete(sess.agentToolCalls, agentKey)
+		delete(sess.agentProgressLines, id)
+	}
+	sess.mu.Unlock()
+
+	raw, _ := json.Marshal(map[string]string{"output": body})
+	s.emitUpdate(sess.id, SessionUpdate{
+		SessionUpdate: "tool_call_update",
+		ToolCallID:    id,
+		Title:         title,
+		Kind:          "think",
+		Status:        status,
+		RawOutput:     raw,
+		ToolContent:   []ToolCallContent{{Type: "content", Content: &ContentBlock{Type: "text", Text: body}}},
+	})
+}
+
+func (s *Server) ensureAgentToolCall(sess *acpSession, agentKey, title, status string, input json.RawMessage) string {
+	sess.mu.Lock()
+	if sess.agentToolCalls == nil {
+		sess.agentToolCalls = make(map[string]string)
+	}
+	id := sess.agentToolCalls[agentKey]
+	if id == "" {
+		id = s.nextToolCallID()
+		sess.agentToolCalls[agentKey] = id
+		sess.mu.Unlock()
+		s.emitUpdate(sess.id, SessionUpdate{
+			SessionUpdate: "tool_call",
+			ToolCallID:    id,
+			Title:         title,
+			Kind:          "think",
+			Status:        status,
+			RawInput:      input,
+		})
+		return id
+	}
+	sess.mu.Unlock()
+	return id
+}
+
+func oneLine(value string) string {
+	return strings.Join(strings.Fields(value), " ")
+}
+
+func truncateRunes(value string, limit int) string {
+	runes := []rune(value)
+	if limit <= 0 || len(runes) <= limit {
+		return value
+	}
+	if limit <= 1 {
+		return string(runes[:limit])
+	}
+	return string(runes[:limit-1]) + "…"
 }
 
 func (s *Server) emitPlanUpdate(sess *acpSession, input json.RawMessage) {
