@@ -35,6 +35,27 @@ func TestBuiltinIncludesProxy(t *testing.T) {
 	}
 }
 
+func TestBuiltinIncludesCheckpointCommands(t *testing.T) {
+	for _, name := range []string{"checkpoints", "checkpoint-name", "rewind"} {
+		if !isBuiltinSlashCommand(name) {
+			t.Fatalf("%s should be a builtin slash command", name)
+		}
+		if !strings.Contains(slashHelpText(), "/"+name) {
+			t.Fatalf("help should list /%s", name)
+		}
+		found := false
+		for _, cmd := range availableCommands() {
+			if cmd.Name == name {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("availableCommands missing %s", name)
+		}
+	}
+}
+
 func TestBuiltinIncludesStatus(t *testing.T) {
 	if !isBuiltinSlashCommand("status") {
 		t.Fatal("status should be a builtin slash command")

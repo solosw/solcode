@@ -51,6 +51,7 @@ type App struct {
 	mcpFactory       mcp.ClientFactory
 	mcpLoadMu        sync.Mutex
 	mcpLoaded        bool
+	ckpt             checkpointState
 
 	// usageSession binds OnUsage accumulation to the active session so
 	// token totals persist across reloads.
@@ -229,7 +230,7 @@ func New(cfg config.Config, opts ...Option) (*App, error) {
 		textFileSystem:   options.textFileSystem,
 		queuedPrompts:    options.queuedPrompts,
 	}
-	eng := engine.NewEngine(engineConfig(cfg, client, runtime, registry, permissions, options.onTextDelta, options.onThinkingDelta, options.onToolStart, options.onToolDone, application.emitUsage, options.onStatus, options.onAgentProgress, options.onAskUser, options.textFileSystem, options.queuedPrompts, recordFileChange, application.compactMessagesMidRun))
+	eng := engine.NewEngine(engineConfig(cfg, client, runtime, registry, permissions, options.onTextDelta, options.onThinkingDelta, options.onToolStart, options.onToolDone, application.emitUsage, options.onStatus, options.onAgentProgress, options.onAskUser, options.textFileSystem, options.queuedPrompts, recordFileChange, application.captureCheckpoint, application.compactMessagesMidRun))
 	coordinator := agent.NewCoordinator(eng)
 	subagent := tool.NewSubagentTool(coordinator)
 	registry.Register(subagent, tool.NewTaskToolWithSubagent(subagent))
@@ -475,7 +476,7 @@ func (a *App) SwitchModel(cfg config.Config) error {
 			PromotionConfidence:      cfg.Memory.PromotionConfidence,
 		}}).WithRetrievalBudget(cfg.Memory.RetrievalM2Limit, cfg.Memory.RetrievalM3Limit, cfg.Memory.RetrievalM4Limit, cfg.Memory.RetrievalM5Limit)
 	}
-	a.Engine.UpdateConfig(engineConfig(cfg, client, a.Hooks, a.Tools, a.Permissions, a.onTextDelta, a.onThinkingDelta, a.onToolStart, a.onToolDone, a.emitUsage, a.onStatus, a.onAgentProgress, a.onAskUser, a.textFileSystem, a.queuedPrompts, newFileChangeRecorder(a.ChangeGraph), a.compactMessagesMidRun))
+	a.Engine.UpdateConfig(engineConfig(cfg, client, a.Hooks, a.Tools, a.Permissions, a.onTextDelta, a.onThinkingDelta, a.onToolStart, a.onToolDone, a.emitUsage, a.onStatus, a.onAgentProgress, a.onAskUser, a.textFileSystem, a.queuedPrompts, newFileChangeRecorder(a.ChangeGraph), a.captureCheckpoint, a.compactMessagesMidRun))
 	return nil
 }
 
@@ -533,7 +534,7 @@ func (a *App) ReloadFeatures(cfg config.Config, mcpFactory mcp.ClientFactory) er
 	} else {
 		a.MemoryManager = nil
 	}
-	a.Engine.UpdateConfig(engineConfig(cfg, a.Client, a.Hooks, a.Tools, a.Permissions, a.onTextDelta, a.onThinkingDelta, a.onToolStart, a.onToolDone, a.emitUsage, a.onStatus, a.onAgentProgress, a.onAskUser, a.textFileSystem, a.queuedPrompts, newFileChangeRecorder(a.ChangeGraph), a.compactMessagesMidRun))
+	a.Engine.UpdateConfig(engineConfig(cfg, a.Client, a.Hooks, a.Tools, a.Permissions, a.onTextDelta, a.onThinkingDelta, a.onToolStart, a.onToolDone, a.emitUsage, a.onStatus, a.onAgentProgress, a.onAskUser, a.textFileSystem, a.queuedPrompts, newFileChangeRecorder(a.ChangeGraph), a.captureCheckpoint, a.compactMessagesMidRun))
 	return nil
 }
 
@@ -745,6 +746,7 @@ func (a *App) RunPromptWithSession(ctx context.Context, sessionID, prompt, workD
 		MaxTurns:     maxTurns,
 	}
 	projectKnowledge := a.projectKnowledgeForRequest(ctx, current, prompt)
+	a.beginCheckpointTurn(sessionID, workDir, prompt)
 	result := a.runMainAgentWithHistory(ctx, func() engine.RunResult {
 		return a.Engine.RunWithHistory(ctx, engine.RunRequest{
 			AgentConfig:      cfg,
@@ -2955,7 +2957,7 @@ func memoryModelName(cfg config.Config) string {
 	return cfg.Model
 }
 
-func engineConfig(cfg config.Config, client *cpanthropic.Client, runtime *hook.Runtime, registry *tool.Registry, permissions *permission.Service, onTextDelta, onThinkingDelta func(string), onToolStart func(name string, input json.RawMessage, toolUseID string), onToolDone func(name string, output string, isError bool, toolUseID string), onUsage func(engine.Usage), onStatus func(string), onAgentProgress func(tool.AgentProgressEvent), onAskUser func(ctx context.Context, params tool.AskUserParams) (map[string]string, error), textFileSystem tool.TextFileSystem, queuedPrompts func() []string, recordFileChange func(ctx context.Context, uctx *tool.UseContext, change tool.FileChange), compactMessages func(ctx context.Context, messages []sdk.MessageParam) ([]sdk.MessageParam, error)) engine.Config {
+func engineConfig(cfg config.Config, client *cpanthropic.Client, runtime *hook.Runtime, registry *tool.Registry, permissions *permission.Service, onTextDelta, onThinkingDelta func(string), onToolStart func(name string, input json.RawMessage, toolUseID string), onToolDone func(name string, output string, isError bool, toolUseID string), onUsage func(engine.Usage), onStatus func(string), onAgentProgress func(tool.AgentProgressEvent), onAskUser func(ctx context.Context, params tool.AskUserParams) (map[string]string, error), textFileSystem tool.TextFileSystem, queuedPrompts func() []string, recordFileChange func(ctx context.Context, uctx *tool.UseContext, change tool.FileChange), captureCheckpoint func(path string, content *string), compactMessages func(ctx context.Context, messages []sdk.MessageParam) ([]sdk.MessageParam, error)) engine.Config {
 	skillRegistry := loadSkills(cfg)
 	return engine.Config{
 		Client:           client,
@@ -2989,6 +2991,7 @@ func engineConfig(cfg config.Config, client *cpanthropic.Client, runtime *hook.R
 		OnAskUser:        onAskUser,
 		QueuedPrompts:    queuedPrompts,
 		RecordFileChange: recordFileChange,
+		CaptureCheckpoint: captureCheckpoint,
 		CompactMessages:  compactMessages,
 	}
 }

@@ -71,6 +71,9 @@ func slashHelpText() string {
 		"/effort — select thinking effort via dialog",
 		"/sessions — list saved sessions",
 		"/compact — compact the current session now",
+		"/checkpoints — list code checkpoints for the current session",
+		"/checkpoint-name <name> [turn] — label a checkpoint (default: newest)",
+		"/rewind <turn|name> — restore workspace files to a previous turn (code only)",
 		"/fix-session — repair invalid tool-use chains in the current session",
 		"/new-session [name] — create and switch to a new session",
 		"/skills — browse skills and toggle enabled/disabled",
@@ -178,6 +181,23 @@ func (m *Model) handleSlashCommand(input string) (bool, tea.Cmd) {
 			m.appendCommandResult("/compact is not available in this session.")
 		} else {
 			m.status = "Compacting..."
+			m.spinnerActive = true
+			m.loadingStart = time.Now()
+			m.refreshViewport()
+			return true, tea.Batch(m.slashAsyncHandler(cmd.Name, cmd.Args), m.nextSpinnerTick())
+		}
+	case "checkpoints", "checkpoint-name", "rewind":
+		if m.slashAsyncHandler == nil {
+			m.appendCommandResult(fmt.Sprintf("/%s is not available in this session.", cmd.Name))
+		} else {
+			switch cmd.Name {
+			case "checkpoints":
+				m.status = "Listing checkpoints..."
+			case "checkpoint-name":
+				m.status = "Naming checkpoint..."
+			default:
+				m.status = "Rewinding files..."
+			}
 			m.spinnerActive = true
 			m.loadingStart = time.Now()
 			m.refreshViewport()
@@ -398,8 +418,11 @@ var builtinCommands = map[string]bool{
 	"provider":      true,
 	"effort":        true,
 	"sessions":      true,
-	"compact":       true,
-	"fix-session":   true,
+	"compact":          true,
+	"checkpoints":      true,
+	"checkpoint-name":  true,
+	"rewind":           true,
+	"fix-session":      true,
 	"new-session":   true,
 	"skills":        true,
 	"mcp":           true,

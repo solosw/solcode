@@ -517,6 +517,30 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 				}
 				return tui.CommandResultMsg{Text: "Compacted current session."}
 			}
+		case "checkpoints":
+			return func() tea.Msg {
+				currentSessionID := cfg.Session.DefaultSession
+				if currentSessionID == "" {
+					currentSessionID = "main"
+				}
+				return tui.CommandResultMsg{Text: handleCheckpointsCommand(application, currentSessionID, cfg.WorkDir)}
+			}
+		case "checkpoint-name":
+			return func() tea.Msg {
+				currentSessionID := cfg.Session.DefaultSession
+				if currentSessionID == "" {
+					currentSessionID = "main"
+				}
+				return tui.CommandResultMsg{Text: handleCheckpointNameCommand(application, currentSessionID, cfg.WorkDir, args)}
+			}
+		case "rewind":
+			return func() tea.Msg {
+				currentSessionID := cfg.Session.DefaultSession
+				if currentSessionID == "" {
+					currentSessionID = "main"
+				}
+				return tui.CommandResultMsg{Text: handleRewindCommand(application, currentSessionID, cfg.WorkDir, args)}
+			}
 		case "fix-session":
 			return func() tea.Msg {
 				currentSessionID := cfg.Session.DefaultSession
@@ -1445,6 +1469,18 @@ func handleWorkflowsCommand(application *app.App) string {
 	b.WriteString("\nWorkflows are not exposed to the model. Starting a workflow switches permission mode to bypass.")
 	b.WriteString("\nUse /workflow-edit to visually orchestrate and save workflows.")
 	return strings.TrimSpace(b.String())
+}
+
+func handleCheckpointsCommand(application *app.App, sessionID, workDir string) string {
+	return app.FormatCheckpointsList(application, sessionID, workDir)
+}
+
+func handleCheckpointNameCommand(application *app.App, sessionID, workDir, args string) string {
+	return app.FormatCheckpointNameCommand(application, sessionID, workDir, args)
+}
+
+func handleRewindCommand(application *app.App, sessionID, workDir, args string) string {
+	return app.FormatRewindCommand(application, sessionID, workDir, args)
 }
 
 func handleSessionsCommand(cfg *config.Config, application *app.App) string {

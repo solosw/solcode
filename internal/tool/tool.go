@@ -34,7 +34,10 @@ type UseContext struct {
 	TaskRetryDelay   time.Duration
 	TextFileSystem   TextFileSystem
 	RecordFileChange func(ctx context.Context, change FileChange)
-	AskUser          func(ctx context.Context, params AskUserParams) (map[string]string, error)
+	// CaptureCheckpoint records turn-start file content for code-only rewind.
+	// content == nil means the file did not exist.
+	CaptureCheckpoint func(path string, content *string)
+	AskUser           func(ctx context.Context, params AskUserParams) (map[string]string, error)
 	// OnAgentProgress reports nested sub-agent lifecycle / tool activity to the UI.
 	OnAgentProgress func(AgentProgressEvent)
 }

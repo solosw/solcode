@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/solosw/solcode/internal/hook"
@@ -106,6 +108,9 @@ func (x *ToolExecutor) Execute(ctx context.Context, call ToolCall, env ToolEnv) 
 		return ToolResult{Content: content, IsError: true}
 	}
 
+	captureCheckpointBeforeInvoke(ctx, selected, input, env.UseContext)
+	beforeFP := captureFingerprintBeforeInvoke(selected, env.UseContext)
+
 	toolCtx, cancel := context.WithTimeout(ctx, timeoutForTool(selected))
 	defer cancel()
 	content, err := selected.Invoke(toolCtx, env.UseContext, input)
@@ -122,6 +127,7 @@ func (x *ToolExecutor) Execute(ctx context.Context, call ToolCall, env ToolEnv) 
 	if content == nil {
 		content = tool.ErrorResult("tool returned nil result")
 	}
+	captureFingerprintAfterInvoke(selected, env.UseContext, beforeFP)
 	if x.hooks != nil {
 		result, err := x.hooks.Run(ctx, hook.Event{
 			Name:       hook.EventPostToolUse,
@@ -143,4 +149,62 @@ func (x *ToolExecutor) Execute(ctx context.Context, call ToolCall, env ToolEnv) 
 		}
 	}
 	return ToolResult{Content: content, IsError: content.IsError}
+}
+
+func captureCheckpointBeforeInvoke(ctx context.Context, selected tool.Tool, input json.RawMessage, uctx *tool.UseContext) {
+	if selected == nil || uctx == nil || uctx.CaptureCheckpoint == nil {
+		return
+	}
+	if !tool.CheckpointableFileTool(selected.Name()) {
+		return
+	}
+	for _, path := range tool.PathsForCheckpoint(selected.Name(), input) {
+		abs := tool.ResolvePath(uctx, path)
+		if strings.TrimSpace(abs) == "" {
+			continue
+		}
+		data, err := tool.ReadTextFileContent(ctx, uctx, abs)
+		if err != nil {
+			if os.IsNotExist(err) {
+				uctx.CaptureCheckpoint(abs, nil)
+			}
+			continue
+		}
+		text := string(data)
+		uctx.CaptureCheckpoint(abs, &text)
+	}
+}
+
+func captureFingerprintBeforeInvoke(selected tool.Tool, uctx *tool.UseContext) map[string]tool.FileFingerprint {
+	if selected == nil || uctx == nil || uctx.CaptureCheckpoint == nil {
+		return nil
+	}
+	if !tool.FingerprintCheckpointTool(selected.Name()) {
+		return nil
+	}
+	before, err := tool.SnapshotWorkDir(uctx.WorkDir, tool.FingerprintOptions{}, true)
+	if err != nil || before == nil {
+		return map[string]tool.FileFingerprint{}
+	}
+	return before
+}
+
+func captureFingerprintAfterInvoke(selected tool.Tool, uctx *tool.UseContext, before map[string]tool.FileFingerprint) {
+	if selected == nil || uctx == nil || uctx.CaptureCheckpoint == nil || before == nil {
+		return
+	}
+	if !tool.FingerprintCheckpointTool(selected.Name()) {
+		return
+	}
+	after, err := tool.SnapshotWorkDir(uctx.WorkDir, tool.FingerprintOptions{}, false)
+	if err != nil {
+		after = map[string]tool.FileFingerprint{}
+	}
+	for _, change := range tool.DiffFingerprints(before, after) {
+		abs := tool.ResolvePath(uctx, change.Path)
+		if strings.TrimSpace(abs) == "" {
+			continue
+		}
+		uctx.CaptureCheckpoint(abs, change.Content)
+	}
 }

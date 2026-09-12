@@ -70,6 +70,9 @@ func slashHelpText() string {
 		"/effort — select thinking effort",
 		"/sessions — list or switch saved sessions",
 		"/compact — compact the current session now",
+		"/checkpoints — list code checkpoints for the current session",
+		"/checkpoint-name <name> [turn] — label a checkpoint (default: newest)",
+		"/rewind <turn|name> — restore workspace files to a previous turn (code only)",
 		"/fix-session — repair invalid tool-use chains in the current session",
 		"/new-session [name] — create and switch to a new session",
 		"/skills — browse skills and toggle enabled/disabled",
@@ -165,6 +168,15 @@ func (s *Server) handleSlashCommand(ctx context.Context, sess *acpSession, input
 		}
 		s.emitText(sess, "agent_message_chunk", msg)
 		return true, StopReasonEndTurn, nil
+	case "checkpoints":
+		s.emitText(sess, "agent_message_chunk", app.FormatCheckpointsList(sess.application, sess.persistID(), sess.workDir))
+		return true, StopReasonEndTurn, nil
+	case "checkpoint-name":
+		s.emitText(sess, "agent_message_chunk", app.FormatCheckpointNameCommand(sess.application, sess.persistID(), sess.workDir, cmd.Args))
+		return true, StopReasonEndTurn, nil
+	case "rewind":
+		s.emitText(sess, "agent_message_chunk", app.FormatRewindCommand(sess.application, sess.persistID(), sess.workDir, cmd.Args))
+		return true, StopReasonEndTurn, nil
 	case "fix-session":
 		msg, err := s.slashFixSession(ctx, sess)
 		if err != nil {
@@ -208,6 +220,7 @@ func (s *Server) handleSlashCommand(ctx context.Context, sess *acpSession, input
 func isBuiltinSlashCommand(name string) bool {
 	switch name {
 	case "help", "status", "clear", "model", "provider", "effort", "sessions", "compact",
+		"checkpoints", "checkpoint-name", "rewind",
 		"fix-session", "new-session", "skills", "mcp", "proxy", "goal", "workflows",
 		"workflow", "workflow-edit", "web-ui":
 		return true

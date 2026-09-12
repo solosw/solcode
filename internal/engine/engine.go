@@ -78,6 +78,8 @@ type Config struct {
 	OnAskUser        func(ctx context.Context, params tool.AskUserParams) (map[string]string, error)
 	QueuedPrompts    func() []string
 	RecordFileChange func(ctx context.Context, uctx *tool.UseContext, change tool.FileChange)
+	// CaptureCheckpoint records turn-start file content for code-only rewind.
+	CaptureCheckpoint func(path string, content *string)
 	// CompactMessages is invoked mid-run when estimated context reaches MaxContextTokens (100%).
 	// It must return a shorter message list. Nil disables mid-run compaction.
 	CompactMessages func(ctx context.Context, messages []sdk.MessageParam) ([]sdk.MessageParam, error)
@@ -392,7 +394,8 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 							}, change)
 						}
 					},
-					AskUser: e.config.OnAskUser,
+					CaptureCheckpoint: e.config.CaptureCheckpoint,
+					AskUser:           e.config.OnAskUser,
 				},
 			})
 			if err := ctx.Err(); err != nil {
