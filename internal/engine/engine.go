@@ -326,15 +326,21 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 			SessionSummary:   runReq.SessionSummary,
 			MemoryContext:    runReq.MemoryContext,
 		}) + int64(tokenest.Text(prompt))
-		if isMain && e.config.OnUsage != nil {
-			e.config.OnUsage(Usage{
-				EstimatedContextTokens:   estimatedContextTokens,
+		// Report billing usage for main and task/subagent turns. Only the main
+		// agent supplies EstimatedContextTokens so occupancy stays tied to the
+		// parent context window; task turns send 0 and must not clobber it.
+		if e.config.OnUsage != nil {
+			usage := Usage{
 				InputTokens:              message.Usage.InputTokens,
 				OutputTokens:             message.Usage.OutputTokens,
 				CacheCreationInputTokens: message.Usage.CacheCreationInputTokens,
 				CacheReadInputTokens:     message.Usage.CacheReadInputTokens,
 				MaxContextTokens:         e.config.MaxContextTokens,
-			})
+			}
+			if isMain {
+				usage.EstimatedContextTokens = estimatedContextTokens
+			}
+			e.config.OnUsage(usage)
 		}
 		if message.StopReason == sdk.StopReasonRefusal {
 			return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: "model refused request"}, Messages: messages}

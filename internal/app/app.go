@@ -324,6 +324,22 @@ func (a *App) emitUsage(u engine.Usage) {
 	}
 }
 
+// reportAPIUsage records billing tokens from a side-channel Create call
+// (session summary / project-knowledge compaction). Occupancy is left at 0 so
+// these calls do not rewrite the main context meter.
+func (a *App) reportAPIUsage(msg *sdk.Message) {
+	if a == nil || msg == nil {
+		return
+	}
+	a.emitUsage(engine.Usage{
+		InputTokens:              msg.Usage.InputTokens,
+		OutputTokens:             msg.Usage.OutputTokens,
+		CacheCreationInputTokens: msg.Usage.CacheCreationInputTokens,
+		CacheReadInputTokens:     msg.Usage.CacheReadInputTokens,
+		MaxContextTokens:         a.Config.MaxContextTokens,
+	})
+}
+
 // bindUsageSession attaches s for OnUsage accumulation. Call the returned
 // cleanup to detach (typically via defer).
 func (a *App) bindUsageSession(s *session.Session) func() {
@@ -691,6 +707,9 @@ func (a *App) RunPromptWithSession(ctx context.Context, sessionID, prompt, workD
 	if err != nil {
 		return agent.AgentResult{}, fmt.Errorf("load session: %w", err)
 	}
+	// Bind before pre-turn compaction/summary so those Create calls accumulate.
+	unbindUsage := a.bindUsageSession(current)
+	defer unbindUsage()
 	sessionStateChanged := a.SanitizeLoadedSession(current)
 	if a.shouldCompact(ctx, current) {
 		changed, err := a.compactSession(ctx, current, false)
@@ -726,9 +745,6 @@ func (a *App) RunPromptWithSession(ctx context.Context, sessionID, prompt, workD
 		MaxTurns:     maxTurns,
 	}
 	projectKnowledge := a.projectKnowledgeForRequest(ctx, current, prompt)
-	// Bind usage accumulation so OnUsage persists session totals.
-	unbindUsage := a.bindUsageSession(current)
-	defer unbindUsage()
 	result := a.runMainAgentWithHistory(ctx, func() engine.RunResult {
 		return a.Engine.RunWithHistory(ctx, engine.RunRequest{
 			AgentConfig:      cfg,
@@ -818,6 +834,7 @@ func (a *App) compactProjectKnowledge(ctx context.Context, contextText string, m
 	if err != nil {
 		return "", err
 	}
+	a.reportAPIUsage(message)
 	compacted := strings.TrimSpace(cpanthropic.TextFromMessage(message))
 	maxCharacters := maxTokens * 4
 	if len([]rune(compacted)) > maxCharacters {
@@ -935,6 +952,8 @@ func (a *App) refreshSessionSummary(ctx context.Context, sessionID session.Sessi
 	if err != nil {
 		return fmt.Errorf("load session for summary refresh: %w", err)
 	}
+	unbindUsage := a.bindUsageSession(current)
+	defer unbindUsage()
 	transcript := session.Transcript(session.StripEphemeralContextMessages(current.CopyMessages()))
 	if strings.TrimSpace(transcript) == "" {
 		return fmt.Errorf("session summary transcript is empty")
@@ -954,6 +973,13 @@ func (a *App) refreshSessionSummary(ctx context.Context, sessionID session.Sessi
 	if err != nil {
 		return fmt.Errorf("reload session after summary refresh: %w", err)
 	}
+	// Carry billing totals recorded against the pre-reload session into the
+	// reloaded snapshot before Save.
+	a.usageSessionMu.Lock()
+	if a.usageSession == current {
+		latest.Metadata.Usage = current.Metadata.Usage
+	}
+	a.usageSessionMu.Unlock()
 	latest.Summary = summary
 	latest.Metadata.MemorySummaryCompleted = true
 	if err := a.Sessions.Save(context.WithoutCancel(ctx), latest); err != nil {
@@ -1207,6 +1233,8 @@ func (a *App) CompactSession(ctx context.Context, sessionID, workDir string) (*s
 	if err != nil {
 		return nil, false, fmt.Errorf("load session: %w", err)
 	}
+	unbindUsage := a.bindUsageSession(current)
+	defer unbindUsage()
 	preChanged := a.SanitizeLoadedSession(current)
 	changed, err := a.compactSession(ctx, current, true)
 	changed = changed || preChanged
@@ -1224,6 +1252,7 @@ func (a *App) CompactSession(ctx context.Context, sessionID, workDir string) (*s
 type aiSessionSummaryWriter struct {
 	client *cpanthropic.Client
 	model  string
+	onUsage func(*sdk.Message)
 }
 
 func (w aiSessionSummaryWriter) Summarize(ctx context.Context, previous, transcript string) (string, error) {
@@ -1251,6 +1280,9 @@ func (w aiSessionSummaryWriter) Summarize(ctx context.Context, previous, transcr
 	if err != nil {
 		return "", err
 	}
+	if w.onUsage != nil {
+		w.onUsage(message)
+	}
 	return strings.TrimSpace(cpanthropic.TextFromMessage(message)), nil
 }
 
@@ -1264,7 +1296,11 @@ func (a *App) sessionSummaryWriter() session.SummaryWriter {
 	if a.Client == nil {
 		return nil
 	}
-	return aiSessionSummaryWriter{client: a.Client, model: memoryModelName(a.Config)}
+	return aiSessionSummaryWriter{
+		client:  a.Client,
+		model:   memoryModelName(a.Config),
+		onUsage: a.reportAPIUsage,
+	}
 }
 
 func (a *App) observationStoreFor(current *session.Session) session.ObservationStore {

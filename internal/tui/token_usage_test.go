@@ -140,6 +140,32 @@ func TestTokenUsageSessionTotalsReplace(t *testing.T) {
 	}
 }
 
+func TestTokenUsageBillingOnlyDoesNotClearOccupancy(t *testing.T) {
+	m := New(nil)
+	m.ApplyTokenUsage(TokenUsageMsg{
+		EstimatedContextTokens: 15_000,
+		InputTokens:            1_000,
+		CacheReadInputTokens:   2_000,
+		MaxContextTokens:       200_000,
+		SessionTotals:          true,
+	})
+	// Task/compaction billing updates send EstimatedContextTokens=0.
+	m.ApplyTokenUsage(TokenUsageMsg{
+		InputTokens:              1_500,
+		OutputTokens:             40,
+		CacheCreationInputTokens: 100,
+		CacheReadInputTokens:     3_000,
+		MaxContextTokens:         200_000,
+		SessionTotals:            true,
+	})
+	if m.tokenUsage.EstimatedContextTokens != 15_000 {
+		t.Fatalf("EstimatedContextTokens = %d, want preserved 15000", m.tokenUsage.EstimatedContextTokens)
+	}
+	if m.tokenUsage.InputTokens != 1_500 || m.tokenUsage.CacheReadInputTokens != 3_000 {
+		t.Fatalf("billing counters = %+v", m.tokenUsage)
+	}
+}
+
 func TestTokenUsageResetsOnSessionReplace(t *testing.T) {
 	m := New(nil)
 	updated, _ := m.Update(TokenUsageMsg{
