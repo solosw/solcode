@@ -144,6 +144,89 @@ func (s *Store) Capture(relOrAbsPath string, content *string) error {
 	return nil
 }
 
+// ActiveTurnInfo reports the in-progress checkpoint turn and the paths captured
+// so far for it. ok is false when no turn is active.
+func (s *Store) ActiveTurnInfo() (int, []string, bool) {
+	if s == nil {
+		return 0, nil, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.hasActive {
+		return 0, nil, false
+	}
+	return s.activeTurn, s.turnFilesLocked(s.activeTurn), true
+}
+
+// TurnFiles returns the paths captured for one turn, sorted.
+func (s *Store) TurnFiles(turn int) []string {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.turnFilesLocked(turn)
+}
+
+// LatestTurn returns the newest checkpoint turn number, if any.
+func (s *Store) LatestTurn() (int, bool) {
+	if s == nil {
+		return 0, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	turns, err := s.listTurnNumbersLocked()
+	if err != nil || len(turns) == 0 {
+		return 0, false
+	}
+	return turns[len(turns)-1], true
+}
+
+// FilesAllTurns returns the union of every file path captured across all
+// checkpoints of the session, sorted. A session-end memory wants the whole
+// set of files the checkpoint touched, not just the final turn's.
+func (s *Store) FilesAllTurns() []string {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	turns, err := s.listTurnNumbersLocked()
+	if err != nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, turn := range turns {
+		meta, err := s.readTurnMetaLocked(turn)
+		if err != nil {
+			continue
+		}
+		for _, f := range meta.Files {
+			if seen[f.Path] {
+				continue
+			}
+			seen[f.Path] = true
+			out = append(out, f.Path)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func (s *Store) turnFilesLocked(turn int) []string {
+	meta, err := s.readTurnMetaLocked(turn)
+	if err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(meta.Files))
+	for _, f := range meta.Files {
+		out = append(out, f.Path)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // List returns checkpoint metadata newest-last.
 func (s *Store) List() ([]Meta, error) {
 	if s == nil {

@@ -20,6 +20,10 @@ func TestDefaultSystemPromptDocumentsMemoryTools(t *testing.T) {
 		"# Memory",
 		"WriteMemory",
 		"ReadMemory",
+		"WriteSessionMemory",
+		"ReadSessionMemory",
+		".solcode/solcode.md",
+		"not interchangeable",
 		"normal task-lifecycle action",
 		"before the final response",
 		"one to three entries",
@@ -27,6 +31,32 @@ func TestDefaultSystemPromptDocumentsMemoryTools(t *testing.T) {
 	} {
 		if !strings.Contains(req.System, want) {
 			t.Fatalf("expected system prompt to document memory tools with %q, got %q", want, req.System)
+		}
+	}
+}
+
+func TestSessionMemoryToolsDistinguishFromGlobalMemory(t *testing.T) {
+	writeDesc := tool.NewWriteSessionMemoryTool(nil).Description()
+	for _, want := range []string{
+		"session log",
+		"WriteMemory",
+		"checkpoint turn",
+		"session id",
+		".solcode/solcode.md",
+	} {
+		if !strings.Contains(writeDesc, want) {
+			t.Fatalf("WriteSessionMemory description missing %q: %s", want, writeDesc)
+		}
+	}
+	readDesc := tool.NewReadSessionMemoryTool(nil).Description()
+	for _, want := range []string{
+		"ReadMemory",
+		"chronological log",
+		"newest first",
+		".solcode/solcode.md",
+	} {
+		if !strings.Contains(readDesc, want) {
+			t.Fatalf("ReadSessionMemory description missing %q: %s", want, readDesc)
 		}
 	}
 }

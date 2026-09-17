@@ -261,6 +261,9 @@ func New(cfg config.Config, opts ...Option) (*App, error) {
 		registry.Register(tool.NewWriteMemoryTool(application), tool.NewReadMemoryTool(application))
 	}
 	registry.Register(tool.NewReadObservationTool(application))
+	// Session memories live in the project's solcode.md and record the checkpoint
+	// turn, changed files, timestamp, and session id alongside the model's entry.
+	registry.Register(tool.NewWriteSessionMemoryTool(application), tool.NewReadSessionMemoryTool(application))
 
 	return application, nil
 }

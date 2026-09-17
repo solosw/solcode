@@ -87,6 +87,38 @@ func TestStoreRejectsPathEscape(t *testing.T) {
 	}
 }
 
+func TestStoreFilesAllTurnsUnion(t *testing.T) {
+	work := t.TempDir()
+	store, err := NewStore(t.TempDir(), "main", work, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.BeginTurn("first"); err != nil {
+		t.Fatal(err)
+	}
+	a := "a"
+	if err := store.Capture("a.txt", &a); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.BeginTurn("second"); err != nil {
+		t.Fatal(err)
+	}
+	b := "b"
+	if err := store.Capture("b.txt", &b); err != nil {
+		t.Fatal(err)
+	}
+	all := store.FilesAllTurns()
+	if len(all) != 2 || all[0] != "a.txt" || all[1] != "b.txt" {
+		t.Fatalf("FilesAllTurns = %#v", all)
+	}
+	if turn, ok := store.LatestTurn(); !ok || turn != 1 {
+		t.Fatalf("LatestTurn = %d, %v", turn, ok)
+	}
+	if files := store.TurnFiles(1); len(files) != 1 || files[0] != "b.txt" {
+		t.Fatalf("TurnFiles(1) = %#v", files)
+	}
+}
+
 func TestStorePruneRetain(t *testing.T) {
 	work := t.TempDir()
 	store, err := NewStore(t.TempDir(), "main", work, 2)
