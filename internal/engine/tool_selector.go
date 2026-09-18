@@ -33,6 +33,10 @@ var coreToolNames = map[string]bool{
 	tool.WriteMemoryToolName:     true,
 	tool.ReadMemoryToolName:      true,
 	tool.ReadObservationToolName: true,
+	// Session memory is written once at session end and searched later, so it
+	// cannot rely on lexical matching against the current turn's prompt.
+	tool.WriteSessionMemoryToolName: true,
+	tool.ReadSessionMemoryToolName:  true,
 }
 
 // hiddenFromModel tools stay registered for execution/tests but are never

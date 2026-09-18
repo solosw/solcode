@@ -80,6 +80,14 @@ type Config struct {
 	RecordFileChange func(ctx context.Context, uctx *tool.UseContext, change tool.FileChange)
 	// CaptureCheckpoint records turn-start file content for code-only rewind.
 	CaptureCheckpoint func(path string, content *string)
+	// UncaptureCheckpoint removes a path from the active turn when a later
+	// fingerprint net-diff against the turn baseline shows no remaining change.
+	UncaptureCheckpoint func(path string)
+	// ListCheckpointPaths returns relative paths captured for the active turn.
+	ListCheckpointPaths func() []string
+	// FingerprintBaseline returns the active turn's workdir fingerprint, or nil
+	// when no turn baseline is available (falls back to per-invoke snapshots).
+	FingerprintBaseline func() map[string]tool.FileFingerprint
 	// CompactMessages is invoked mid-run when estimated context reaches MaxContextTokens (100%).
 	// It must return a shorter message list. Nil disables mid-run compaction.
 	CompactMessages func(ctx context.Context, messages []sdk.MessageParam) ([]sdk.MessageParam, error)
@@ -394,8 +402,16 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 							}, change)
 						}
 					},
-					CaptureCheckpoint: e.config.CaptureCheckpoint,
-					AskUser:           e.config.OnAskUser,
+					CaptureCheckpoint:   e.config.CaptureCheckpoint,
+					UncaptureCheckpoint: e.config.UncaptureCheckpoint,
+					ListCheckpointPaths: e.config.ListCheckpointPaths,
+					FingerprintBaseline: func() map[string]tool.FileFingerprint {
+						if e.config.FingerprintBaseline == nil {
+							return nil
+						}
+						return e.config.FingerprintBaseline()
+					}(),
+					AskUser: e.config.OnAskUser,
 				},
 			})
 			if err := ctx.Err(); err != nil {

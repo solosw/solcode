@@ -7,6 +7,7 @@ import (
 
 	"github.com/solosw/solcode/internal/checkpoint"
 	"github.com/solosw/solcode/internal/config"
+	"github.com/solosw/solcode/internal/tool"
 )
 
 // checkpointState holds the active session's file snapshot store.
@@ -15,6 +16,10 @@ type checkpointState struct {
 	store *checkpoint.Store
 	id    string
 	dir   string
+	// baseline is the workdir fingerprint taken at BeginTurn. Bash checkpoint
+	// diffs compare against this turn-start snapshot so create-then-delete
+	// temps within the turn are not recorded.
+	baseline map[string]tool.FileFingerprint
 }
 
 func (a *App) checkpointSessionDir() string {
@@ -56,6 +61,7 @@ func (a *App) ensureCheckpointStore(sessionID, workDir string) (*checkpoint.Stor
 	a.ckpt.store = store
 	a.ckpt.id = sessionID
 	a.ckpt.dir = dir
+	a.ckpt.baseline = nil
 	return store, nil
 }
 
@@ -68,6 +74,25 @@ func (a *App) beginCheckpointTurn(sessionID, workDir, prompt string) {
 		return
 	}
 	_, _ = store.BeginTurn(prompt)
+	if workDir == "" {
+		workDir = a.Config.WorkDir
+	}
+	snap, err := tool.SnapshotWorkDir(workDir, tool.FingerprintOptions{}, true)
+	if err != nil || snap == nil {
+		snap = map[string]tool.FileFingerprint{}
+	}
+	a.ckpt.mu.Lock()
+	a.ckpt.baseline = snap
+	a.ckpt.mu.Unlock()
+}
+
+func (a *App) fingerprintBaseline() map[string]tool.FileFingerprint {
+	if a == nil {
+		return nil
+	}
+	a.ckpt.mu.Lock()
+	defer a.ckpt.mu.Unlock()
+	return a.ckpt.baseline
 }
 
 func (a *App) captureCheckpoint(path string, content *string) {
@@ -81,6 +106,36 @@ func (a *App) captureCheckpoint(path string, content *string) {
 		return
 	}
 	_ = store.Capture(path, content)
+}
+
+func (a *App) uncaptureCheckpoint(path string) {
+	if a == nil {
+		return
+	}
+	a.ckpt.mu.Lock()
+	store := a.ckpt.store
+	a.ckpt.mu.Unlock()
+	if store == nil {
+		return
+	}
+	_ = store.Uncapture(path)
+}
+
+func (a *App) listCheckpointPaths() []string {
+	if a == nil {
+		return nil
+	}
+	a.ckpt.mu.Lock()
+	store := a.ckpt.store
+	a.ckpt.mu.Unlock()
+	if store == nil {
+		return nil
+	}
+	_, files, ok := store.ActiveTurnInfo()
+	if !ok {
+		return nil
+	}
+	return files
 }
 
 // ListCheckpoints returns code-rewind anchors for a session.

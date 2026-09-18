@@ -11,7 +11,9 @@ A terminal-based coding agent powered by Claude (Anthropic API) that can read, w
 - **ACP (Agent Client Protocol)** — Speak JSON-RPC over stdio with `solcode --acp` (or `solcode acp`) so editors like Zed can drive the same agent loop as the TUI. Supports streaming updates, permissions, cancel, session modes/load, tool-call diffs, ACP `plan` updates from `TodoWrite`, and capability-gated client `fs/read_text_file` / `fs/write_text_file`.
 - **Multi-model support** — Configure multiple LLM providers and models, switch at runtime with `/model` (current provider only) and `/provider`, or add them directly from their dialogs.
 - **Native Anthropic transport** — The Anthropic Messages API uses a handwritten HTTP/JSON/SSE client, including streaming text, thinking, and tool-input deltas; the official SDK remains only for internal message compatibility.
-- **20+ built-in tools** — Bash (timeouts above 3m auto-wait up to 24h), ImageGenerate / ImageEdit (optional OpenAI-format Images API, separately configurable), Edit, Write, View, ViewImage, Grep, Glob, LS, Diff, Patch, Fetch, WebSearch, LSP, MCP, TodoWrite, WriteMemory, ReadMemory, AskUser, Task (orchestrates internal Subagent workers), and more.
+- **20+ built-in tools** — Bash (timeouts above 3m auto-wait up to 24h), ImageGenerate / ImageEdit (optional OpenAI-format Images API, separately configurable), Edit, Write, View, ViewImage, Grep, Glob, LS, Diff, Patch, Fetch, WebSearch, LSP, MCP, TodoWrite, WriteMemory, ReadMemory, WriteSessionMemory, ReadSessionMemory, AskUser, Task (orchestrates internal Subagent workers), and more.
+- **Checkpoints & rewind** — Before any file-mutating tool runs, solcode snapshots the file's turn-start contents. During a Bash call it instead compares before/after SHA-256 workdir fingerprints (capped at 2000 files / 1 MiB each, skipping `.git`, `node_modules`, binaries, and hidden paths) and captures whatever changed. `/rewind` then restores workspace files to the start of a past turn — **code only**; conversation history is untouched. Checkpoints may be labeled with `/checkpoint-name` and listed with `/checkpoints`.
+- **Two memory layers** — `WriteMemory` / `ReadMemory` persist durable facts that stay true across sessions (preferences, project rules, verified commands). `WriteSessionMemory` / `ReadSessionMemory` keep this project's chronological session log in `<project>/.solcode/solcode.md`, where each entry records the checkpoint turn, the files changed, the timestamp, and the session id.
 - **MCP (Model Context Protocol)** — Connect to external MCP servers over stdio or HTTP.
 - **Custom skills** — Define reusable skill files loaded from configurable directories.
 - **Project rules** — Markdown instructions in `<project>/.solcode/rules.md` and `.solcode/rules/*.md` are injected into the system prompt at startup.
@@ -252,6 +254,9 @@ Type `/` in the input to access commands:
 | `/effort` | Select thinking effort (low/medium/high) |
 | `/sessions` | List and load saved sessions |
 | `/compact` | Compact the current session context |
+| `/checkpoints` | List code checkpoints for the current session |
+| `/checkpoint-name <name> [turn]` | Label a checkpoint (defaults to the newest turn) |
+| `/rewind <turn\|name>` | Restore workspace files to a previous turn (code only) |
 | `/fix-session` | Repair incomplete tool-use exchanges in the current session |
 | `/new-session [name]` | Create and switch to a new session |
 | `/skills` | Browse skills and toggle enabled/disabled |
@@ -487,9 +492,42 @@ See also [`examples/settings/settings.full.example.json`](examples/settings/sett
 | `LSP` | Core read-only language intelligence: definition, references, hover, and symbols (see [LSP](#lsp-language-server-protocol)) |
 | `mcp` | Invoke MCP server tools |
 | `todo_write` | Manage structured task lists |
+| `write_memory` | Save a durable fact that should be true in every future session |
+| `read_memory` | Look up durable facts saved by earlier sessions |
+| `write_session_memory` | Append this session's log entry to `.solcode/solcode.md` |
+| `read_session_memory` | Fuzzy-search or list recent session memories |
 | `ask_user` | Ask user questions in interactive dialogs |
 | `task` | Spawn sub-agents for independent work |
 | `skill` | Load and execute custom skills |
+
+## Checkpoints & Rewind
+
+solcode snapshots workspace files so you can restore code to an earlier turn.
+
+- Before `Edit` / `Write` / `Patch` / `MultiEdit` / `MultiWrite` run, the runtime records the file's turn-start contents.
+- `Bash` mutates files without declaring paths, so it uses before/after SHA-256 fingerprints instead: the workdir is hashed before and after the call, and only files whose hash or existence changed are captured (new files recorded as absent, so rewind deletes them). Walks are capped at **2000 files / 1 MiB each** and skip `.git`, `node_modules`, `vendor`, build dirs, hidden paths, and binaries.
+- A checkpoint is created per user prompt (not per tool call). Turns are numbered from `0` and the newest 50 are retained.
+
+| Command | Effect |
+|---------|--------|
+| `/checkpoints` | List turns with time, file count, and optional label |
+| `/checkpoint-name <name> [turn]` | Label a checkpoint (omit `turn` for the newest); names are unique per session, case-insensitive |
+| `/rewind <turn\|name>` | Restore workspace files to the start of that turn |
+
+**Rewind restores code only** — conversation history, session state, and model context are untouched. Only files captured by a checkpoint are restored; skipped or never-touched files keep their current contents. The same commands are available in ACP mode.
+
+## Memory
+
+Two memory layers exist, and they are not interchangeable:
+
+| Layer | Tools | Purpose | Storage |
+|-------|-------|---------|---------|
+| Durable facts | `WriteMemory` / `ReadMemory` | Preferences, project rules, verified commands, settled decisions — knowledge that should hold in every future session | Global memory store; relevant entries are injected automatically. Requires `memory.enabled` |
+| Session log | `WriteSessionMemory` / `ReadSessionMemory` | The chronological record of what a session did, decided, and left unfinished | `<project>/.solcode/solcode.md` |
+
+Pick by intent: "what happened in this session" → session memory; "a fact worth knowing in every future session" → `WriteMemory`. Most sessions write one session memory and zero to three `WriteMemory` entries.
+
+`WriteSessionMemory` takes `keywords`, `summary`, and `importance`; the runtime appends the checkpoint turn, the files changed this session, the timestamp, and the session id. `ReadSessionMemory` fuzzy-searches by keyword, or returns the most recent entries when called without a query.
 
 ## Permission Modes
 
@@ -527,6 +565,8 @@ solcode/
 │   ├── message/               # Message type definitions
 │   ├── permission/            # Tool authorization service
 │   ├── pubsub/                # Internal pub/sub messaging
+│   ├── checkpoint/           # Turn-scoped file snapshots (code-only rewind)
+│   ├── sessionmemory/        # Session log written to .solcode/solcode.md
 │   ├── session/               # Session persistence & compaction
 │   ├── skill/                 # Custom skill loader
 │   ├── tokenest/              # Token estimation utilities

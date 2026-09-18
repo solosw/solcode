@@ -110,9 +110,9 @@ func TestRewindCodeRestoresBashFingerprintCapture(t *testing.T) {
 	}
 	a.beginCheckpointTurn("main", work, "bash mutate")
 
-	before, err := tool.SnapshotWorkDir(work, tool.FingerprintOptions{}, true)
-	if err != nil {
-		t.Fatal(err)
+	before := a.fingerprintBaseline()
+	if before == nil {
+		t.Fatal("expected turn-start fingerprint baseline")
 	}
 	if err := os.WriteFile(filepath.Join(work, "shell.txt"), []byte("after"), 0o644); err != nil {
 		t.Fatal(err)
@@ -141,5 +141,86 @@ func TestRewindCodeRestoresBashFingerprintCapture(t *testing.T) {
 	got, err := os.ReadFile(filepath.Join(work, "shell.txt"))
 	if err != nil || string(got) != "before" {
 		t.Fatalf("shell.txt = %q err=%v", got, err)
+	}
+}
+
+func TestRewindIgnoresBashEphemeralCreateDelete(t *testing.T) {
+	work := t.TempDir()
+	sessionDir := t.TempDir()
+	a := &App{Config: config.Config{
+		WorkDir: work,
+		Session: config.SessionConfig{Dir: sessionDir, DefaultSession: "main"},
+	}}
+	if err := os.WriteFile(filepath.Join(work, "keep.txt"), []byte("v1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a.beginCheckpointTurn("main", work, "temp then delete")
+	baseline := a.fingerprintBaseline()
+
+	// Simulate Bash #1: create temp + mutate keep.
+	if err := os.WriteFile(filepath.Join(work, "temp.txt"), []byte("tmp"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(work, "keep.txt"), []byte("v2"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mid, err := tool.SnapshotWorkDir(work, tool.FingerprintOptions{}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, change := range tool.DiffFingerprints(baseline, mid) {
+		a.captureCheckpoint(filepath.Join(work, filepath.FromSlash(change.Path)), change.Content)
+	}
+	if files := a.listCheckpointPaths(); len(files) != 2 {
+		t.Fatalf("after create captures = %#v", files)
+	}
+
+	// Simulate Bash #2: delete temp (nets out vs turn start).
+	if err := os.Remove(filepath.Join(work, "temp.txt")); err != nil {
+		t.Fatal(err)
+	}
+	after, err := tool.SnapshotWorkDir(work, tool.FingerprintOptions{}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := map[string]bool{}
+	for _, change := range tool.DiffFingerprints(baseline, after) {
+		a.captureCheckpoint(filepath.Join(work, filepath.FromSlash(change.Path)), change.Content)
+		changed[change.Path] = true
+	}
+	for _, path := range a.listCheckpointPaths() {
+		if changed[path] {
+			continue
+		}
+		b := baseline[path]
+		aFP := after[path]
+		beforeExists := b.Exists
+		afterExists := aFP.Exists
+		match := (!beforeExists && !afterExists) || (beforeExists && afterExists && b.Hash == aFP.Hash)
+		if match {
+			a.uncaptureCheckpoint(filepath.Join(work, filepath.FromSlash(path)))
+		}
+	}
+	files := a.listCheckpointPaths()
+	if len(files) != 1 || files[0] != "keep.txt" {
+		t.Fatalf("after ephemeral delete captures = %#v", files)
+	}
+
+	result, err := a.RewindCode("main", work, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Deleted) != 0 {
+		t.Fatalf("should not delete ephemeral temp, deleted=%#v", result.Deleted)
+	}
+	if len(result.Restored) != 1 || result.Restored[0] != "keep.txt" {
+		t.Fatalf("restored = %#v", result.Restored)
+	}
+	got, err := os.ReadFile(filepath.Join(work, "keep.txt"))
+	if err != nil || string(got) != "v1" {
+		t.Fatalf("keep.txt = %q err=%v", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(work, "temp.txt")); !os.IsNotExist(err) {
+		t.Fatalf("temp should remain absent, err=%v", err)
 	}
 }

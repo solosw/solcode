@@ -73,6 +73,41 @@ func TestStoreCaptureDedupAndRestore(t *testing.T) {
 	}
 }
 
+func TestStoreUncaptureRemovesCreate(t *testing.T) {
+	work := t.TempDir()
+	store, err := NewStore(t.TempDir(), "main", work, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.BeginTurn("temp"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Capture("tmp.txt", nil); err != nil {
+		t.Fatal(err)
+	}
+	if files := store.TurnFiles(0); len(files) != 1 || files[0] != "tmp.txt" {
+		t.Fatalf("TurnFiles = %#v", files)
+	}
+	if err := store.Uncapture("tmp.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if files := store.TurnFiles(0); len(files) != 0 {
+		t.Fatalf("after Uncapture TurnFiles = %#v", files)
+	}
+	// Recapture after uncapture must stick again.
+	body := "real"
+	if err := store.Capture("tmp.txt", &body); err != nil {
+		t.Fatal(err)
+	}
+	cp, err := store.Load(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cp.Files) != 1 || cp.Files[0].Content == nil || *cp.Files[0].Content != "real" {
+		t.Fatalf("recapture = %#v", cp.Files)
+	}
+}
+
 func TestStoreRejectsPathEscape(t *testing.T) {
 	work := t.TempDir()
 	store, err := NewStore(t.TempDir(), "main", work, 5)

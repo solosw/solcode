@@ -144,6 +144,47 @@ func (s *Store) Capture(relOrAbsPath string, content *string) error {
 	return nil
 }
 
+// Uncapture drops a path from the active turn. Used when a fingerprint net-diff
+// against the turn-start baseline shows the path no longer differs (e.g. a
+// mid-turn create that was later deleted).
+func (s *Store) Uncapture(relOrAbsPath string) error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.hasActive {
+		return nil
+	}
+	rel, err := s.relPathLocked(relOrAbsPath)
+	if err != nil {
+		return err
+	}
+	key := filepath.ToSlash(rel)
+	if !s.captured[key] {
+		return nil
+	}
+	meta, err := s.readTurnMetaLocked(s.activeTurn)
+	if err != nil {
+		return err
+	}
+	kept := meta.Files[:0]
+	for _, f := range meta.Files {
+		if f.Path == key {
+			_ = os.Remove(filepath.Join(s.turnDir(s.activeTurn), "files", fmt.Sprintf("%d.before", f.Index)))
+			_ = os.Remove(filepath.Join(s.turnDir(s.activeTurn), "files", fmt.Sprintf("%d.before.missing", f.Index)))
+			continue
+		}
+		kept = append(kept, f)
+	}
+	meta.Files = kept
+	if err := s.writeTurnMetaLocked(meta); err != nil {
+		return err
+	}
+	delete(s.captured, key)
+	return nil
+}
+
 // ActiveTurnInfo reports the in-progress checkpoint turn and the paths captured
 // so far for it. ok is false when no turn is active.
 func (s *Store) ActiveTurnInfo() (int, []string, bool) {

@@ -182,6 +182,10 @@ func captureFingerprintBeforeInvoke(selected tool.Tool, uctx *tool.UseContext) m
 	if !tool.FingerprintCheckpointTool(selected.Name()) {
 		return nil
 	}
+	// Prefer the turn-start baseline so create→delete within the turn nets out.
+	if uctx.FingerprintBaseline != nil {
+		return uctx.FingerprintBaseline
+	}
 	before, err := tool.SnapshotWorkDir(uctx.WorkDir, tool.FingerprintOptions{}, true)
 	if err != nil || before == nil {
 		return map[string]tool.FileFingerprint{}
@@ -200,11 +204,42 @@ func captureFingerprintAfterInvoke(selected tool.Tool, uctx *tool.UseContext, be
 	if err != nil {
 		after = map[string]tool.FileFingerprint{}
 	}
+	changed := map[string]bool{}
 	for _, change := range tool.DiffFingerprints(before, after) {
 		abs := tool.ResolvePath(uctx, change.Path)
 		if strings.TrimSpace(abs) == "" {
 			continue
 		}
 		uctx.CaptureCheckpoint(abs, change.Content)
+		changed[change.Path] = true
 	}
+	// With a turn-start baseline, drop sticky captures that now match baseline
+	// again (create-then-delete temps, or mutate-then-restore).
+	if uctx.FingerprintBaseline == nil || uctx.UncaptureCheckpoint == nil || uctx.ListCheckpointPaths == nil {
+		return
+	}
+	for _, path := range uctx.ListCheckpointPaths() {
+		if changed[path] {
+			continue
+		}
+		if fingerprintsMatch(before[path], after[path]) {
+			abs := tool.ResolvePath(uctx, path)
+			if strings.TrimSpace(abs) == "" {
+				continue
+			}
+			uctx.UncaptureCheckpoint(abs)
+		}
+	}
+}
+
+func fingerprintsMatch(before, after tool.FileFingerprint) bool {
+	beforeExists := before.Exists
+	afterExists := after.Exists
+	if !beforeExists && !afterExists {
+		return true
+	}
+	if beforeExists != afterExists {
+		return false
+	}
+	return before.Hash == after.Hash
 }

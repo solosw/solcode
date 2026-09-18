@@ -37,7 +37,18 @@ type UseContext struct {
 	// CaptureCheckpoint records turn-start file content for code-only rewind.
 	// content == nil means the file did not exist.
 	CaptureCheckpoint func(path string, content *string)
-	AskUser           func(ctx context.Context, params AskUserParams) (map[string]string, error)
+	// UncaptureCheckpoint removes a path from the active turn checkpoint when
+	// a later net-diff against the turn-start baseline shows no remaining change.
+	UncaptureCheckpoint func(path string)
+	// ListCheckpointPaths returns workdir-relative slash paths already captured
+	// for the active turn.
+	ListCheckpointPaths func() []string
+	// FingerprintBaseline is the turn-start workdir fingerprint used for Bash
+	// checkpoint diffs. When non-nil, opaque mutators diff against this map
+	// instead of a per-invoke before snapshot, so mid-turn create-then-delete
+	// temps are not recorded. Nil falls back to a per-invoke before snapshot.
+	FingerprintBaseline map[string]FileFingerprint
+	AskUser             func(ctx context.Context, params AskUserParams) (map[string]string, error)
 	// OnAgentProgress reports nested sub-agent lifecycle / tool activity to the UI.
 	OnAgentProgress func(AgentProgressEvent)
 }

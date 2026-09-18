@@ -52,14 +52,22 @@ func TestTimeoutForRegularToolIsTwoMinutes(t *testing.T) {
 	}
 }
 
-type fingerprintBashTool struct{}
+type fingerprintBashTool struct {
+	mutate func(workDir string) error
+}
 
-func (fingerprintBashTool) Name() string              { return tool.BashToolName }
+func (fingerprintBashTool) Name() string                { return tool.BashToolName }
 func (fingerprintBashTool) Description() string         { return "fingerprint bash stub" }
 func (fingerprintBashTool) InputSchema() map[string]any { return nil }
-func (fingerprintBashTool) Invoke(_ context.Context, uctx *tool.UseContext, _ json.RawMessage) (*tool.ContentBlock, error) {
+func (t fingerprintBashTool) Invoke(_ context.Context, uctx *tool.UseContext, _ json.RawMessage) (*tool.ContentBlock, error) {
 	if uctx == nil {
 		return tool.ErrorResult("missing context"), nil
+	}
+	if t.mutate != nil {
+		if err := t.mutate(uctx.WorkDir); err != nil {
+			return tool.ErrorResult(err.Error()), nil
+		}
+		return tool.Result("ok"), nil
 	}
 	if err := os.WriteFile(filepath.Join(uctx.WorkDir, "mutated.txt"), []byte("after"), 0o644); err != nil {
 		return tool.ErrorResult(err.Error()), nil
@@ -127,5 +135,138 @@ func TestExecuteFingerprintsBashMutations(t *testing.T) {
 	}
 	if _, ok := captured["unchanged.txt"]; ok {
 		t.Fatal("unchanged file should not be captured")
+	}
+}
+
+func TestExecuteFingerprintsSkipEphemeralCreateDeleteWithBaseline(t *testing.T) {
+	work := t.TempDir()
+	if err := os.WriteFile(filepath.Join(work, "keep.txt"), []byte("v1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	baseline, err := tool.SnapshotWorkDir(work, tool.FingerprintOptions{}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	type captureState struct {
+		content *string
+	}
+	captured := map[string]captureState{}
+	var order []string
+	reg := tool.NewRegistry()
+	reg.Register(fingerprintBashTool{
+		mutate: func(workDir string) error {
+			if err := os.WriteFile(filepath.Join(workDir, "temp.txt"), []byte("tmp"), 0o644); err != nil {
+				return err
+			}
+			if err := os.WriteFile(filepath.Join(workDir, "keep.txt"), []byte("v2"), 0o644); err != nil {
+				return err
+			}
+			return nil
+		},
+	})
+	x := NewToolExecutor(reg, nil)
+	uctx := &tool.UseContext{
+		WorkDir:             work,
+		FingerprintBaseline: baseline,
+		CaptureCheckpoint: func(path string, content *string) {
+			rel, err := filepath.Rel(work, path)
+			if err != nil {
+				rel = path
+			}
+			rel = filepath.ToSlash(rel)
+			if _, ok := captured[rel]; ok {
+				return
+			}
+			captured[rel] = captureState{content: content}
+			order = append(order, rel)
+		},
+		UncaptureCheckpoint: func(path string) {
+			rel, err := filepath.Rel(work, path)
+			if err != nil {
+				rel = path
+			}
+			rel = filepath.ToSlash(rel)
+			delete(captured, rel)
+		},
+		ListCheckpointPaths: func() []string {
+			out := make([]string, 0, len(captured))
+			for path := range captured {
+				out = append(out, path)
+			}
+			return out
+		},
+	}
+
+	// First Bash: create temp + mutate keep.
+	result := x.Execute(context.Background(), ToolCall{Name: tool.BashToolName, Input: json.RawMessage(`{}`)}, ToolEnv{UseContext: uctx})
+	if result.IsError {
+		t.Fatalf("first execute error: %#v", result.Content)
+	}
+	if _, ok := captured["temp.txt"]; !ok {
+		t.Fatalf("temp should be captured after create, got %#v", captured)
+	}
+	if content, ok := captured["keep.txt"]; !ok || content.content == nil || *content.content != "v1" {
+		t.Fatalf("keep capture = %#v ok=%v", content, ok)
+	}
+
+	// Second Bash: delete the temp file.
+	reg2 := tool.NewRegistry()
+	reg2.Register(fingerprintBashTool{
+		mutate: func(workDir string) error {
+			return os.Remove(filepath.Join(workDir, "temp.txt"))
+		},
+	})
+	x2 := NewToolExecutor(reg2, nil)
+	result = x2.Execute(context.Background(), ToolCall{Name: tool.BashToolName, Input: json.RawMessage(`{}`)}, ToolEnv{UseContext: uctx})
+	if result.IsError {
+		t.Fatalf("second execute error: %#v", result.Content)
+	}
+	if _, ok := captured["temp.txt"]; ok {
+		t.Fatalf("temp should be uncaptured after delete, got %#v", captured)
+	}
+	if content, ok := captured["keep.txt"]; !ok || content.content == nil || *content.content != "v1" {
+		t.Fatalf("keep should remain captured = %#v ok=%v", content, ok)
+	}
+}
+
+func TestExecuteFingerprintsSameCallCreateDeleteNetsOut(t *testing.T) {
+	work := t.TempDir()
+	baseline, err := tool.SnapshotWorkDir(work, tool.FingerprintOptions{}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	captured := map[string]*string{}
+	reg := tool.NewRegistry()
+	reg.Register(fingerprintBashTool{
+		mutate: func(workDir string) error {
+			path := filepath.Join(workDir, "temp.txt")
+			if err := os.WriteFile(path, []byte("tmp"), 0o644); err != nil {
+				return err
+			}
+			return os.Remove(path)
+		},
+	})
+	x := NewToolExecutor(reg, nil)
+	result := x.Execute(context.Background(), ToolCall{Name: tool.BashToolName, Input: json.RawMessage(`{}`)}, ToolEnv{
+		UseContext: &tool.UseContext{
+			WorkDir:             work,
+			FingerprintBaseline: baseline,
+			CaptureCheckpoint: func(path string, content *string) {
+				rel, err := filepath.Rel(work, path)
+				if err != nil {
+					rel = path
+				}
+				captured[filepath.ToSlash(rel)] = content
+			},
+			UncaptureCheckpoint: func(path string) {},
+			ListCheckpointPaths: func() []string { return nil },
+		},
+	})
+	if result.IsError {
+		t.Fatalf("execute error: %#v", result.Content)
+	}
+	if len(captured) != 0 {
+		t.Fatalf("same-call create/delete should not capture, got %#v", captured)
 	}
 }

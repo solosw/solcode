@@ -43,6 +43,21 @@ func TestSelectToolsIncludesLSP(t *testing.T) {
 	}
 }
 
+func TestSelectToolsIncludesSessionMemory(t *testing.T) {
+	all := []tool.Tool{
+		&stubTool{name: tool.WriteSessionMemoryToolName, desc: "append a session memory"},
+		&stubTool{name: tool.ReadSessionMemoryToolName, desc: "read session memories"},
+	}
+	// No query: core tools must still be exposed, since session memory is
+	// written at session end and is not implied by the current prompt.
+	selected := namesOf(SelectToolsForTurn(all, nil, "", nil))
+	for _, name := range []string{tool.WriteSessionMemoryToolName, tool.ReadSessionMemoryToolName} {
+		if !selected[name] {
+			t.Fatalf("session memory core tool %s missing: %#v", name, selected)
+		}
+	}
+}
+
 func sampleTools() []tool.Tool {
 	return []tool.Tool{
 		&stubTool{name: tool.AskUserToolName, desc: "ask the user"},
