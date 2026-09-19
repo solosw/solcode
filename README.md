@@ -11,11 +11,12 @@ A terminal-based coding agent powered by Claude (Anthropic API) that can read, w
 - **ACP (Agent Client Protocol)** — Speak JSON-RPC over stdio with `solcode --acp` (or `solcode acp`) so editors like Zed can drive the same agent loop as the TUI. Supports streaming updates, permissions, cancel, session modes/load, tool-call diffs, ACP `plan` updates from `TodoWrite`, and capability-gated client `fs/read_text_file` / `fs/write_text_file`.
 - **Multi-model support** — Configure multiple LLM providers and models, switch at runtime with `/model` (current provider only) and `/provider`, or add them directly from their dialogs.
 - **Native Anthropic transport** — The Anthropic Messages API uses a handwritten HTTP/JSON/SSE client, including streaming text, thinking, and tool-input deltas; the official SDK remains only for internal message compatibility.
-- **20+ built-in tools** — Bash (timeouts above 3m auto-wait up to 24h), ImageGenerate / ImageEdit (optional OpenAI-format Images API, separately configurable), Edit, Write, View, ViewImage, Grep, Glob, LS, Diff, Patch, Fetch, WebSearch, LSP, MCP, TodoWrite, WriteMemory, ReadMemory, WriteSessionMemory, ReadSessionMemory, AskUser, Task (orchestrates internal Subagent workers), and more.
+- **20+ built-in tools** — Bash (timeouts above 3m auto-wait up to 24h), ImageGenerate / ImageEdit (optional OpenAI-format Images API, separately configurable), ComputerUse (optional desktop screenshot/mouse/keyboard via robotgo; off by default), Edit, Write, View, ViewImage, Grep, Glob, LS, Diff, Patch, Fetch, WebSearch, LSP, MCP, TodoWrite, WriteMemory, ReadMemory, WriteSessionMemory, ReadSessionMemory, AskUser, Task (orchestrates internal Subagent workers), and more.
 - **Checkpoints & rewind** — Before any file-mutating tool runs, solcode snapshots the file's turn-start contents. During a Bash call it instead compares before/after SHA-256 workdir fingerprints (capped at 2000 files / 1 MiB each, skipping `.git`, `node_modules`, binaries, and hidden paths) and captures whatever changed. `/rewind` then restores workspace files to the start of a past turn — **code only**; conversation history is untouched. Checkpoints may be labeled with `/checkpoint-name` and listed with `/checkpoints`.
 - **Two memory layers** — `WriteMemory` / `ReadMemory` persist durable facts that stay true across sessions (preferences, project rules, verified commands). `WriteSessionMemory` / `ReadSessionMemory` keep this project's chronological session log in `<project>/.solcode/solcode.md`, where each entry records the checkpoint turn, the files changed, the timestamp, and the session id.
 - **MCP (Model Context Protocol)** — Connect to external MCP servers over stdio or HTTP.
-- **Custom skills** — Define reusable skill files loaded from configurable directories.
+- **Custom skills** — Define reusable skill files loaded from configurable directories. When `computer_use.enabled` is true, solcode also loads a bundled `computer-use` skill that teaches the screenshot → act → verify loop.
+- **Computer Use (optional)** — Opt-in desktop GUI automation (`ComputerUse` tool + bundled skill). Enable in settings, rebuild with CGO and `-tags computeruse` to link [robotgo](https://github.com/go-vgo/robotgo). The tool is **not** core: discover it via `/computer-use` / Skill or ToolSearch.
 - **Project rules** — Markdown instructions in `<project>/.solcode/rules.md` and `.solcode/rules/*.md` are injected into the system prompt at startup.
 - **Hook system** — Execute shell commands on agent events (tool calls, results, completion).
 - **Permission modes** — `auto`, `accept_edits`, `bypass`, `yolo`, `plan` — control how tools are authorized.
@@ -48,6 +49,9 @@ Options:
 curl -fsSL .../install.sh | bash -s -- --dir ~/bin
 SOLCODE_REPO=myorg/solcode curl -fsSL .../install.sh | bash
 
+# install the CGO + robotgo build (desktop automation; see Computer Use below)
+curl -fsSL .../install.sh | bash -s -- --computeruse
+
 # skip automatic PATH update
 curl -fsSL .../install.sh | bash -s -- --no-path
 
@@ -57,6 +61,7 @@ curl -fsSL .../install.sh | bash -s -- --version v0.1.0
 
 ```powershell
 & .\scripts\install.ps1 -InstallDir "$env:USERPROFILE\bin"
+# & .\scripts\install.ps1 -ComputerUse   # CGO + robotgo build
 # & .\scripts\install.ps1 -NoPath
 # & .\scripts\install.ps1 -Version v0.1.0
 ```
@@ -151,6 +156,46 @@ Config auto-discovery looks for `~/.solcode/settings.json`, `~/.solcode/settings
 ```
 
 Env fallbacks: `OPENAI_API_KEY`, `OPENAI_IMAGE_BASE_URL` / `OPENAI_BASE_URL`. Use `"enabled": false` to hide tools. Default save dir: `<workdir>/.solcode/images/`.
+
+### Computer Use (optional)
+
+Desktop screenshot / mouse / keyboard automation via [robotgo](https://github.com/go-vgo/robotgo). Off by default. Enable in settings:
+
+```json
+{
+  "computer_use": {
+    "enabled": true
+  }
+}
+```
+
+Then rebuild with CGO and the build tag (Windows needs MinGW/gcc):
+
+```bash
+CGO_ENABLED=1 go build -tags computeruse -o solcode ./cmd/solcode
+```
+
+**Prebuilt asset:** CI publishes a CGO variant alongside the default binaries:
+
+```
+solcode_<version>_<os>_<arch>_computeruse.tar.gz   # .zip on Windows
+```
+
+Install it directly with `install.sh --computeruse` or `install.ps1 -ComputerUse`.
+CI currently builds this variant for **linux/windows/darwin amd64+arm64**; the
+ARM and Intel-macOS legs are best-effort. Other platforms need a local build with
+a native toolchain (MinGW-w64 on Windows, X11 dev libs on Linux, Xcode CLT on
+macOS).
+
+On macOS the first screenshot/input call triggers the system prompts for
+**Screen Recording** and **Accessibility**; grant them in System Settings →
+Privacy & Security, then restart the terminal.
+
+Without the tag (or the `_computeruse` asset), enabling the flag still registers
+the tool, but invocations return a rebuild error. When enabled, solcode also
+loads the bundled **`computer-use`** skill (`/computer-use` or Skill tool).
+`ComputerUse` is **not** a core tool; after the skill runs it becomes sticky for
+the session (or discover it with ToolSearch).
 
 ### Project rules
 

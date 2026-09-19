@@ -58,6 +58,29 @@ func TestSelectToolsIncludesSessionMemory(t *testing.T) {
 	}
 }
 
+func TestSelectToolsExcludesComputerUseFromCore(t *testing.T) {
+	all := []tool.Tool{
+		&stubTool{name: tool.ComputerUseToolName, desc: "desktop screenshot mouse keyboard computer use"},
+		&stubTool{name: tool.BashToolName, desc: "run shell commands"},
+	}
+	selected := namesOf(SelectToolsForTurn(all, nil, "", nil))
+	if selected[tool.ComputerUseToolName] {
+		t.Fatal("ComputerUse must not be a core tool")
+	}
+	if !selected[tool.BashToolName] {
+		t.Fatal("Bash should remain core")
+	}
+	// Capability match / sticky should still surface it.
+	selected = namesOf(SelectToolsForTurn(all, nil, "take a desktop screenshot and click", nil))
+	if !selected[tool.ComputerUseToolName] {
+		t.Fatal("ComputerUse should match desktop screenshot query")
+	}
+	selected = namesOf(SelectToolsForTurn(all, nil, "", map[string]bool{tool.ComputerUseToolName: true}))
+	if !selected[tool.ComputerUseToolName] {
+		t.Fatal("ComputerUse should be sticky-enabled")
+	}
+}
+
 func sampleTools() []tool.Tool {
 	return []tool.Tool{
 		&stubTool{name: tool.AskUserToolName, desc: "ask the user"},

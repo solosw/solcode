@@ -25,6 +25,8 @@ INSTALL_DIR="${SOLCODE_INSTALL_DIR:-${HOME}/.local/bin}"
 BINARY_NAME="solcode"
 GITHUB_BASE="${GITHUB_BASE:-https://github.com}"
 NO_PATH=0
+# When 1, prefer the CGO + robotgo asset (solcode_<ver>_<os>_<arch>_computeruse.<ext>).
+COMPUTER_USE="${SOLCODE_COMPUTER_USE:-0}"
 
 usage() {
   cat <<'EOF'
@@ -34,12 +36,18 @@ Options:
   --version TAG   Release tag (default: master, or $SOLCODE_VERSION)
   --dir PATH      Install directory (default: ~/.local/bin)
   --repo OWNER/NAME
+  --computeruse   Install the CGO + robotgo build (desktop automation)
   --no-path       Do not modify shell config / PATH
   --help
 
 Notes:
   - Default channel is "master" (rolling build from the master branch).
   - There is no "latest" channel; "latest" is treated as "master".
+  - --computeruse downloads the *_computeruse asset, which is only published for
+    platforms CI can build with CGO (currently linux/windows/darwin amd64+arm64;
+    the ARM and Intel-macOS legs are best-effort).
+    You still must set "computer_use": {"enabled": true} in settings.
+    On macOS, grant Screen Recording and Accessibility permissions on first use.
   - PATH is updated automatically for the current shell and common rc files.
   - Pin a semver tag with --version vX.Y.Z if you publish versioned releases.
 EOF
@@ -58,6 +66,10 @@ while [[ $# -gt 0 ]]; do
     --repo)
       REPO="${2:?missing repo}"
       shift 2
+      ;;
+    --computeruse|--computer-use)
+      COMPUTER_USE=1
+      shift
       ;;
     --no-path)
       NO_PATH=1
@@ -175,6 +187,10 @@ fi
 
 ASSET="solcode_${ASSET_VERSION}_${OS}_${ARCH}.${EXT}"
 ALT_ASSET="solcode_${ASSET_VERSION#v}_${OS}_${ARCH}.${EXT}"
+if [[ "$COMPUTER_USE" == "1" ]]; then
+  ASSET="solcode_${ASSET_VERSION}_${OS}_${ARCH}_computeruse.${EXT}"
+  ALT_ASSET="solcode_${ASSET_VERSION#v}_${OS}_${ARCH}_computeruse.${EXT}"
+fi
 
 TMPDIR="$(mktemp -d)"
 cleanup() { rm -rf "$TMPDIR"; }
@@ -195,6 +211,9 @@ download_asset() {
 echo "Channel/tag: ${TAG}"
 echo "Repo:        ${REPO}"
 echo "Target:      ${OS}/${ARCH}"
+if [[ "$COMPUTER_USE" == "1" ]]; then
+  echo "Flavor:      computer-use (CGO + robotgo)"
+fi
 
 ARCHIVE=""
 if ARCHIVE="$(download_asset "$ASSET")"; then
@@ -208,6 +227,10 @@ else
   echo "tag:   ${TAG}" >&2
   echo "repo:  ${REPO}" >&2
   echo >&2
+  if [[ "$COMPUTER_USE" == "1" ]]; then
+    echo "hint: the *_computeruse asset is only published for platforms CI can" >&2
+    echo "      build with CGO (currently linux/windows/darwin amd64+arm64)." >&2
+  fi
   echo "hint: push to master so CI publishes the rolling \"master\" release," >&2
   echo "      or pass --version <tag> for a versioned release." >&2
   exit 1

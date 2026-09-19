@@ -101,6 +101,34 @@ func loadImage(path string) (ImageAttachment, error) {
 	return att, nil
 }
 
+// OptimizeImage converts an in-memory image into a vision-ready attachment
+// (resized/re-encoded like LoadImage).
+func OptimizeImage(img image.Image) (ImageAttachment, error) {
+	if img == nil {
+		return ImageAttachment{}, fmt.Errorf("image is nil")
+	}
+	pngBytes, err := encodePNG(img)
+	if err != nil {
+		return ImageAttachment{}, err
+	}
+	optimized, err := optimizeImage(pngBytes, "image/png")
+	if err != nil {
+		return ImageAttachment{}, err
+	}
+	return ImageAttachment{
+		MimeType:   optimized.MimeType,
+		Data:       optimized.Data,
+		Width:      optimized.Width,
+		Height:     optimized.Height,
+		OrigWidth:  optimized.OrigWidth,
+		OrigHeight: optimized.OrigHeight,
+		OrigBytes:  len(pngBytes),
+		Bytes:      optimized.Bytes,
+		Tokens:     optimized.Tokens,
+		Optimized:  optimized.Optimized,
+	}, nil
+}
+
 type optimizedImage struct {
 	MimeType   string
 	Data       string

@@ -155,9 +155,19 @@ type Config struct {
 	// Image is an optional OpenAI-compatible Images API (generations + edits),
 	// configured independently from the chat provider.
 	Image ImageConfig `json:"image,omitempty"`
+	// ComputerUse enables desktop screenshot / mouse / keyboard automation
+	// (robotgo). Off by default — opt in via settings.
+	ComputerUse ComputerUseConfig `json:"computer_use,omitempty"`
 
 	Provider  string           `json:"provider,omitempty"`
 	Providers []ProviderConfig `json:"providers,omitempty"`
+}
+
+// ComputerUseConfig gates the ComputerUse tool and bundled computer-use skill.
+// Leave Enabled=false (default) to hide both.
+type ComputerUseConfig struct {
+	// Enabled registers the ComputerUse tool and loads the builtin skill.
+	Enabled bool `json:"enabled,omitempty"`
 }
 
 // ImageConfig configures the OpenAI-format image generation/edit endpoints.
@@ -1572,6 +1582,11 @@ func (c Config) ImageEnabled() bool {
 		return false
 	}
 	return strings.TrimSpace(c.Image.BaseURL) != "" && strings.TrimSpace(c.Image.APIKey) != ""
+}
+
+// ComputerUseEnabled reports whether desktop automation tools/skills register.
+func (c Config) ComputerUseEnabled() bool {
+	return c.ComputerUse.Enabled
 }
 
 func cleanAndExpandPaths(paths []string) []string {

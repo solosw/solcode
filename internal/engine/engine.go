@@ -422,6 +422,11 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 					if root := e.config.SkillRootsByName[name]; root != "" {
 						activeSkillRoot = root
 					}
+					// Bundled computer-use skill documents a non-core tool; sticky-
+					// enable it so subsequent turns include the ComputerUse schema.
+					if name == "computer-use" {
+						enabledTools[tool.ComputerUseToolName] = true
+					}
 				}
 			}
 			// Keep tools the model actually used (and ToolSearch hits) sticky so

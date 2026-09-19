@@ -16,6 +16,7 @@ import (
 	"github.com/solosw/solcode/internal/agent"
 	cpanthropic "github.com/solosw/solcode/internal/anthropic"
 	"github.com/solosw/solcode/internal/changegraph"
+	"github.com/solosw/solcode/internal/computeruse"
 	"github.com/solosw/solcode/internal/config"
 	"github.com/solosw/solcode/internal/engine"
 	"github.com/solosw/solcode/internal/hook"
@@ -26,6 +27,7 @@ import (
 	"github.com/solosw/solcode/internal/sandbox"
 	"github.com/solosw/solcode/internal/session"
 	"github.com/solosw/solcode/internal/skill"
+	"github.com/solosw/solcode/internal/skill/builtin"
 	"github.com/solosw/solcode/internal/tool"
 	"github.com/solosw/solcode/internal/workflow"
 )
@@ -91,7 +93,7 @@ type options struct {
 func buildToolState(cfg config.Config, mcpFactory mcp.ClientFactory) (*tool.Registry, *skill.Registry, *mcp.Registry, *lsp.Manager, error) {
 	registry := tool.NewRegistry()
 	lspManager := newLSPManager(cfg)
-	registerBuiltins(registry, lspManager, cfg.Sandbox, cfg.Image, cfg.ImageEnabled())
+	registerBuiltins(registry, lspManager, cfg.Sandbox, cfg.Image, cfg.ImageEnabled(), cfg.ComputerUseEnabled())
 
 	skillRegistry := loadSkills(cfg)
 	if defs := skillRegistry.All(); len(defs) > 0 {
@@ -3030,7 +3032,7 @@ func newFileChangeRecorder(store *changegraph.Store) func(context.Context, *tool
 	}
 }
 
-func registerBuiltins(registry *tool.Registry, lspManager *lsp.Manager, sandboxPolicy sandbox.Policy, imageCfg config.ImageConfig, imageEnabled bool) {
+func registerBuiltins(registry *tool.Registry, lspManager *lsp.Manager, sandboxPolicy sandbox.Policy, imageCfg config.ImageConfig, imageEnabled bool, computerUseEnabled bool) {
 	tools := []tool.Tool{
 		tool.NewAskUserTool(),
 		tool.NewBashToolWithSandbox(sandboxPolicy),
@@ -3062,6 +3064,10 @@ func registerBuiltins(registry *tool.Registry, lspManager *lsp.Manager, sandboxP
 			OutputDir:  imageCfg.OutputDir,
 		}
 		tools = append(tools, tool.NewImageGenerateTool(api), tool.NewImageEditTool(api))
+	}
+	if computerUseEnabled {
+		// Without -tags computeruse the driver is a stub that returns a rebuild error.
+		tools = append(tools, tool.NewComputerUseTool(computeruse.NewRobotgoDriver()))
 	}
 	if lspManager != nil {
 		tools = append(tools, tool.NewLSPTool(lspManager))
@@ -3270,6 +3276,16 @@ func loadSkills(cfg config.Config) *skill.Registry {
 				continue
 			}
 			registry.Add(def)
+		}
+	}
+	if cfg.ComputerUseEnabled() {
+		if len(cfg.Skills.Enabled) == 0 || contains(cfg.Skills.Enabled, builtin.ComputerUseSkillName) {
+			if !contains(cfg.Skills.Disabled, builtin.ComputerUseSkillName) {
+				cacheDir := filepath.Join(config.UserConfigDir(), "builtin-skills")
+				if def, err := builtin.MaterializeComputerUseSkill(cacheDir); err == nil {
+					registry.Add(def)
+				}
+			}
 		}
 	}
 	return registry

@@ -2,6 +2,10 @@ name: Release (optional version tags)
 
 # Optional semver releases. The default install channel is the rolling
 # "master" release from publish-master.yml — not "latest".
+#
+# Two build flavors ship side by side:
+#   solcode_<ver>_<os>_<arch>.<pack>              default (CGO disabled, stub driver)
+#   solcode_<ver>_<os>_<arch>_computeruse.<pack>  CGO + robotgo desktop automation
 
 on:
   push:
@@ -12,7 +16,7 @@ permissions:
   contents: write
 
 jobs:
-  release:
+  build-default:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -27,6 +31,113 @@ jobs:
         run: |
           chmod +x scripts/build-release.sh
           ./scripts/build-release.sh "${GITHUB_REF_NAME}"
+
+      - name: Upload default assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-default
+          path: dist/*
+          if-no-files-found: error
+
+  build-computeruse:
+    # CGO + robotgo must be built on a native toolchain per target.
+    # ARM runners are newer and marked experimental: if one is unavailable or
+    # lacks a toolchain, the release still publishes the other assets.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            pack: tar.gz
+          - runner: windows-latest
+            goos: windows
+            goarch: amd64
+            pack: zip
+          - runner: macos-14
+            goos: darwin
+            goarch: arm64
+            pack: tar.gz
+          - runner: ubuntu-24.04-arm
+            goos: linux
+            goarch: arm64
+            pack: tar.gz
+            experimental: true
+          - runner: windows-11-arm
+            goos: windows
+            goarch: arm64
+            pack: zip
+            experimental: true
+          - runner: macos-15-intel
+            goos: darwin
+            goarch: amd64
+            pack: tar.gz
+            experimental: true
+    runs-on: ${{ matrix.runner }}
+    continue-on-error: ${{ matrix.experimental || false }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install Linux GUI libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc libc6-dev pkg-config zip \
+            libx11-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libxtst-dev libxinerama-dev libxrandr-dev libxcursor-dev \
+            libpng-dev
+
+      - name: Verify C toolchain
+        shell: bash
+        run: |
+          # macOS exposes clang as cc/gcc via the Xcode shim; Linux/Windows use gcc.
+          if command -v cc >/dev/null 2>&1; then
+            cc --version
+          elif command -v gcc >/dev/null 2>&1; then
+            gcc --version
+          else
+            echo "no C compiler found (cc/gcc)" >&2
+            exit 1
+          fi
+
+      - name: Build computer-use asset
+        shell: bash
+        run: |
+          chmod +x scripts/build-computeruse.sh
+          ./scripts/build-computeruse.sh "${GITHUB_REF_NAME}" "${{ matrix.goos }}" "${{ matrix.goarch }}" "${{ matrix.pack }}"
+
+      - name: Upload computer-use asset
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-computeruse-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*_computeruse.*
+          if-no-files-found: error
+
+  publish:
+    needs: [build-default, build-computeruse]
+    if: needs.build-default.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all assets
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Regenerate checksums
+        run: |
+          cd dist
+          rm -f checksums.txt
+          sha256sum solcode_* > checksums.txt
+          ls -la
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
