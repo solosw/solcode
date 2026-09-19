@@ -29,16 +29,22 @@ func (RobotgoDriver) ScreenSize() (int, int, error) {
 }
 
 func (RobotgoDriver) Capture(x, y, width, height int) (image.Image, error) {
+	var (
+		img    image.Image
+		err    error
+		region string
+	)
 	if width <= 0 || height <= 0 {
-		img := robotgo.CaptureImg()
-		if img == nil {
-			return nil, fmt.Errorf("screenshot capture failed")
-		}
-		return img, nil
+		img, err = robotgo.CaptureImg()
+	} else {
+		img, err = robotgo.CaptureImg(x, y, width, height)
+		region = fmt.Sprintf(" for region %d,%d %dx%d", x, y, width, height)
 	}
-	img := robotgo.CaptureImg(x, y, width, height)
+	if err != nil {
+		return nil, fmt.Errorf("screenshot capture failed%s: %w", region, err)
+	}
 	if img == nil {
-		return nil, fmt.Errorf("screenshot capture failed for region %d,%d %dx%d", x, y, width, height)
+		return nil, fmt.Errorf("screenshot capture failed%s", region)
 	}
 	return img, nil
 }
@@ -55,8 +61,7 @@ func (d RobotgoDriver) Click(button string, x, y int) error {
 			return err
 		}
 	}
-	robotgo.Click(btn)
-	return nil
+	return robotgo.Click(btn)
 }
 
 func (d RobotgoDriver) DoubleClick(button string, x, y int) error {
@@ -66,15 +71,18 @@ func (d RobotgoDriver) DoubleClick(button string, x, y int) error {
 			return err
 		}
 	}
-	robotgo.Click(btn, true)
-	return nil
+	return robotgo.Click(btn, true)
 }
 
 func (RobotgoDriver) Drag(fromX, fromY, toX, toY int) error {
 	robotgo.Move(fromX, fromY)
-	robotgo.MouseToggle("down", "left")
+	if err := robotgo.Toggle("left"); err != nil {
+		return err
+	}
 	robotgo.MoveSmooth(toX, toY)
-	robotgo.MouseToggle("up", "left")
+	if err := robotgo.Toggle("left", "up"); err != nil {
+		return err
+	}
 	return nil
 }
 
