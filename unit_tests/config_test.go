@@ -85,6 +85,26 @@ func TestLoadProxySettings(t *testing.T) {
 	}
 }
 
+func TestLoadComputerUseSettings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	writeFile(t, path, `{
+		"computer_use": {
+			"enabled": true
+		}
+	}`)
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load() = %v", err)
+	}
+	if !cfg.ComputerUse.Enabled {
+		t.Fatalf("ComputerUse.Enabled = false, want true")
+	}
+	if !cfg.ComputerUseEnabled() {
+		t.Fatalf("ComputerUseEnabled() = false, want true")
+	}
+}
+
 func TestLoadCreatesDefaultSettingsOnFirstStart(t *testing.T) {
 	home := filepath.Join(t.TempDir(), "home")
 	project := filepath.Join(t.TempDir(), "project")

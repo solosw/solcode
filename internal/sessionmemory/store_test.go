@@ -145,3 +145,42 @@ func TestReadMissingFileIsEmpty(t *testing.T) {
 		t.Fatalf("list = %#v", list)
 	}
 }
+
+func TestReadForSessionFiltersBySessionID(t *testing.T) {
+	store := NewStore(t.TempDir())
+	ctx := context.Background()
+	base := time.Date(2026, 3, 1, 12, 0, 0, 0, time.Local)
+	for _, entry := range []Entry{
+		{Keywords: []string{"a"}, Summary: "Session A note.", Turn: 0, Time: base, SessionID: "session-a"},
+		{Keywords: []string{"b"}, Summary: "Session B note about rewind.", Turn: 1, Time: base.Add(time.Hour), SessionID: "session-b"},
+		{Keywords: []string{"a", "rewind"}, Summary: "Session A also mentions rewind.", Turn: 2, Time: base.Add(2 * time.Hour), SessionID: "session-a"},
+	} {
+		if _, err := store.Append(ctx, entry); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	recent, err := store.ReadForSession(ctx, "session-a", "", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recent) != 2 || recent[0].Turn != 2 || recent[1].Turn != 0 {
+		t.Fatalf("recent = %#v", recent)
+	}
+
+	hits, err := store.ReadForSession(ctx, "session-b", "rewind", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 1 || hits[0].SessionID != "session-b" {
+		t.Fatalf("hits = %#v", hits)
+	}
+
+	unscoped, err := store.Read(ctx, "rewind", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(unscoped) != 2 {
+		t.Fatalf("unscoped = %#v", unscoped)
+	}
+}

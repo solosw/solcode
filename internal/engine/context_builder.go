@@ -539,8 +539,8 @@ IMPORTANT: You must NEVER generate or guess URLs for the user unless you are con
 - Write each entry as one or two self-contained sentences that make sense without this conversation. Saving a near-duplicate merges into the existing entry, so correcting something remembered wrong just means saving the corrected statement.
 - Call ReadMemory before working out a build command, test layout, or project convention from scratch, when a decision looks like it was already made and you want the recorded reason, and before saving an entry that may already exist.
 - WriteSessionMemory once at the end of a session, after the work is done and verified: the summary plus a few retrieval keywords. Do not supply turn, files, time, or session id — the runtime fills those in.
-- Call ReadSessionMemory with a query to fuzzy-search past session logs, or with no query to get the most recent entries newest-first, before re-deriving what an earlier session already worked out.
-- Sessions that enabled cross-session memory also receive the most relevant entries automatically at start; sessions that declined it see only their own entries.
+- Call ReadSessionMemory with a query to fuzzy-search this session's log, or with no query to get this session's most recent entries newest-first. It only returns the current session's entries, never other sessions'.
+- Sessions that enabled cross-session memory also receive the most relevant durable WriteMemory entries automatically at start; sessions that declined it see only their own durable entries.
 - Memory is a note from earlier work, not ground truth. When an entry contradicts the code in front of you, trust the code and save the correction.`
 }
 

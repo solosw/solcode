@@ -1162,6 +1162,10 @@ func applyJSONConfig(cfg *Config, data []byte) error {
 			if err := json.Unmarshal(value, &cfg.Image); err != nil {
 				return err
 			}
+		case "computer_use":
+			if err := json.Unmarshal(value, &cfg.ComputerUse); err != nil {
+				return err
+			}
 		case "provider":
 			if err := json.Unmarshal(value, &cfg.Provider); err != nil {
 				return err

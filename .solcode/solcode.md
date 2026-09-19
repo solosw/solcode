@@ -49,3 +49,9 @@ Diagnosed remaining computer-use windows/arm64 CI failure as a C-toolchain misma
 - files: .github/workflows/publish-master.yml, .github/workflows/release.yml, README.md, _check_ps1.py, _check_ps_pattern.ps1, _check_yml.py, _headings.py, _parse_ps1.ps1, _scan_arm64.py, _tmp_cleanup.py, internal/computeruse/_cleanup_robotgo.py, internal/computeruse/_copy_robotgo.py, internal/computeruse/_robotgo_api/img.go, internal/computeruse/_robotgo_api/key.go, internal/computeruse/_robotgo_api/robotgo.go, internal/computeruse/_robotgo_api/robotgo_fn_v1.go, internal/computeruse/_robotgo_api/screen.go, internal/computeruse/robotgo.go, probe_zip_fallback.sh, scripts/build-computeruse.sh, scripts/build-release.sh, scripts/setup-windows-arm64-cgo.ps1
 
 Added copy-pasteable quick-install commands for the computer-use build to README.md: bash `curl ... | bash -s -- --computeruse` and PowerShell `& ([scriptblock]::Create((irm <url>))) -ComputerUse` (the scriptblock form is required because `irm | iex` cannot take parameters). Added the snippets in two places: the one-line install block under Quick Start and the Computer Use section's prebuilt-asset part. Verified the PowerShell parameter-binding pattern with a stub script and confirmed the README renders correctly; only README.md changed.
+
+## 2026-09-20 00:06:18 · session session-20260919-235046 · turn 0 · importance 0.80
+- keywords: computer-use, applyjsonconfig, settings.local.json, builtin-skills
+- files: internal/config/config.go, unit_tests/config_test.go
+
+Diagnosed missing computer-use skill: settings.local.json already had computer_use.enabled=true, but applyJSONConfig ignored the computer_use key so ComputerUseEnabled stayed false and loadSkills never materialized ~/.solcode/builtin-skills/computer-use. Fixed by parsing computer_use in applyJSONConfig and added TestLoadComputerUseSettings. User still needs to rebuild/restart solcode for the skill to appear.

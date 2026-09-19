@@ -133,9 +133,15 @@ func (s *Store) Append(ctx context.Context, entry Entry) (Entry, error) {
 	return entry, nil
 }
 
-// Read returns entries newest-first. When query is non-empty, entries are
-// filtered by fuzzy keyword/summary match and ranked by relevance.
+// Read returns entries newest-first. When sessionID is non-empty, only entries
+// for that session are considered. When query is non-empty, entries are filtered
+// by fuzzy keyword/summary match and ranked by relevance.
 func (s *Store) Read(ctx context.Context, query string, limit int) ([]Entry, error) {
+	return s.ReadForSession(ctx, "", query, limit)
+}
+
+// ReadForSession is like Read but restricts results to sessionID when set.
+func (s *Store) ReadForSession(ctx context.Context, sessionID, query string, limit int) ([]Entry, error) {
 	if s == nil || s.path == "" {
 		return nil, nil
 	}
@@ -149,6 +155,7 @@ func (s *Store) Read(ctx context.Context, query string, limit int) ([]Entry, err
 	if err != nil {
 		return nil, err
 	}
+	entries = filterEntriesBySession(entries, sessionID)
 	// List is oldest-first; recent reads want newest-first.
 	reverseEntries(entries)
 
@@ -202,6 +209,20 @@ func (s *Store) Read(ctx context.Context, query string, limit int) ([]Entry, err
 		out = append(out, hits[i].entry)
 	}
 	return out, nil
+}
+
+func filterEntriesBySession(entries []Entry, sessionID string) []Entry {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return entries
+	}
+	out := make([]Entry, 0, len(entries))
+	for _, entry := range entries {
+		if strings.TrimSpace(entry.SessionID) == sessionID {
+			out = append(out, entry)
+		}
+	}
+	return out
 }
 
 // List returns all entries in file order (oldest-first).

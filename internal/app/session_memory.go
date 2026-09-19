@@ -72,12 +72,20 @@ func (a *App) WriteSessionMemory(ctx context.Context, req tool.SessionMemoryWrit
 }
 
 // ReadSessionMemory implements tool.SessionMemoryReader.
+// Results are scoped to the current session id only — never other sessions.
 func (a *App) ReadSessionMemory(ctx context.Context, req tool.SessionMemoryReadRequest) (tool.SessionMemoryReadResult, error) {
 	store := a.sessionMemoryStore(req.WorkDir)
 	if store == nil {
 		return tool.SessionMemoryReadResult{}, fmt.Errorf("work directory is unknown")
 	}
-	entries, err := store.Read(ctx, req.Query, req.Limit)
+	sessionID := strings.TrimSpace(req.SessionID)
+	if sessionID == "" {
+		sessionID = strings.TrimSpace(a.Config.Session.DefaultSession)
+	}
+	if sessionID == "" {
+		sessionID = "main"
+	}
+	entries, err := store.ReadForSession(ctx, sessionID, req.Query, req.Limit)
 	if err != nil {
 		return tool.SessionMemoryReadResult{}, err
 	}

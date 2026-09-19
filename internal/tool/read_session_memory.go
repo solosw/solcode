@@ -71,13 +71,16 @@ Two ways to use it:
   "build command".
 - Leave the query empty to get the most recent memories, newest first.
 
+Results are always scoped to the current session id. Other sessions' entries in
+the same solcode.md file are not returned.
+
 When to use this vs ReadMemory:
-- ReadSessionMemory (this tool) — a chronological log of what earlier sessions did:
-  "has someone worked on this area before, and what did they change or decide?"
+- ReadSessionMemory (this tool) — a chronological log of what this session did:
+  decisions, dead ends, and unfinished work recorded for the current session.
 - ReadMemory — durable facts saved with WriteMemory: preferences, project rules,
   verified commands. Those are also injected automatically at session start.
 
-Reach for this before re-deriving what an earlier session already worked out.
+Reach for this before re-deriving what this session already worked out.
 Memories are notes, not ground truth: when one contradicts code you just read,
 trust the code.`
 }

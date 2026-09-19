@@ -54,6 +54,7 @@ func TestSessionMemoryToolsDistinguishFromGlobalMemory(t *testing.T) {
 		"chronological log",
 		"newest first",
 		".solcode/solcode.md",
+		"current session",
 	} {
 		if !strings.Contains(readDesc, want) {
 			t.Fatalf("ReadSessionMemory description missing %q: %s", want, readDesc)

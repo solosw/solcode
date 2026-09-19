@@ -76,15 +76,15 @@ func TestReadSessionMemoryFuzzy(t *testing.T) {
 	}}
 
 	for _, entry := range []tool.SessionMemoryWriteRequest{
-		{Keywords: []string{"checkpoint"}, Summary: "Checkpoints restore code only.", WorkDir: work},
-		{Keywords: []string{"mcp"}, Summary: "MCP uses STREAMABLE_HTTP.", WorkDir: work},
+		{Keywords: []string{"checkpoint"}, Summary: "Checkpoints restore code only.", WorkDir: work, SessionID: "main"},
+		{Keywords: []string{"mcp"}, Summary: "MCP uses STREAMABLE_HTTP.", WorkDir: work, SessionID: "main"},
 	} {
 		if _, err := a.WriteSessionMemory(context.Background(), entry); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	hits, err := a.ReadSessionMemory(context.Background(), tool.SessionMemoryReadRequest{Query: "checkpoint", Limit: 5, WorkDir: work})
+	hits, err := a.ReadSessionMemory(context.Background(), tool.SessionMemoryReadRequest{Query: "checkpoint", Limit: 5, WorkDir: work, SessionID: "main"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,11 +92,67 @@ func TestReadSessionMemoryFuzzy(t *testing.T) {
 		t.Fatalf("hits = %#v", hits.Entries)
 	}
 
-	recent, err := a.ReadSessionMemory(context.Background(), tool.SessionMemoryReadRequest{Limit: 1, WorkDir: work})
+	recent, err := a.ReadSessionMemory(context.Background(), tool.SessionMemoryReadRequest{Limit: 1, WorkDir: work, SessionID: "main"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(recent.Entries) != 1 || !strings.Contains(recent.Entries[0].Summary, "MCP") {
 		t.Fatalf("recent = %#v", recent.Entries)
+	}
+}
+
+func TestReadSessionMemoryScopedToCurrentSession(t *testing.T) {
+	work := t.TempDir()
+	a := &App{Config: config.Config{
+		WorkDir: work,
+		Session: config.SessionConfig{Dir: t.TempDir(), DefaultSession: "session-b"},
+	}}
+
+	if _, err := a.WriteSessionMemory(context.Background(), tool.SessionMemoryWriteRequest{
+		Keywords:  []string{"other"},
+		Summary:   "Other session recorded a computer-use fix.",
+		WorkDir:   work,
+		SessionID: "session-a",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.WriteSessionMemory(context.Background(), tool.SessionMemoryWriteRequest{
+		Keywords:  []string{"current"},
+		Summary:   "Current session recorded session-memory scoping.",
+		WorkDir:   work,
+		SessionID: "session-b",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	hits, err := a.ReadSessionMemory(context.Background(), tool.SessionMemoryReadRequest{
+		Query:     "session",
+		Limit:     5,
+		WorkDir:   work,
+		SessionID: "session-b",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits.Entries) != 1 {
+		t.Fatalf("hits = %#v", hits.Entries)
+	}
+	if hits.Entries[0].SessionID != "session-b" {
+		t.Fatalf("session = %q", hits.Entries[0].SessionID)
+	}
+	if !strings.Contains(hits.Entries[0].Summary, "session-memory scoping") {
+		t.Fatalf("summary = %q", hits.Entries[0].Summary)
+	}
+
+	// Empty SessionID falls back to Config.Session.DefaultSession.
+	defaultHits, err := a.ReadSessionMemory(context.Background(), tool.SessionMemoryReadRequest{
+		Limit:   5,
+		WorkDir: work,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(defaultHits.Entries) != 1 || defaultHits.Entries[0].SessionID != "session-b" {
+		t.Fatalf("defaultHits = %#v", defaultHits.Entries)
 	}
 }
