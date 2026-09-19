@@ -29,6 +29,18 @@ export CGO_ENABLED=0
 BIN_VERSION="${LDFLAGS_VERSION:-$VERSION}"
 LDFLAGS="-s -w -X main.version=${BIN_VERSION}"
 
+# Translate a POSIX (MSYS/Cygwin) path into a native path for helpers that are
+# not path-translation aware, e.g. a native Windows python.exe/powershell.exe
+# running under Git Bash, which would read "/d/a/x" as "C:\d\a\x".
+# No-op on Linux/macOS.
+native_path() {
+  if command -v cygpath >/dev/null 2>&1; then
+    cygpath -w "$1"
+  else
+    printf '%s' "$1"
+  fi
+}
+
 targets=(
   "linux amd64 tar.gz"
   "linux arm64 tar.gz"
@@ -64,13 +76,15 @@ for spec in "${targets[@]}"; do
       else
         # Fallback: PowerShell on Windows Git Bash, or python
         if command -v powershell.exe >/dev/null 2>&1; then
-          powershell.exe -NoProfile -Command "Compress-Archive -Path '$out_name' -DestinationPath '$(cygpath -w "$artifact" 2>/dev/null || echo "$artifact")' -Force"
+          powershell.exe -NoProfile -Command "Compress-Archive -Path '$(native_path "$stage/$out_name")' -DestinationPath '$(native_path "$artifact")' -Force"
         else
-          python - <<PY
+          python - "$(native_path "$artifact")" "$out_name" <<'PY'
+import sys
 import zipfile
-z=zipfile.ZipFile(r'''${artifact}''','w',zipfile.ZIP_DEFLATED)
-z.write(r'''${out_name}''', arcname=r'''${out_name}''')
-z.close()
+
+artifact, out_name = sys.argv[1], sys.argv[2]
+with zipfile.ZipFile(artifact, "w", zipfile.ZIP_DEFLATED) as z:
+    z.write(out_name, arcname=out_name)
 PY
         fi
       fi

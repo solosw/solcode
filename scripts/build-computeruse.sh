@@ -45,6 +45,17 @@ export GOARCH="$GOARCH_TARGET"
 BIN_VERSION="${LDFLAGS_VERSION:-$VERSION}"
 LDFLAGS="-s -w -X main.version=${BIN_VERSION}"
 
+# Translate a POSIX (MSYS/Cygwin) path into a native path for helpers that are
+# not path-translation aware, e.g. a native Windows python.exe running under Git
+# Bash, which would read "/d/a/x" as "C:\d\a\x". No-op on Linux/macOS.
+native_path() {
+  if command -v cygpath >/dev/null 2>&1; then
+    cygpath -w "$1"
+  else
+    printf '%s' "$1"
+  fi
+}
+
 out_name="solcode"
 [[ "$GOOS_TARGET" == "windows" ]] && out_name="solcode.exe"
 
@@ -62,11 +73,15 @@ go build -tags computeruse -trimpath -ldflags="$LDFLAGS" -o "${stage}/${out_name
     if command -v zip >/dev/null 2>&1; then
       zip -q "${artifact}" "$out_name"
     else
-      python - <<PY
+      # Pass paths via argv (a native python.exe cannot resolve MSYS paths that
+      # are interpolated into the script text).
+      python - "$(native_path "$artifact")" "$out_name" <<'PY'
+import sys
 import zipfile
-z = zipfile.ZipFile(r'''${artifact}''', 'w', zipfile.ZIP_DEFLATED)
-z.write(r'''${out_name}''', arcname=r'''${out_name}''')
-z.close()
+
+artifact, out_name = sys.argv[1], sys.argv[2]
+with zipfile.ZipFile(artifact, "w", zipfile.ZIP_DEFLATED) as z:
+    z.write(out_name, arcname=out_name)
 PY
     fi
   else
