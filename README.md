@@ -42,6 +42,23 @@ curl -fsSL https://raw.githubusercontent.com/solosw/solcode/master/scripts/insta
 irm https://raw.githubusercontent.com/solosw/solcode/master/scripts/install.ps1 | iex
 ```
 
+**Computer Use build (CGO + robotgo)** — same one-liner, plus the
+`--computeruse` flag. Use this if you want the `ComputerUse` desktop-automation
+tool without a local toolchain:
+
+```bash
+# Linux / macOS
+curl -fsSL https://raw.githubusercontent.com/solosw/solcode/master/scripts/install.sh | bash -s -- --computeruse
+```
+
+```powershell
+# Windows (PowerShell)
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/solosw/solcode/master/scripts/install.ps1))) -ComputerUse
+```
+
+After installing, enable it in settings (`"computer_use": {"enabled": true}`) —
+see [Computer Use](#computer-use-optional). Then use the `/computer-use` skill.
+
 Options:
 
 ```bash
@@ -181,7 +198,18 @@ CGO_ENABLED=1 go build -tags computeruse -o solcode ./cmd/solcode
 solcode_<version>_<os>_<arch>_computeruse.tar.gz   # .zip on Windows
 ```
 
-Install it directly with `install.sh --computeruse` or `install.ps1 -ComputerUse`.
+Install that asset without a local toolchain:
+
+```bash
+# Linux / macOS
+curl -fsSL https://raw.githubusercontent.com/solosw/solcode/master/scripts/install.sh | bash -s -- --computeruse
+```
+
+```powershell
+# Windows (PowerShell)
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/solosw/solcode/master/scripts/install.ps1))) -ComputerUse
+```
+
 CI currently builds this variant for **linux/windows/darwin amd64+arm64**; the
 ARM and Intel-macOS legs are best-effort. Other platforms need a local build with
 a native toolchain (MinGW-w64 on Windows, X11 dev libs on Linux, Xcode CLT on
