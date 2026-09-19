@@ -37,10 +37,35 @@ esac
 DIST="${ROOT}/dist"
 mkdir -p "$DIST"
 
-# robotgo requires CGO; the runner must provide the native toolchain.
+# robotgo requires CGO; the runner must provide a *native* toolchain whose
+# assembler matches GOARCH. GitHub's windows-11-arm image ships an emulated
+# x86_64 MinGW gcc that cannot assemble runtime/cgo/gcc_arm64.S — CI installs
+# llvm-mingw (scripts/setup-windows-arm64-cgo.ps1) and exports CC first.
 export CGO_ENABLED=1
 export GOOS="$GOOS_TARGET"
 export GOARCH="$GOARCH_TARGET"
+
+cc_bin="${CC:-}"
+if [[ -z "$cc_bin" ]]; then
+  if command -v cc >/dev/null 2>&1; then
+    cc_bin=cc
+  elif command -v gcc >/dev/null 2>&1; then
+    cc_bin=gcc
+  fi
+fi
+cc_machine=""
+if [[ -n "$cc_bin" ]]; then
+  cc_machine="$("$cc_bin" -dumpmachine 2>/dev/null || true)"
+  echo "C compiler: $cc_bin (${cc_machine:-unknown})"
+fi
+if [[ "$GOOS_TARGET" == "windows" && "$GOARCH_TARGET" == "arm64" ]]; then
+  if [[ "$cc_machine" != *aarch64* && "$cc_machine" != *arm64* ]]; then
+    echo "windows/arm64 CGO needs an aarch64 MinGW toolchain (got '${cc_machine:-none}')." >&2
+    echo "Install llvm-mingw and export CC=aarch64-w64-mingw32-clang" >&2
+    echo "(scripts/setup-windows-arm64-cgo.ps1)." >&2
+    exit 1
+  fi
+fi
 
 BIN_VERSION="${LDFLAGS_VERSION:-$VERSION}"
 LDFLAGS="-s -w -X main.version=${BIN_VERSION}"
