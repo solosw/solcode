@@ -54,27 +54,74 @@ func (r *Router) topN() int {
 	return r.TopN
 }
 
+// maxScreenedCandidates bounds how many candidates one screening request may
+// contain. Each candidate is a question, so this caps both token cost and
+// latency, and it caps how much attention any single name can receive.
+const maxScreenedCandidates = 24
+
 // RouteTools picks tools that lexical matching missed. It returns tool names to
 // make sticky for this run. A nil result means "no opinion" — the caller keeps
 // the lexical selection untouched.
+//
+// Screening uses one Noul per candidate rather than a single Choice: a request
+// can legitimately need several tools at once ("refactor this and run the
+// tests"), and a Choice would force a single winner and drop the rest. Because
+// each candidate is judged against the same state in one parallel batch, the
+// cost is one round trip regardless of candidate count.
 func (r *Router) RouteTools(ctx context.Context, query string, candidates []tool.Tool) []string {
 	query = strings.TrimSpace(query)
 	if !r.enabled() || query == "" || len(candidates) == 0 {
 		return nil
 	}
-	ranked := r.Decider.Rank(ctx, query,
-		"Which capability would best accomplish what `state` asks for? Choose the single best match, or none if no tool fits.",
-		toolCandidates(candidates), r.topN())
-	if len(ranked) == 0 {
+	// Prefer the strongest lexical candidates when there are more than the
+	// screening budget, so the batch stays bounded without discarding the most
+	// plausible options.
+	ordered := rankByLexical(query, candidates)
+	if len(ordered) > maxScreenedCandidates {
+		ordered = ordered[:maxScreenedCandidates]
+	}
+	screened := r.Decider.Screen(ctx, query,
+		"Would this capability help accomplish what `state` asks for?",
+		screenedCandidates(ordered), r.minConfidence(), 0)
+	if len(screened) == 0 {
 		return nil
 	}
-	// `none` is a real answer: the strongest signal was that nothing fits, so
-	// stop rather than falling through to a runner-up. It still has to clear the
-	// floor, otherwise a barely-leading "none" would suppress a usable tool.
-	if ranked[0].Name == routerNoneOption && ranked[0].Probability >= r.minConfidence() {
-		return nil
+	out := make([]string, 0, len(screened))
+	for _, candidate := range screened {
+		out = append(out, candidate.Name)
 	}
-	return r.accepted(ranked)
+	return out
+}
+
+// rankByLexical orders candidates by lexical relevance to the query, keeping
+// ties in stable name order. It is only used to choose which candidates get
+// screened when there are more than the budget allows.
+func rankByLexical(query string, candidates []tool.Tool) []tool.Tool {
+	type scored struct {
+		tool  tool.Tool
+		score int
+	}
+	items := make([]scored, 0, len(candidates))
+	for _, candidate := range candidates {
+		if candidate == nil {
+			continue
+		}
+		items = append(items, scored{
+			tool:  candidate,
+			score: tool.CapabilityScore(query, candidate.Name(), candidate.Description()),
+		})
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		if items[i].score != items[j].score {
+			return items[i].score > items[j].score
+		}
+		return items[i].tool.Name() < items[j].tool.Name()
+	})
+	out := make([]tool.Tool, 0, len(items))
+	for _, item := range items {
+		out = append(out, item.tool)
+	}
+	return out
 }
 
 // accepted applies the confidence floor to a ranked list, ordered by
@@ -121,10 +168,10 @@ func (r *Router) RouteSkills(ctx context.Context, query string, skills []SkillIn
 	}
 	candidates = append(candidates, systemone.Candidate{
 		Name:        routerNoneOption,
-		Description: "No listed skill matches; handle the request with ordinary tools",
+		Description: "No listed skill confidently fits; let the model choose for itself",
 	})
 	ranked := r.Decider.Rank(ctx, query,
-		"Which skill should handle what `state` asks for? Choose none if no skill fits.",
+		"Which skill should handle what `state` asks for? Choose none if none of the listed skills confidently fits.",
 		candidates, 1)
 	if len(ranked) == 0 || ranked[0].Name == routerNoneOption {
 		return ""
@@ -136,9 +183,39 @@ func (r *Router) RouteSkills(ctx context.Context, query string, skills []SkillIn
 	return accepted[0]
 }
 
+// RouterNoneSkill is the explicit "no skill fits" answer.
+//
+// It is a real choice, not a failure: the router is telling us that no listed
+// skill is confidently right, so the run should hand the decision back to the
+// model with the full catalog and do no force-loading.
+const RouterNoneSkill = "none"
+
 // routerNoneOption gives the model an explicit way to decline. Without it a
 // Choice is forced to pick something, and every request would route.
-const routerNoneOption = "none"
+const routerNoneOption = RouterNoneSkill
+
+// screenedCandidates converts tools to screening candidates.
+//
+// No "none" option is added: screening judges each capability independently, so
+// "none of them" is expressed by every probability falling below the floor
+// rather than by a sentinel the model has to pick.
+func screenedCandidates(candidates []tool.Tool) []systemone.Candidate {
+	out := make([]systemone.Candidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		if candidate == nil {
+			continue
+		}
+		name := strings.TrimSpace(candidate.Name())
+		if name == "" || hiddenFromModel[name] {
+			continue
+		}
+		out = append(out, systemone.Candidate{
+			Name:        name,
+			Description: strings.TrimSpace(candidate.Description()),
+		})
+	}
+	return out
+}
 
 func toolCandidates(candidates []tool.Tool) []systemone.Candidate {
 	out := make([]systemone.Candidate, 0, len(candidates)+1)

@@ -286,9 +286,16 @@ one per prompt:
 | `review` | Critique a diff: correctness, regressions, missing cases, scope creep. |
 
 They are materialized to `~/.solcode/builtin-skills/<name>/` so each skill's
-`Root` is a real path. Jev advertises only the chosen skill for the turn; when
-Jev has no confident match, the full catalog is shown and the model picks. These
-skills are **not** registered without Jev routing, and `skills.disabled` /
+`Root` is a real path. When Jev selects a skill it is **force-loaded** into the
+conversation — the same text the `Skill` tool would return — so the selection is
+applied rather than merely advertised and the model does not need a `Skill` call
+to pick it up.
+
+Choosing **none** is an explicit hand-back: no skill is loaded and the full
+catalog is advertised, leaving the decision to the model. That is the path taken
+whenever Jev is off, declines, or returns an unknown name.
+
+These skills are **not** registered without Jev routing, and `skills.disabled` /
 `skills.enabled` still apply.
 
 **Design rules this integration follows**
@@ -303,6 +310,26 @@ skills are **not** registered without Jev routing, and `skills.disabled` /
   the guardrail can only add friction.
 - **Whole-batch requests.** Questions sharing a state go in one request, since
   System One evaluates them in parallel and extra questions cost only tokens.
+- **One Noul per candidate, not one Choice.** Tool screening asks a separate
+  yes/no question about each candidate, because a request can need several
+  tools at once and a Choice would return a single winner.
+
+### Context and tool-result handling
+
+Three behaviors keep the prompt small without hiding capability from the model:
+
+- **Folded tool summary.** Only core, sticky, and matched tools are sent as
+  schemas. The rest are summarized in one block — `MCP browser: click, type,
+  navigate` — so the model knows what exists and searches for it, instead of
+  assuming an unlisted capability is absent.
+- **Tool screening over lexical candidates.** When lexical matching finds
+  nothing, Jev screens the strongest candidates with one Noul each and enables
+  every one that clears the confidence floor. The candidate set is bounded
+  (24) and pre-ordered lexically, so the batch stays cheap.
+- **MCP results as readable text.** JSON returned by an MCP server is rendered
+  as indented key/value lines rather than a raw blob, so the model reasons about
+  the content instead of parsing syntax. Rendering is lossless — every leaf
+  value survives — and plain prose passes through unchanged.
 
 ### Project rules
 

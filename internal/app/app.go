@@ -3023,6 +3023,7 @@ func engineConfig(cfg config.Config, client *cpanthropic.Client, runtime *hook.R
 		SkillNames:          skillNames(skillRegistry),
 		SkillRoots:          skillRoots(skillRegistry),
 		SkillRootsByName:    skillRootsByName(skillRegistry),
+		SkillRegistry:       skillRegistry,
 		MaxTurns:            cfg.MaxTurns,
 		Stream:              cfg.Stream,
 		Thinking:            cfg.Thinking,

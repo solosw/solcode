@@ -14,7 +14,7 @@ import (
 // routerStub answers a ranking Choice with a fixed distribution.
 //
 // The same distribution is returned for every question id in the batch, which
-// is fine here because the router sends exactly one question.
+// is fine here because skill routing sends exactly one question.
 type routerStub struct {
 	choice        string
 	confidence    float64
@@ -50,68 +50,6 @@ func (s *routerStub) router(t *testing.T) *Router {
 		DisableCache: true,
 	}))
 	return &Router{Decider: decider, MinConfidence: 0.6, TopN: 2}
-}
-
-func TestRouterRouteToolsPicksAboveConfidenceFloor(t *testing.T) {
-	stub := &routerStub{
-		choice:        "ImageGenerate",
-		confidence:    0.9,
-		probabilities: map[string]float64{"ImageGenerate": 0.9, "ImageEdit": 0.1},
-	}
-	router := stub.router(t)
-
-	got := router.RouteTools(context.Background(), "make me a picture of a cat", []tool.Tool{
-		&stubTool{name: "ImageGenerate", desc: "generate images"},
-		&stubTool{name: "ImageEdit", desc: "edit images"},
-	})
-	if len(got) != 1 || got[0] != "ImageGenerate" {
-		t.Fatalf("got %#v", got)
-	}
-}
-
-func TestRouterRouteToolsDropsLowConfidence(t *testing.T) {
-	stub := &routerStub{
-		choice:        "ImageGenerate",
-		confidence:    0.3,
-		probabilities: map[string]float64{"ImageGenerate": 0.4, "ImageEdit": 0.35},
-	}
-	router := stub.router(t)
-
-	got := router.RouteTools(context.Background(), "do something vague", []tool.Tool{
-		&stubTool{name: "ImageGenerate", desc: "generate images"},
-		&stubTool{name: "ImageEdit", desc: "edit images"},
-	})
-	if len(got) != 0 {
-		t.Fatalf("got %#v, want nothing above the confidence floor", got)
-	}
-}
-
-// The explicit none option must never be enabled as a tool.
-func TestRouterRouteToolsIgnoresNoneOption(t *testing.T) {
-	stub := &routerStub{
-		choice:        "none",
-		confidence:    0.95,
-		probabilities: map[string]float64{"none": 0.95, "ImageGenerate": 0.05},
-	}
-	router := stub.router(t)
-
-	got := router.RouteTools(context.Background(), "unrelated request", []tool.Tool{
-		&stubTool{name: "ImageGenerate", desc: "generate images"},
-		&stubTool{name: "ImageEdit", desc: "edit images"},
-	})
-	if len(got) != 0 {
-		t.Fatalf("got %#v, want none", got)
-	}
-}
-
-func TestRouterRouteToolsWithoutDeciderIsNoop(t *testing.T) {
-	router := &Router{}
-	if got := router.RouteTools(context.Background(), "anything", []tool.Tool{&stubTool{name: "A", desc: "a"}}); got != nil {
-		t.Fatalf("got %#v", got)
-	}
-	if got := router.RouteSkills(context.Background(), "anything", []SkillInfo{{Name: "x"}}); got != "" {
-		t.Fatalf("got %q", got)
-	}
 }
 
 func TestRouterRouteSkillsSelectsBest(t *testing.T) {
@@ -191,28 +129,6 @@ func TestRouteCandidatesExcludesCoreAndHidden(t *testing.T) {
 			names = append(names, candidate.Name())
 		}
 		t.Fatalf("got %v, want only the non-core non-hidden tool", names)
-	}
-}
-
-// toolCandidates offers the model every option plus an explicit decline.
-func TestToolCandidatesAppendsNoneOption(t *testing.T) {
-	got := toolCandidates([]tool.Tool{&stubTool{name: "ImageGenerate", desc: "generate images"}})
-	if len(got) != 2 {
-		t.Fatalf("got %#v", got)
-	}
-	if got[len(got)-1].Name != routerNoneOption {
-		t.Fatalf("last candidate = %q, want %q", got[len(got)-1].Name, routerNoneOption)
-	}
-}
-
-func TestToolCandidatesSkipsHiddenTools(t *testing.T) {
-	got := toolCandidates([]tool.Tool{
-		&stubTool{name: tool.WaitToolName, desc: "wait"},
-		&stubTool{name: tool.SubagentToolName, desc: "subagent"},
-	})
-	// Only the none option should remain: hidden tools are never routable.
-	if len(got) != 1 || got[0].Name != routerNoneOption {
-		t.Fatalf("got %#v", got)
 	}
 }
 

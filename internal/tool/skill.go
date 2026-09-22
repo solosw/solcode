@@ -72,9 +72,20 @@ func (t *skillTool) Invoke(ctx context.Context, uctx *UseContext, input json.Raw
 	if !ok {
 		return ErrorResult("unknown skill: " + params.Skill), nil
 	}
+	return Result(RenderSkillActivation(def, params.Args)), nil
+}
+
+// RenderSkillActivation renders a skill as the text block the model reads when
+// the skill is activated.
+//
+// It is exported because activation happens two ways: the model calls the Skill
+// tool, or the router selects a skill for the run and it is force-loaded. Both
+// paths must produce byte-identical text so a skill's Root, path rules, and
+// bundled resources resolve the same way regardless of how it was activated.
+func RenderSkillActivation(def skill.Definition, args string) string {
 	body, err := def.ReadInstructions()
 	if err != nil {
-		return ErrorResult("read skill: " + err.Error()), nil
+		body = ""
 	}
 	if strings.TrimSpace(body) == "" {
 		body = fmt.Sprintf("Skill %s has empty instructions.", def.Name)
@@ -83,8 +94,8 @@ func (t *skillTool) Invoke(ctx context.Context, uctx *UseContext, input json.Raw
 	root := def.Root()
 	var b strings.Builder
 	fmt.Fprintf(&b, "[Skill: %s]\n", def.Name)
-	if params.Args != "" {
-		fmt.Fprintf(&b, "Args: %s\n", params.Args)
+	if strings.TrimSpace(args) != "" {
+		fmt.Fprintf(&b, "Args: %s\n", args)
 	}
 	if desc := strings.TrimSpace(def.Description); desc != "" {
 		fmt.Fprintf(&b, "Description: %s\n", desc)
@@ -118,7 +129,7 @@ func (t *skillTool) Invoke(ctx context.Context, uctx *UseContext, input json.Raw
 		}
 	}
 
-	return Result(strings.TrimSpace(b.String()) + "\n"), nil
+	return strings.TrimSpace(b.String()) + "\n"
 }
 
 func writeAbsResourceList(b *strings.Builder, root, label string, files []string, hint string) {

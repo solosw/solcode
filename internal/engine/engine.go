@@ -12,6 +12,7 @@ import (
 	"github.com/solosw/solcode/internal/attach"
 	"github.com/solosw/solcode/internal/hook"
 	"github.com/solosw/solcode/internal/permission"
+	"github.com/solosw/solcode/internal/skill"
 	"github.com/solosw/solcode/internal/tokenest"
 	"github.com/solosw/solcode/internal/tool"
 )
@@ -61,6 +62,9 @@ type Config struct {
 	SkillNames       []string          // legacy; used only when Skills is empty
 	SkillRoots       []string          // absolute skill package roots for fallback path resolution
 	SkillRootsByName map[string]string // activated skill name -> absolute package root
+	// SkillRegistry resolves a skill name to its Definition, so a
+	// router-selected skill can be force-loaded without a Skill tool round trip.
+	SkillRegistry    *skill.Registry
 	MaxTurns         int
 	Stream           bool
 	Thinking         bool
@@ -226,6 +230,9 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 	// even when Jev declines (an empty result is itself the answer).
 	skillRouteResolved := false
 	var skillRoute []SkillInfo
+	// skillRouteText is the rendered instructions of the selected skill, loaded
+	// into the conversation so the selection cannot be ignored.
+	var skillRouteText string
 	executor := NewToolExecutorWithPermissions(e.config.Tools, e.config.Hooks, e.config.Permissions).WithGuardrail(e.config.Guardrail)
 	builder := ContextBuilder{
 		SystemPrompt: e.config.SystemPrompt,
@@ -299,8 +306,18 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 		if !skillRouteResolved {
 			skillRoute = e.routedSkills(ctx, prompt)
 			skillRouteResolved = true
+			// A selected skill is force-loaded into the conversation. Narrowing
+			// the catalog alone leaves the model free to ignore the selection,
+			// which would make the routing decision worthless. The empty result
+			// for a "none" answer is the hand-back: the model decides.
+			skillRouteText = e.forceLoadedSkill(ctx, prompt, skillRoute)
 		}
 		builder.Skills = skillRoute
+		builder.ForceSkill = skillRouteText
+		// Tell the model what exists beyond this turn's schema list. Without
+		// this it cannot know a capability is merely unloaded rather than
+		// absent, so it will not think to search for it.
+		builder.FoldedTools = foldedToolsSummary(allTools, tools)
 		req := builder.Build(BuildRequest{
 			Model:            modelName,
 			ProjectKnowledge: runReq.ProjectKnowledge,
@@ -561,10 +578,11 @@ func (e *Engine) selectedTools(allowed []string) []tool.Tool {
 
 // routedSkills returns the skill catalog to advertise for this prompt.
 //
-// When Jev routing is configured it asks which single skill fits and advertises
+// When Jev routing is configured it asks which single skill fits and returns
 // only that one, which makes the model's choice unambiguous and keeps the
-// prompt smaller. Anything else — Jev off, no skills, no confident match —
-// returns the full catalog unchanged, so the model still selects on its own.
+// prompt smaller. Anything else — Jev off, no skills, no confident match, or an
+// explicit "none" — returns the full catalog unchanged, so the model still
+// selects on its own.
 func (e *Engine) routedSkills(ctx context.Context, prompt string) []SkillInfo {
 	if e.config.Router == nil || len(e.config.Skills) == 0 {
 		return e.config.Skills
@@ -579,6 +597,31 @@ func (e *Engine) routedSkills(ctx context.Context, prompt string) []SkillInfo {
 		}
 	}
 	return e.config.Skills
+}
+
+// forceLoadedSkill renders the skill Jev selected for this run, or "" when none
+// was selected.
+//
+// Selecting a skill is a decision, and a decision the model can ignore is not
+// worth a request: advertising the skill only narrows the catalog, leaving the
+// model free to skip it. So the chosen skill's instructions are loaded into the
+// conversation directly, the same text the Skill tool would have returned.
+//
+// Returns "" for the "none" downgrade, which is the explicit hand-back: no
+// skill fits confidently, so the model decides for itself with the full catalog.
+func (e *Engine) forceLoadedSkill(ctx context.Context, prompt string, skills []SkillInfo) string {
+	if e.config.Router == nil || e.config.SkillRegistry == nil || len(skills) != 1 {
+		return ""
+	}
+	name := strings.TrimSpace(skills[0].Name)
+	if name == "" || strings.EqualFold(name, RouterNoneSkill) {
+		return ""
+	}
+	def, ok := e.config.SkillRegistry.Find(name)
+	if !ok {
+		return ""
+	}
+	return tool.RenderSkillActivation(def, "")
 }
 
 func (e *Engine) runUserPromptHook(ctx context.Context, cfg agent.AgentConfig, prompt string) (string, bool, string) {

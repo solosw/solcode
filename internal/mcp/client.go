@@ -78,13 +78,17 @@ func contentBlockFromCallResult(result *sdkmcp.CallToolResult) (*tool.ContentBlo
 	}
 	text := strings.TrimSpace(contentToText(result.Content))
 	if text == "" && result.StructuredContent != nil {
-		b, err := json.Marshal(result.StructuredContent)
-		if err == nil {
-			text = string(b)
-		}
+		// StructuredContent is a Go value, not a string, so render it directly
+		// rather than marshaling to JSON first.
+		text = structuredToText(result.StructuredContent)
 	}
 	if text == "" {
 		text = "tool executed successfully (no output)"
+	} else {
+		// Servers frequently return a JSON document as text. Those are rendered
+		// as readable key/value lines so the model reasons about the result
+		// instead of parsing it. Plain prose is returned unchanged.
+		text = humanizeStructuredText(text)
 	}
 	if result.IsError {
 		return tool.ErrorResult(text), nil
@@ -101,12 +105,46 @@ func contentToText(items []sdkmcp.Content) string {
 				parts = append(parts, value.Text)
 			}
 		default:
-			if b, err := json.Marshal(item); err == nil {
-				parts = append(parts, string(b))
+			// A non-text block (image, resource, embedded record) is reported by
+			// what it is plus its content, instead of a raw JSON dump the model
+			// has to decode. "type" is the block kind the SDK reported.
+			rendered := nonTextContentText(item)
+			if rendered != "" {
+				parts = append(parts, rendered)
 			}
 		}
 	}
 	return strings.Join(parts, "\n")
+}
+
+// nonTextContentText describes a non-text content block in readable form.
+func nonTextContentText(item sdkmcp.Content) string {
+	kind := ""
+	if raw, err := json.Marshal(item); err == nil {
+		var envelope struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal(raw, &envelope) == nil {
+			kind = strings.TrimSpace(envelope.Type)
+		}
+		// Render the block's own fields as readable lines.
+		var decoded map[string]any
+		if json.Unmarshal(raw, &decoded) == nil {
+			delete(decoded, "type")
+			body := structuredToText(decoded)
+			if strings.TrimSpace(body) != "" {
+				if kind != "" {
+					return "[" + kind + " content]\n" + body
+				}
+				return body
+			}
+		}
+		if kind != "" {
+			return "[" + kind + " content]"
+		}
+		return string(raw)
+	}
+	return ""
 }
 
 func validateServerConfig(server config.MCPServerConfig) error {

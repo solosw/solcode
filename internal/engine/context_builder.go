@@ -31,6 +31,13 @@ type ContextBuilder struct {
 	// PlanMode, when true, appends plan-mode instructions to the system prompt.
 	// When false, any leftover plan-mode block is stripped from SystemPrompt.
 	PlanMode bool
+	// ForceSkill is the rendered activation text of a skill the router selected
+	// for this run. It is injected as a user message so the selection is applied
+	// rather than merely advertised. Empty means no skill was force-loaded.
+	ForceSkill string
+	// FoldedTools summarizes registered-but-unsent tools so the model knows what
+	// exists beyond the current schema list. Empty means nothing was folded.
+	FoldedTools string
 }
 
 type ContextItem struct {
@@ -94,6 +101,11 @@ func (b ContextBuilder) withContextMessages(messages []sdk.MessageParam, session
 
 func (b ContextBuilder) contextBlock(sessionSummary string, memoryContext []ContextItem, projectKnowledge string) string {
 	var parts []string
+	// A force-loaded skill goes first: it is the instruction for this turn, and
+	// the other blocks are supporting context for it.
+	if skill := strings.TrimSpace(b.ForceSkill); skill != "" {
+		parts = append(parts, forceSkillBlock(skill))
+	}
 	if knowledge := strings.TrimSpace(projectKnowledge); knowledge != "" {
 		parts = append(parts, "Project knowledge context:\n"+knowledge)
 	}
@@ -103,7 +115,23 @@ func (b ContextBuilder) contextBlock(sessionSummary string, memoryContext []Cont
 	if len(memoryContext) > 0 {
 		parts = append(parts, "Retrieved memory:\n"+formatMemoryContext(memoryContext))
 	}
+	// Last, because it is reference material rather than this turn's task.
+	if folded := strings.TrimSpace(b.FoldedTools); folded != "" {
+		parts = append(parts, folded)
+	}
 	return strings.Join(parts, "\n\n")
+}
+
+// forceSkillBlock frames a router-selected skill for the model.
+//
+// The wording states that the skill was chosen for this request and the report
+// must follow its process, while still allowing the model to say the skill does
+// not fit — a forced skill that turns out wrong should be reported, not obeyed
+// blindly.
+func forceSkillBlock(activation string) string {
+	return "Selected skill for this request (chosen automatically, already loaded — " +
+		"do not call the Skill tool for it). Follow its process, and say so if it " +
+		"turns out not to fit:\n\n" + activation
 }
 
 var (

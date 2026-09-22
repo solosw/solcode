@@ -2,6 +2,8 @@ package systemone
 
 import (
 	"context"
+	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -128,6 +130,99 @@ func (d *Decider) Answer(ctx context.Context, state any, instructions string, le
 		return Answer{}, err
 	}
 	return answer, nil
+}
+
+// Screen asks one Noul per candidate in a single request and returns the
+// candidates whose probability of "yes" reached minProbability, best first.
+//
+// This is the batch pattern rather than a Choice: a Choice picks exactly one
+// winner, but several tools can genuinely all be relevant to one request, and
+// forcing a single answer would drop the others. One Noul per candidate also
+// keeps each judgment about one thing, which is what makes the probability
+// interpretable.
+//
+// Questions run in parallel within the request, so cost grows with the number
+// of candidates rather than with round trips. Callers should pre-filter to a
+// manageable candidate set; screening a whole registry would be wasteful when a
+// cheap lexical pass already narrows it.
+//
+// disclosed caps how many names are actually revealed to the model in the
+// question text. Beyond that the caller is asking the model to judge names it
+// cannot see, which would make the answer meaningless, so screening is skipped.
+func (d *Decider) Screen(ctx context.Context, state any, instruction string, candidates []Candidate, minProbability float64, disclosed int) []Ranked {
+	if !d.Enabled() || len(candidates) == 0 {
+		return nil
+	}
+	if disclosed > 0 && len(candidates) > disclosed {
+		return nil
+	}
+	if minProbability <= 0 {
+		minProbability = 0.5
+	}
+
+	questions := make(map[string]Question, len(candidates))
+	byID := make(map[string]Candidate, len(candidates))
+	for i, candidate := range candidates {
+		name := strings.TrimSpace(candidate.Name)
+		if name == "" {
+			continue
+		}
+		id := screenQuestionID(i)
+		questions[id] = Noul(screenQuestion(instruction, candidate))
+		byID[id] = candidate
+	}
+	if len(questions) == 0 {
+		return nil
+	}
+
+	answers, _, err := d.rawAsk(ctx, state, questions)
+	if err != nil {
+		d.report(err)
+		return nil
+	}
+
+	ranked := make([]Ranked, 0, len(answers))
+	for id, candidate := range byID {
+		answer, ok := answers[id]
+		if !ok {
+			continue
+		}
+		if answer.Noul < minProbability {
+			continue
+		}
+		ranked = append(ranked, Ranked{Name: candidate.Name, Probability: answer.Noul})
+	}
+	sortRanked(ranked)
+	return ranked
+}
+
+// screenQuestionID keeps the question id opaque; ids are not sent to the model,
+// so they exist only to correlate answers back to candidates.
+func screenQuestionID(index int) string {
+	return "candidate_" + strconv.Itoa(index)
+}
+
+// screenQuestion builds the yes/no question for one candidate, naming the
+// capability so the judgment is about something concrete.
+func screenQuestion(instruction string, candidate Candidate) string {
+	instruction = strings.TrimSpace(instruction)
+	description := strings.TrimSpace(candidate.Description)
+	if instruction == "" {
+		instruction = "Would this capability help accomplish what `state` asks for?"
+	}
+	if description == "" {
+		return instruction + " Capability: `" + candidate.Name + "`."
+	}
+	return instruction + " Capability `" + candidate.Name + "`: " + description
+}
+
+func sortRanked(ranked []Ranked) {
+	sort.SliceStable(ranked, func(i, j int) bool {
+		if ranked[i].Probability != ranked[j].Probability {
+			return ranked[i].Probability > ranked[j].Probability
+		}
+		return ranked[i].Name < ranked[j].Name
+	})
 }
 
 // Rank asks Jev which named candidates fit the state and returns up to topN
