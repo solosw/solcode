@@ -34,7 +34,7 @@ func TestLSPToolValidateInput(t *testing.T) {
 	lspTool := tool.NewLSPTool(lsp.NewManager(nil, nil))
 	input, _ := json.Marshal(map[string]any{
 		"operation": "hover",
-		"path": "main.go",
+		"path":      "main.go",
 		"line":      1,
 		"character": 1,
 	})

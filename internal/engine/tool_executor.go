@@ -39,6 +39,15 @@ type ToolExecutor struct {
 	registry    *tool.Registry
 	hooks       *hook.Runtime
 	permissions *permission.Service
+	// guardrail is an optional advisory safety check. It never grants
+	// permission: it can only escalate a call that permissions already allowed.
+	guardrail ToolGuardrail
+}
+
+// ToolGuardrail inspects a tool call before it runs. Implementations return an
+// escalation message to block the call, or "" to let it proceed.
+type ToolGuardrail interface {
+	CheckToolCall(ctx context.Context, toolName string, input json.RawMessage) string
 }
 
 func NewToolExecutor(registry *tool.Registry, hooks *hook.Runtime) *ToolExecutor {
@@ -47,6 +56,16 @@ func NewToolExecutor(registry *tool.Registry, hooks *hook.Runtime) *ToolExecutor
 
 func NewToolExecutorWithPermissions(registry *tool.Registry, hooks *hook.Runtime, permissions *permission.Service) *ToolExecutor {
 	return &ToolExecutor{registry: registry, hooks: hooks, permissions: permissions}
+}
+
+// WithGuardrail attaches an advisory safety check that runs after permissions
+// allow a call and before the tool executes.
+func (x *ToolExecutor) WithGuardrail(guardrail ToolGuardrail) *ToolExecutor {
+	if x == nil {
+		return nil
+	}
+	x.guardrail = guardrail
+	return x
 }
 
 func timeoutForTool(selected tool.Tool) time.Duration {
@@ -106,6 +125,14 @@ func (x *ToolExecutor) Execute(ctx context.Context, call ToolCall, env ToolEnv) 
 	if err := selected.ValidateInput(ctx, input); err != nil {
 		content := tool.ErrorResult("invalid parameters: " + err.Error())
 		return ToolResult{Content: content, IsError: true}
+	}
+
+	// Advisory safety net. It runs only after permissions allowed the call, and
+	// it can only withhold the call, never approve one permissions rejected.
+	if x.guardrail != nil {
+		if message := x.guardrail.CheckToolCall(ctx, call.Name, input); message != "" {
+			return ToolResult{Content: tool.ErrorResult(message), IsError: true}
+		}
 	}
 
 	captureCheckpointBeforeInvoke(ctx, selected, input, env.UseContext)

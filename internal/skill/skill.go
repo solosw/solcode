@@ -10,7 +10,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const skillFileName = "SKILL.md"
+const SkillFileName = "SKILL.md"
 
 // Definition is a discovered skill package or standalone markdown skill.
 type Definition struct {
@@ -110,7 +110,7 @@ func loadFromDir(registry *Registry, dir string) {
 			continue
 		}
 		// Standalone markdown skills (not SKILL.md package layout).
-		if strings.EqualFold(entry.Name(), skillFileName) {
+		if strings.EqualFold(entry.Name(), SkillFileName) {
 			continue
 		}
 		path := filepath.Join(dir, entry.Name())
@@ -213,7 +213,7 @@ func (d Definition) Root() string {
 // IsPackage reports whether this skill uses the SKILL.md directory layout
 // (eligible for scripts/references/assets).
 func (d Definition) IsPackage() bool {
-	return strings.EqualFold(filepath.Base(d.Path), skillFileName)
+	return strings.EqualFold(filepath.Base(d.Path), SkillFileName)
 }
 
 // ReadInstructions returns the skill markdown body without frontmatter.
@@ -284,7 +284,7 @@ func skillFileFromEntries(dir string, entries []os.DirEntry) (string, bool) {
 		if entry.IsDir() {
 			continue
 		}
-		if strings.EqualFold(entry.Name(), skillFileName) {
+		if strings.EqualFold(entry.Name(), SkillFileName) {
 			return filepath.Join(dir, entry.Name()), true
 		}
 	}

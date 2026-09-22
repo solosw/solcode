@@ -225,6 +225,85 @@ loads the bundled **`computer-use`** skill (`/computer-use` or Skill tool).
 `ComputerUse` is **not** a core tool; after the skill runs it becomes sticky for
 the session (or discover it with ToolSearch).
 
+### Jev decision layer (optional)
+
+[Jev](https://docs.typesafe.ai) is a TypeSafe **System One** model. It does not
+generate text, write code, or call tools — it evaluates a state and returns
+typed answers with calibrated probabilities: a `Choice` from a fixed option set,
+a `Score` along ordered levels, or a `Noul` (the probability a yes/no statement
+is true). solcode uses it as a **decision layer** alongside the chat model, never
+as a replacement for it.
+
+Install the `typesafe-sdk` docs skill or read the [primitives](https://docs.typesafe.ai/primitives)
+before writing new questions.
+
+```json
+{
+  "jev": {
+    "enabled": true,
+    "api_key": "ts_...",
+    "base_url": "https://api.typesafe.ai",
+    "model": "jev-latest",
+    "timeout_sec": 20,
+    "route_min_confidence": 0.6,
+    "routing": true,
+    "memory_judge": true,
+    "guardrail": true
+  }
+}
+```
+
+Env fallbacks: `TYPESAFE_API_KEY`, `TYPESAFE_BASE_URL` (or the `*_env` fields).
+Everything is off by default, and `enabled` without a resolvable `api_key` is
+treated as off.
+
+Both this and Computer Use are also configurable from the Web UI
+(`/workflow-ui` → **Settings** → *Features* / *Jev (System One)*). Saving writes
+to `~/.solcode/settings.local.json` and reloads the running app, so no restart
+is needed. The UI never receives a stored API key back — it only reports whether
+one is set, and leaving the field blank keeps the existing key.
+
+**What it does when enabled**
+
+| Toggle | Effect |
+|---|---|
+| `routing` | When lexical tool/skill matching finds nothing, asks Jev which capability the request describes and enables the winners. Also registers the bundled workflow skills and picks one per prompt. |
+| `memory_judge` | Classifies memories (kind / scope / tier / durability) with typed questions instead of asking a chat model to emit and then parse JSON. |
+| `guardrail` | Advisory pre-action check on mutating tools (`Bash`, `Write`, `Edit`, `MultiEdit`, `MultiWrite`, `Patch`, `ComputerUse`) for secrets, destructive actions, exfiltration, and privilege escalation. |
+
+**Bundled workflow skills (Jev mode only)**
+
+With `routing` on, solcode registers a bundled skill set and asks Jev to pick
+one per prompt:
+
+| Skill | Use |
+|---|---|
+| `explore` | Read-only reconnaissance: locate entry points, trace wiring, map structure before editing. |
+| `implement` | Make a code change end to end in the existing style, with a minimal diff. |
+| `verify` | Run the real build/tests, check the failure baseline, report honestly. |
+| `research` | Answer from official docs and API references instead of guessing. |
+| `debug` | Reproduce, hypothesize, test, fix the cause, add a regression test. |
+| `review` | Critique a diff: correctness, regressions, missing cases, scope creep. |
+
+They are materialized to `~/.solcode/builtin-skills/<name>/` so each skill's
+`Root` is a real path. Jev advertises only the chosen skill for the turn; when
+Jev has no confident match, the full catalog is shown and the model picks. These
+skills are **not** registered without Jev routing, and `skills.disabled` /
+`skills.enabled` still apply.
+
+**Design rules this integration follows**
+
+- **Jev only advises.** Skill/tool selection, memory classification, and the
+  safety check all keep a deterministic fallback. Turn Jev off and behavior is
+  identical to before it existed.
+- **Failures fail closed, never open.** An unreachable guardrail *withholds* a
+  call rather than allowing it. A routing miss falls back to the lexical result.
+- **No automatic approval.** Confidence is never used to grant permission for a
+  destructive action. The permission service and sandbox remain the controls;
+  the guardrail can only add friction.
+- **Whole-batch requests.** Questions sharing a state go in one request, since
+  System One evaluates them in parallel and extra questions cost only tokens.
+
 ### Project rules
 
 Project-only agent instructions live under the working directory's `.solcode` folder and are injected into the system prompt at startup (not user-level `~/.solcode`):

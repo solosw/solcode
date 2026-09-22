@@ -12,6 +12,17 @@
     "theme": "dark",
     "background": "#101820"
   },
+  "jev": {
+    "enabled": false,
+    "base_url": "https://api.typesafe.ai",
+    "api_key_env": "TYPESAFE_API_KEY",
+    "model": "jev-latest",
+    "timeout_sec": 20,
+    "route_min_confidence": 0.6,
+    "routing": false,
+    "memory_judge": false,
+    "guardrail": false
+  },
   "providers": [
     {
       "name": "anthropic",

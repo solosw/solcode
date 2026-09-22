@@ -158,6 +158,8 @@ type Config struct {
 	// ComputerUse enables desktop screenshot / mouse / keyboard automation
 	// (robotgo). Off by default — opt in via settings.
 	ComputerUse ComputerUseConfig `json:"computer_use,omitempty"`
+	// Jev configures the TypeSafe System One decision layer. Off by default.
+	Jev JevConfig `json:"jev,omitempty"`
 
 	Provider  string           `json:"provider,omitempty"`
 	Providers []ProviderConfig `json:"providers,omitempty"`
@@ -168,6 +170,38 @@ type Config struct {
 type ComputerUseConfig struct {
 	// Enabled registers the ComputerUse tool and loads the builtin skill.
 	Enabled bool `json:"enabled,omitempty"`
+}
+
+// JevConfig configures the TypeSafe System One (Jev) decision layer.
+//
+// Jev does not generate text or call tools; it answers typed questions with
+// calibrated probabilities. solcode uses it to route skills/tools, classify
+// memories, and gate risky actions. Everything it decides has a deterministic
+// fallback, so leaving it off (the default) changes nothing.
+type JevConfig struct {
+	// Enabled turns on Jev decisions. Requires a resolvable APIKey.
+	Enabled bool `json:"enabled,omitempty"`
+	// BaseURL is the API origin (default https://api.typesafe.ai).
+	BaseURL string `json:"base_url,omitempty"`
+	// BaseURLEnv names an env var holding BaseURL.
+	BaseURLEnv string `json:"base_url_env,omitempty"`
+	// APIKey authenticates the evaluation endpoint.
+	APIKey string `json:"api_key,omitempty"`
+	// APIKeyEnv names an env var holding APIKey (default TYPESAFE_API_KEY).
+	APIKeyEnv string `json:"api_key_env,omitempty"`
+	// Model selects the System One model (default jev-latest).
+	Model string `json:"model,omitempty"`
+	// TimeoutSec bounds one evaluation (default 20, max 120).
+	TimeoutSec int `json:"timeout_sec,omitempty"`
+	// RouteMinConfidence is the floor below which routing falls back to the
+	// deterministic (lexical) choice (default 0.6).
+	RouteMinConfidence float64 `json:"route_min_confidence,omitempty"`
+	// Routing enables the skill/tool semantic fallback.
+	Routing bool `json:"routing,omitempty"`
+	// MemoryJudge enables Jev memory classification.
+	MemoryJudge bool `json:"memory_judge,omitempty"`
+	// Guardrail enables the pre-action safety check.
+	Guardrail bool `json:"guardrail,omitempty"`
 }
 
 // ImageConfig configures the OpenAI-format image generation/edit endpoints.
@@ -491,6 +525,7 @@ func (cfg *Config) Normalize() error {
 
 	cfg.LSP = normalizeLSPConfig(cfg.LSP)
 	cfg.normalizeImage()
+	cfg.normalizeJev()
 
 	cfg.normalizeSessionMemory()
 	ensureDefaultToolResultCompressHook(cfg)
@@ -1166,6 +1201,10 @@ func applyJSONConfig(cfg *Config, data []byte) error {
 			if err := json.Unmarshal(value, &cfg.ComputerUse); err != nil {
 				return err
 			}
+		case "jev":
+			if err := json.Unmarshal(value, &cfg.Jev); err != nil {
+				return err
+			}
 		case "provider":
 			if err := json.Unmarshal(value, &cfg.Provider); err != nil {
 				return err
@@ -1591,6 +1630,52 @@ func (c Config) ImageEnabled() bool {
 // ComputerUseEnabled reports whether desktop automation tools/skills register.
 func (c Config) ComputerUseEnabled() bool {
 	return c.ComputerUse.Enabled
+}
+
+// JevEnabled reports whether the System One (Jev) decision layer should be used.
+// Requires enabled=true plus a resolvable api_key; Jev is opt-in and every
+// caller must still work when it is off.
+func (c Config) JevEnabled() bool {
+	return c.Jev.Enabled && strings.TrimSpace(c.Jev.APIKey) != ""
+}
+
+// normalizeJev resolves env indirection and bounds the timeout.
+func (cfg *Config) normalizeJev() {
+	if cfg == nil {
+		return
+	}
+	jev := &cfg.Jev
+	jev.BaseURL = strings.TrimSpace(jev.BaseURL)
+	jev.Model = strings.TrimSpace(jev.Model)
+	jev.BaseURLEnv = strings.TrimSpace(jev.BaseURLEnv)
+	jev.APIKeyEnv = strings.TrimSpace(jev.APIKeyEnv)
+	if jev.APIKeyEnv != "" {
+		if v := strings.TrimSpace(os.Getenv(jev.APIKeyEnv)); v != "" {
+			jev.APIKey = v
+		}
+	}
+	if jev.BaseURLEnv != "" {
+		if v := strings.TrimSpace(os.Getenv(jev.BaseURLEnv)); v != "" {
+			jev.BaseURL = v
+		}
+	}
+	if strings.TrimSpace(jev.APIKey) == "" {
+		jev.APIKey = strings.TrimSpace(os.Getenv("TYPESAFE_API_KEY"))
+	}
+	if strings.TrimSpace(jev.BaseURL) == "" {
+		jev.BaseURL = strings.TrimSpace(os.Getenv("TYPESAFE_BASE_URL"))
+	}
+	jev.APIKey = strings.TrimSpace(jev.APIKey)
+	jev.BaseURL = strings.TrimRight(strings.TrimSpace(jev.BaseURL), "/")
+	if jev.TimeoutSec <= 0 {
+		jev.TimeoutSec = 20
+	}
+	if jev.TimeoutSec > 120 {
+		jev.TimeoutSec = 120
+	}
+	if jev.RouteMinConfidence <= 0 || jev.RouteMinConfidence > 1 {
+		jev.RouteMinConfidence = 0.6
+	}
 }
 
 func cleanAndExpandPaths(paths []string) []string {

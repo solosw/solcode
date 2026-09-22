@@ -91,6 +91,12 @@ type Config struct {
 	// CompactMessages is invoked mid-run when estimated context reaches MaxContextTokens (100%).
 	// It must return a shorter message list. Nil disables mid-run compaction.
 	CompactMessages func(ctx context.Context, messages []sdk.MessageParam) ([]sdk.MessageParam, error)
+	// Router optionally adds a semantic fallback to lexical tool selection.
+	// Nil keeps selection purely lexical.
+	Router *Router
+	// Guardrail optionally holds a tool call for escalation before it runs.
+	// It is advisory: permissions remain the control that grants access.
+	Guardrail ToolGuardrail
 }
 
 type Engine struct {
@@ -212,7 +218,15 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 
 	allTools := e.selectedTools(cfg.AllowedTools)
 	enabledTools := make(map[string]bool)
-	executor := NewToolExecutorWithPermissions(e.config.Tools, e.config.Hooks, e.config.Permissions)
+	// routingAttempted keeps the semantic router to one advisory request per
+	// run instead of one per turn.
+	routingAttempted := false
+	// skillRouteResolved caches the skill routing answer. The prompt is fixed
+	// for the whole run, so unlike tool routing this is computed once and reused
+	// even when Jev declines (an empty result is itself the answer).
+	skillRouteResolved := false
+	var skillRoute []SkillInfo
+	executor := NewToolExecutorWithPermissions(e.config.Tools, e.config.Hooks, e.config.Permissions).WithGuardrail(e.config.Guardrail)
 	builder := ContextBuilder{
 		SystemPrompt: e.config.SystemPrompt,
 		ProjectRules: e.config.ProjectRules,
@@ -257,7 +271,36 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 		// executor and ToolSearch, while only core + sticky + live matches
 		// are sent to the model.
 		tools := SelectToolsForTurn(allTools, cfg.AllowedTools, selectionQuery(prompt, ""), enabledTools)
+		// When lexical matching resolved nothing beyond the core set, ask Jev
+		// which capability the request is actually describing. This only runs on
+		// the miss path, so prompts that name a tool keep their current behavior
+		// and pay no extra request.
+		//
+		// It is attempted at most once per run: a miss that Jev also cannot
+		// resolve would otherwise be re-asked on every turn of the loop.
+		if e.config.Router != nil && !routingAttempted && len(cfg.AllowedTools) == 0 {
+			if misses := routerMisses(allTools, selectionQuery(prompt, ""), enabledTools, tools); len(misses) > 0 {
+				routingAttempted = true
+				for _, name := range e.config.Router.RouteTools(ctx, prompt, misses) {
+					if hiddenFromModel[name] {
+						continue
+					}
+					enabledTools[name] = true
+				}
+				tools = SelectToolsForTurn(allTools, cfg.AllowedTools, selectionQuery(prompt, ""), enabledTools)
+			}
+		}
 		builder.PlanMode = e.config.Permissions != nil && e.config.Permissions.Mode() == permission.ModePlan
+		// Ask Jev which skill fits this prompt and narrow the advertised catalog
+		// to it. The catalog is otherwise a list the model has to reason about
+		// itself, and narrowing it both sharpens the choice and shortens the
+		// prompt. A nil result means Jev had no confident match, and the full
+		// catalog is advertised as before.
+		if !skillRouteResolved {
+			skillRoute = e.routedSkills(ctx, prompt)
+			skillRouteResolved = true
+		}
+		builder.Skills = skillRoute
 		req := builder.Build(BuildRequest{
 			Model:            modelName,
 			ProjectKnowledge: runReq.ProjectKnowledge,
@@ -514,6 +557,28 @@ func (e *Engine) selectedTools(allowed []string) []tool.Tool {
 		return e.config.Tools.All()
 	}
 	return e.config.Tools.Filter(allowed)
+}
+
+// routedSkills returns the skill catalog to advertise for this prompt.
+//
+// When Jev routing is configured it asks which single skill fits and advertises
+// only that one, which makes the model's choice unambiguous and keeps the
+// prompt smaller. Anything else — Jev off, no skills, no confident match —
+// returns the full catalog unchanged, so the model still selects on its own.
+func (e *Engine) routedSkills(ctx context.Context, prompt string) []SkillInfo {
+	if e.config.Router == nil || len(e.config.Skills) == 0 {
+		return e.config.Skills
+	}
+	chosen := e.config.Router.RouteSkills(ctx, prompt, e.config.Skills)
+	if chosen == "" {
+		return e.config.Skills
+	}
+	for _, info := range e.config.Skills {
+		if strings.EqualFold(strings.TrimSpace(info.Name), chosen) {
+			return []SkillInfo{info}
+		}
+	}
+	return e.config.Skills
 }
 
 func (e *Engine) runUserPromptHook(ctx context.Context, cfg agent.AgentConfig, prompt string) (string, bool, string) {

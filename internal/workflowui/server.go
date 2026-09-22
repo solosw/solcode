@@ -288,6 +288,32 @@ type settingsResponse struct {
 	Providers  []providerSummary        `json:"providers"`
 	MCPServers []config.MCPServerConfig `json:"mcp_servers"`
 	Skills     []SkillInfo              `json:"skills"`
+	// ComputerUse gates the desktop-automation tool and its bundled skill.
+	ComputerUse computerUseSettings `json:"computer_use"`
+	// Jev configures the TypeSafe System One decision layer.
+	Jev jevSettings `json:"jev"`
+}
+
+// computerUseSettings is the UI-facing view of the ComputerUse toggle.
+type computerUseSettings struct {
+	Enabled bool `json:"enabled"`
+}
+
+// jevSettings is the UI-facing view of the Jev decision layer.
+//
+// APIKeySet reports whether a key is resolvable without ever sending the key
+// itself to the browser; APIKeyEnv lets the UI show which env var supplies it.
+type jevSettings struct {
+	Enabled            bool    `json:"enabled"`
+	BaseURL            string  `json:"base_url"`
+	APIKeyEnv          string  `json:"api_key_env"`
+	APIKeySet          bool    `json:"api_key_set"`
+	Model              string  `json:"model"`
+	TimeoutSec         int     `json:"timeout_sec"`
+	RouteMinConfidence float64 `json:"route_min_confidence"`
+	Routing            bool    `json:"routing"`
+	MemoryJudge        bool    `json:"memory_judge"`
+	Guardrail          bool    `json:"guardrail"`
 }
 
 type providerSummary struct {
@@ -434,6 +460,21 @@ func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
 		MaxContext: cfg.MaxContextTokens,
 		APIFormat:  cfg.APIFormat,
 		MCPServers: cfg.MCP.Servers,
+		ComputerUse: computerUseSettings{
+			Enabled: cfg.ComputerUse.Enabled,
+		},
+		Jev: jevSettings{
+			Enabled:            cfg.Jev.Enabled,
+			BaseURL:            cfg.Jev.BaseURL,
+			APIKeyEnv:          cfg.Jev.APIKeyEnv,
+			APIKeySet:          strings.TrimSpace(cfg.Jev.APIKey) != "",
+			Model:              cfg.Jev.Model,
+			TimeoutSec:         cfg.Jev.TimeoutSec,
+			RouteMinConfidence: cfg.Jev.RouteMinConfidence,
+			Routing:            cfg.Jev.Routing,
+			MemoryJudge:        cfg.Jev.MemoryJudge,
+			Guardrail:          cfg.Jev.Guardrail,
+		},
 	}
 	for _, p := range cfg.Providers {
 		summary := providerSummary{
@@ -478,6 +519,21 @@ type settingsUpdate struct {
 	// Skill enable/disable toggles keyed by name.
 	SkillsEnabled  map[string]bool `json:"skills_enabled,omitempty"`
 	SkillsDisabled map[string]bool `json:"skills_disabled,omitempty"`
+
+	// ComputerUseEnabled toggles desktop automation.
+	ComputerUseEnabled *bool `json:"computer_use_enabled,omitempty"`
+	// Jev fields. Absent fields leave the current value untouched, so a partial
+	// update cannot silently reset a subsystem the caller did not mention.
+	JevEnabled            *bool    `json:"jev_enabled,omitempty"`
+	JevBaseURL            *string  `json:"jev_base_url,omitempty"`
+	JevAPIKey             *string  `json:"jev_api_key,omitempty"`
+	JevAPIKeyEnv          *string  `json:"jev_api_key_env,omitempty"`
+	JevModel              *string  `json:"jev_model,omitempty"`
+	JevTimeoutSec         *int     `json:"jev_timeout_sec,omitempty"`
+	JevRouteMinConfidence *float64 `json:"jev_route_min_confidence,omitempty"`
+	JevRouting            *bool    `json:"jev_routing,omitempty"`
+	JevMemoryJudge        *bool    `json:"jev_memory_judge,omitempty"`
+	JevGuardrail          *bool    `json:"jev_guardrail,omitempty"`
 }
 
 func (s *Server) postSettings(w http.ResponseWriter, r *http.Request) {
@@ -508,6 +564,8 @@ func (s *Server) postSettings(w http.ResponseWriter, r *http.Request) {
 		next.MaxContextTokens = *req.MaxContext
 	}
 	applyActiveModelSettings(&next, req)
+	applyComputerUseSettings(&next, req)
+	applyJevSettings(&next, req)
 
 	// MCP toggles
 	if len(req.MCPDisabled) > 0 {
@@ -547,6 +605,54 @@ func (s *Server) postSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{"ok": true})
+}
+
+// applyComputerUseSettings applies the ComputerUse toggle when provided.
+func applyComputerUseSettings(cfg *config.Config, req settingsUpdate) {
+	if cfg == nil || req.ComputerUseEnabled == nil {
+		return
+	}
+	cfg.ComputerUse.Enabled = *req.ComputerUseEnabled
+}
+
+// applyJevSettings applies the Jev fields that were provided.
+//
+// Each field is optional so a partial update — for example toggling only
+// `guardrail` — cannot silently reset the rest of the Jev configuration.
+func applyJevSettings(cfg *config.Config, req settingsUpdate) {
+	if cfg == nil {
+		return
+	}
+	if req.JevEnabled != nil {
+		cfg.Jev.Enabled = *req.JevEnabled
+	}
+	if req.JevBaseURL != nil {
+		cfg.Jev.BaseURL = strings.TrimSpace(*req.JevBaseURL)
+	}
+	if req.JevAPIKey != nil {
+		cfg.Jev.APIKey = strings.TrimSpace(*req.JevAPIKey)
+	}
+	if req.JevAPIKeyEnv != nil {
+		cfg.Jev.APIKeyEnv = strings.TrimSpace(*req.JevAPIKeyEnv)
+	}
+	if req.JevModel != nil {
+		cfg.Jev.Model = strings.TrimSpace(*req.JevModel)
+	}
+	if req.JevTimeoutSec != nil {
+		cfg.Jev.TimeoutSec = *req.JevTimeoutSec
+	}
+	if req.JevRouteMinConfidence != nil {
+		cfg.Jev.RouteMinConfidence = *req.JevRouteMinConfidence
+	}
+	if req.JevRouting != nil {
+		cfg.Jev.Routing = *req.JevRouting
+	}
+	if req.JevMemoryJudge != nil {
+		cfg.Jev.MemoryJudge = *req.JevMemoryJudge
+	}
+	if req.JevGuardrail != nil {
+		cfg.Jev.Guardrail = *req.JevGuardrail
+	}
 }
 
 func applyActiveModelSettings(cfg *config.Config, req settingsUpdate) {

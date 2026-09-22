@@ -119,6 +119,7 @@ button { cursor: pointer; }
 .settings-row-main { min-width: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 7px; }
 .settings-row-main strong { font-size: 13px; }
 .settings-row-detail { flex-basis: 100%; color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.settings-hint { color: var(--muted); font-size: 13px; line-height: 1.5; margin: 0 0 14px; }
 .settings-toggle-row { cursor: pointer; }
 .settings-toggle-row input { width: 16px; height: 16px; accent-color: var(--accent); flex: 0 0 auto; }
 .badge { display: inline-flex; align-items: center; min-height: 20px; padding: 2px 7px; border: 1px solid var(--border); border-radius: 5px; background: var(--panel-2); color: var(--muted); font-size: 11px; font-weight: 500; }

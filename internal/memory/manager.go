@@ -523,9 +523,20 @@ type StaticJudge struct{}
 
 func (StaticJudge) JudgeMemory(ctx context.Context, input MemoryJudgementInput) (MemoryJudgement, error) {
 	_ = ctx
-	text := strings.TrimSpace(input.Text)
+	return StaticJudge{}.fallbackJudgement(strings.TrimSpace(input.Text), input), nil
+}
+
+// fallbackJudgement is the deterministic judgement used when no AI judge is
+// available and as the base that an AI judge refines field by field. Keeping it
+// in one place means the AI path can never produce a judgement with a field
+// left unset just because a question came back unusable.
+func (StaticJudge) fallbackJudgement(text string, input MemoryJudgementInput) MemoryJudgement {
 	if text == "" {
-		return MemoryJudgement{ShouldStore: false}, nil
+		return MemoryJudgement{ShouldStore: false}
+	}
+	reason := "static fallback judgement"
+	if input.Explicit {
+		reason = "static fallback judgement for an explicit memory request"
 	}
 	return MemoryJudgement{
 		ShouldStore:   true,
@@ -534,8 +545,8 @@ func (StaticJudge) JudgeMemory(ctx context.Context, input MemoryJudgementInput) 
 		SuggestedTier: TierShortTerm,
 		Confidence:    0.7,
 		CanonicalText: text,
-		Reason:        "static fallback judgement",
-	}, nil
+		Reason:        reason,
+	}
 }
 
 func nonEmptyKind(value Kind, fallback Kind) Kind {

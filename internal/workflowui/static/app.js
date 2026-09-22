@@ -64,6 +64,20 @@
     newMcpUrl: document.getElementById("new-mcp-url"),
     newMcpEnv: document.getElementById("new-mcp-env"),
     newMcpHeaders: document.getElementById("new-mcp-headers"),
+    // features (computer use)
+    setComputerUse: document.getElementById("set-computer-use"),
+    // jev
+    jevState: document.getElementById("jev-state"),
+    setJevEnabled: document.getElementById("set-jev-enabled"),
+    setJevBaseUrl: document.getElementById("set-jev-base-url"),
+    setJevModel: document.getElementById("set-jev-model"),
+    setJevApiKey: document.getElementById("set-jev-api-key"),
+    setJevApiKeyEnv: document.getElementById("set-jev-api-key-env"),
+    setJevTimeout: document.getElementById("set-jev-timeout"),
+    setJevConfidence: document.getElementById("set-jev-confidence"),
+    setJevRouting: document.getElementById("set-jev-routing"),
+    setJevMemoryJudge: document.getElementById("set-jev-memory-judge"),
+    setJevGuardrail: document.getElementById("set-jev-guardrail"),
   };
 
   function emptyWorkflow() {
@@ -803,6 +817,39 @@
     d.effort = el.setEffort.value;
     d.max_turns = numberInput(el.setMaxTurns.value, d.max_turns);
     d.max_context_tokens = numberInput(el.setMaxContext.value, d.max_context_tokens);
+    syncFeatureSettings(d);
+  }
+
+  function syncFeatureSettings(d) {
+    d.computer_use = { enabled: Boolean(el.setComputerUse.checked) };
+    const jev = d.jev || (d.jev = {});
+    jev.enabled = Boolean(el.setJevEnabled.checked);
+    jev.base_url = el.setJevBaseUrl.value.trim();
+    jev.model = el.setJevModel.value.trim();
+    jev.api_key_env = el.setJevApiKeyEnv.value.trim();
+    jev.timeout_sec = numberInput(el.setJevTimeout.value, jev.timeout_sec);
+    jev.route_min_confidence = floatInput(el.setJevConfidence.value, jev.route_min_confidence);
+    jev.routing = Boolean(el.setJevRouting.checked);
+    jev.memory_judge = Boolean(el.setJevMemoryJudge.checked);
+    jev.guardrail = Boolean(el.setJevGuardrail.checked);
+    // The key is write-only: an empty field means "keep what is stored", so it
+    // is only included in the payload when the user actually typed something.
+    const typedKey = el.setJevApiKey.value.trim();
+    if (typedKey) {
+      jev.api_key = typedKey;
+      // Reflect it in the badge immediately so the state label is not stale
+      // until the next load.
+      jev.api_key_set = true;
+    } else {
+      delete jev.api_key;
+    }
+  }
+
+  function floatInput(value, fallback) {
+    const raw = String(value).trim();
+    if (raw === "") return fallback ?? 0;
+    const parsed = Number.parseFloat(raw);
+    return Number.isFinite(parsed) ? parsed : fallback ?? 0;
   }
 
   function numberInput(value, fallback) {
@@ -893,6 +940,48 @@
           <input type="checkbox" data-skill-toggle="${escapeAttr(skill.name)}" ${skill.enabled ? "checked" : ""} />
         </label>`).join("")
       : `<div class="empty-state">No skills available.</div>`;
+
+    renderFeatureSettings(d);
+  }
+
+  function renderFeatureSettings(d) {
+    el.setComputerUse.checked = Boolean(d.computer_use?.enabled);
+
+    const jev = d.jev || {};
+    el.setJevEnabled.checked = Boolean(jev.enabled);
+    el.setJevBaseUrl.value = jev.base_url || "";
+    el.setJevModel.value = jev.model || "";
+    el.setJevApiKeyEnv.value = jev.api_key_env || "";
+    el.setJevTimeout.value = jev.timeout_sec ?? 20;
+    el.setJevConfidence.value = jev.route_min_confidence ?? 0.6;
+    el.setJevRouting.checked = Boolean(jev.routing);
+    el.setJevMemoryJudge.checked = Boolean(jev.memory_judge);
+    el.setJevGuardrail.checked = Boolean(jev.guardrail);
+    // Never echo a stored key back into the page.
+    el.setJevApiKey.value = "";
+    el.setJevApiKey.placeholder = jev.api_key_set
+      ? "A key is stored — leave blank to keep it"
+      : "Leave blank to use the env var below";
+
+    el.jevState.textContent = jevStateLabel(jev);
+    el.jevState.className = "badge" + (jevStateLabel(jev) === "active" ? " ok" : "");
+  }
+
+  // jevStateLabel mirrors the backend rule: enabled without a resolvable key is
+  // not active, because every call would fail and fall back.
+  function jevStateLabel(jev) {
+    if (!jev.enabled) return "off";
+    if (!jev.api_key_set && !(jev.api_key_env || "").trim()) return "needs a key";
+    return "active";
+  }
+
+  // refreshJevBadge updates the badge without re-rendering the whole form, so
+  // typing in a text field does not lose focus.
+  function refreshJevBadge() {
+    const jev = settings.draft?.jev || {};
+    const label = jevStateLabel(jev);
+    el.jevState.textContent = label;
+    el.jevState.className = "badge" + (label === "active" ? " ok" : "");
   }
 
   async function saveSettingsV2() {
@@ -908,7 +997,21 @@
       mcp_disabled: Object.fromEntries((d.mcp_servers || []).map((s) => [s.name, Boolean(s.disabled)])),
       skills_enabled: Object.fromEntries((d.skills || []).filter((s) => s.enabled).map((s) => [s.name, true])),
       skills_disabled: Object.fromEntries((d.skills || []).filter((s) => !s.enabled).map((s) => [s.name, true])),
+      computer_use_enabled: Boolean(d.computer_use?.enabled),
+      jev_enabled: Boolean(d.jev?.enabled),
+      jev_base_url: d.jev?.base_url || "",
+      jev_api_key_env: d.jev?.api_key_env || "",
+      jev_model: d.jev?.model || "",
+      jev_timeout_sec: d.jev?.timeout_sec ?? 20,
+      jev_route_min_confidence: d.jev?.route_min_confidence ?? 0.6,
+      jev_routing: Boolean(d.jev?.routing),
+      jev_memory_judge: Boolean(d.jev?.memory_judge),
+      jev_guardrail: Boolean(d.jev?.guardrail),
     };
+    // Only send the key when the user typed one; otherwise the stored key stays.
+    if (d.jev?.api_key) {
+      payload.jev_api_key = d.jev.api_key;
+    }
     try {
       await api("/api/settings", {
         method: "POST",
@@ -1122,6 +1225,36 @@
       if (!skill) return;
       skill.enabled = input.checked;
       markSettingsDirty();
+    });
+
+    // Features + Jev: sync the draft on every change so the save payload is
+    // always built from what the user currently sees.
+    [
+      el.setComputerUse,
+      el.setJevEnabled,
+      el.setJevApiKey,
+      el.setJevRouting,
+      el.setJevMemoryJudge,
+      el.setJevGuardrail,
+    ].forEach((input) => {
+      input.addEventListener("change", () => {
+        syncFeatureSettings(settings.draft || {});
+        refreshJevBadge();
+        markSettingsDirty();
+      });
+    });
+    [
+      el.setJevBaseUrl,
+      el.setJevModel,
+      el.setJevApiKeyEnv,
+      el.setJevTimeout,
+      el.setJevConfidence,
+    ].forEach((input) => {
+      input.addEventListener("input", () => {
+        syncFeatureSettings(settings.draft || {});
+        refreshJevBadge();
+        markSettingsDirty();
+      });
     });
 
     el.toolsToggle.addEventListener("click", (e) => {

@@ -218,6 +218,104 @@
             <div class="section-heading"><h2>Skills</h2></div>
             <div id="skill-list" class="settings-list"></div>
           </section>
+
+          <section class="settings-section">
+            <div class="section-heading"><h2>Features</h2></div>
+            <div class="settings-list">
+              <label class="settings-row settings-toggle-row">
+                <div class="settings-row-main">
+                  <strong>Computer Use</strong>
+                  <div class="settings-row-detail">
+                    Desktop screenshot / mouse / keyboard automation and the bundled
+                    <code>computer-use</code> skill. Needs a build with the
+                    <code>computeruse</code> tag and CGO; without it the tool registers
+                    but returns a rebuild error.
+                  </div>
+                </div>
+                <input type="checkbox" id="set-computer-use" />
+              </label>
+            </div>
+          </section>
+
+          <section class="settings-section">
+            <div class="section-heading">
+              <h2>Jev (System One)</h2>
+              <span class="badge" id="jev-state"></span>
+            </div>
+            <p class="settings-hint">
+              TypeSafe System One decides <em>how</em> work is routed: which skill or
+              tool fits, how to classify a memory, whether an action looks unsafe. It
+              never writes code and never replaces the chat model. Every decision has a
+              fallback, so leaving this off changes nothing.
+            </p>
+            <div class="settings-list">
+              <label class="settings-row settings-toggle-row">
+                <div class="settings-row-main">
+                  <strong>Enable Jev</strong>
+                  <div class="settings-row-detail">
+                    Requires a resolvable API key. Enabled without a key is treated as off.
+                  </div>
+                </div>
+                <input type="checkbox" id="set-jev-enabled" />
+              </label>
+            </div>
+
+            <div class="settings-grid">
+              <label>Base URL
+                <input id="set-jev-base-url" type="url" placeholder="https://api.typesafe.ai" />
+              </label>
+              <label>Model
+                <input id="set-jev-model" type="text" placeholder="jev-latest" />
+              </label>
+              <label>API key
+                <input id="set-jev-api-key" type="password" placeholder="Leave blank to keep the current key" />
+              </label>
+              <label>API key env var
+                <input id="set-jev-api-key-env" type="text" placeholder="TYPESAFE_API_KEY" />
+              </label>
+              <label>Timeout (sec)
+                <input id="set-jev-timeout" type="number" min="1" max="120" step="1" />
+              </label>
+              <label>Min confidence
+                <input id="set-jev-confidence" type="number" min="0" max="1" step="0.05" />
+              </label>
+            </div>
+
+            <div class="settings-list">
+              <label class="settings-row settings-toggle-row">
+                <div class="settings-row-main">
+                  <strong>Skill &amp; tool routing</strong>
+                  <div class="settings-row-detail">
+                    Picks the skill for each prompt and fills in tools lexical matching
+                    missed. Also registers the bundled workflow skills
+                    (explore, implement, verify, research, debug, review).
+                  </div>
+                </div>
+                <input type="checkbox" id="set-jev-routing" />
+              </label>
+              <label class="settings-row settings-toggle-row">
+                <div class="settings-row-main">
+                  <strong>Memory judge</strong>
+                  <div class="settings-row-detail">
+                    Classifies memories with typed questions instead of parsing JSON
+                    out of a chat model.
+                  </div>
+                </div>
+                <input type="checkbox" id="set-jev-memory-judge" />
+              </label>
+              <label class="settings-row settings-toggle-row">
+                <div class="settings-row-main">
+                  <strong>Safety guardrail</strong>
+                  <div class="settings-row-detail">
+                    Checks mutating tools for secrets, destructive commands,
+                    exfiltration, and privilege escalation. Holds the call when the
+                    check cannot run. Advisory only — permissions still govern access.
+                  </div>
+                </div>
+                <input type="checkbox" id="set-jev-guardrail" />
+              </label>
+            </div>
+          </section>
         </div>
       </main>
     </div>

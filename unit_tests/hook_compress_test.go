@@ -312,7 +312,6 @@ func TestHookBuiltin_ViewPreservesStructure(t *testing.T) {
 	t.Logf("View structure preserve: before=%d after=%d message=%q", len(raw), len(out), result.Message)
 }
 
-
 type staticTextTool struct {
 	name string
 	text string

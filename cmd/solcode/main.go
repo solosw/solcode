@@ -788,6 +788,21 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 					"max_turns":          next.MaxTurns,
 					"max_context_tokens": next.MaxContextTokens,
 					"skills":             map[string]any{"enabled": next.Skills.Enabled, "disabled": next.Skills.Disabled},
+					// Written as a nested object so the merge keeps unrelated
+					// ComputerUse keys that a future version may add.
+					"computer_use": map[string]any{"enabled": next.ComputerUse.Enabled},
+					"jev": map[string]any{
+						"enabled":              next.Jev.Enabled,
+						"base_url":             next.Jev.BaseURL,
+						"api_key":              next.Jev.APIKey,
+						"api_key_env":          next.Jev.APIKeyEnv,
+						"model":                next.Jev.Model,
+						"timeout_sec":          next.Jev.TimeoutSec,
+						"route_min_confidence": next.Jev.RouteMinConfidence,
+						"routing":              next.Jev.Routing,
+						"memory_judge":         next.Jev.MemoryJudge,
+						"guardrail":            next.Jev.Guardrail,
+					},
 				}
 				if err := config.SaveLocalOverrides(persistencePath, updates); err != nil {
 					return fmt.Errorf("could not persist settings: %w", err)

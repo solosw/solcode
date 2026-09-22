@@ -66,7 +66,6 @@ func TestLoadTUIThemeSettings(t *testing.T) {
 	}
 }
 
-
 func TestLoadProxySettings(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "settings.json")
 	writeFile(t, path, `{
@@ -102,6 +101,93 @@ func TestLoadComputerUseSettings(t *testing.T) {
 	}
 	if !cfg.ComputerUseEnabled() {
 		t.Fatalf("ComputerUseEnabled() = false, want true")
+	}
+}
+
+func TestLoadJevSettings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	writeFile(t, path, `{
+		"jev": {
+			"enabled": true,
+			"api_key": "key-123",
+			"base_url": "https://api.example.test/",
+			"model": "jev-test",
+			"timeout_sec": 45,
+			"route_min_confidence": 0.75,
+			"routing": true,
+			"memory_judge": true,
+			"guardrail": true
+		}
+	}`)
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load() = %v", err)
+	}
+	if !cfg.Jev.Enabled || cfg.Jev.APIKey != "key-123" {
+		t.Fatalf("Jev = %+v", cfg.Jev)
+	}
+	// Normalize trims the trailing slash so endpoint building is predictable.
+	if cfg.Jev.BaseURL != "https://api.example.test" {
+		t.Fatalf("BaseURL = %q", cfg.Jev.BaseURL)
+	}
+	if cfg.Jev.Model != "jev-test" || cfg.Jev.TimeoutSec != 45 {
+		t.Fatalf("Jev = %+v", cfg.Jev)
+	}
+	if cfg.Jev.RouteMinConfidence != 0.75 {
+		t.Fatalf("RouteMinConfidence = %v", cfg.Jev.RouteMinConfidence)
+	}
+	if !cfg.Jev.Routing || !cfg.Jev.MemoryJudge || !cfg.Jev.Guardrail {
+		t.Fatalf("subsystem toggles = %+v", cfg.Jev)
+	}
+	if !cfg.JevEnabled() {
+		t.Fatal("JevEnabled() = false, want true")
+	}
+}
+
+// Jev is opt-in: enabling it without a key must not activate it, because every
+// call would fail and the fallbacks would fire on every decision.
+func TestJevRequiresAPIKey(t *testing.T) {
+	cfg := config.Default()
+	cfg.Jev.Enabled = true
+	if cfg.JevEnabled() {
+		t.Fatal("JevEnabled() = true without an api key")
+	}
+}
+
+func TestJevNormalizeBoundsTimeoutAndConfidence(t *testing.T) {
+	cfg := config.Default()
+	cfg.Jev = config.JevConfig{
+		Enabled:            true,
+		APIKey:             "k",
+		TimeoutSec:         9999,
+		RouteMinConfidence: 5,
+	}
+	if err := cfg.Normalize(); err != nil {
+		t.Fatalf("Normalize() = %v", err)
+	}
+	if cfg.Jev.TimeoutSec != 120 {
+		t.Fatalf("TimeoutSec = %d, want the 120 cap", cfg.Jev.TimeoutSec)
+	}
+	if cfg.Jev.RouteMinConfidence != 0.6 {
+		t.Fatalf("RouteMinConfidence = %v, want the 0.6 default", cfg.Jev.RouteMinConfidence)
+	}
+
+	// A zero timeout gets the default rather than an unbounded wait.
+	cfg2 := config.Default()
+	cfg2.Jev = config.JevConfig{Enabled: true, APIKey: "k"}
+	if err := cfg2.Normalize(); err != nil {
+		t.Fatalf("Normalize() = %v", err)
+	}
+	if cfg2.Jev.TimeoutSec != 20 {
+		t.Fatalf("TimeoutSec = %d, want 20", cfg2.Jev.TimeoutSec)
+	}
+}
+
+func TestJevConfigIsOffByDefault(t *testing.T) {
+	cfg := config.Default()
+	if cfg.Jev.Enabled || cfg.JevEnabled() {
+		t.Fatalf("Jev should be off by default: %+v", cfg.Jev)
 	}
 }
 

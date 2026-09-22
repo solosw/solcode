@@ -54,6 +54,9 @@ type App struct {
 	mcpLoadMu        sync.Mutex
 	mcpLoaded        bool
 	ckpt             checkpointState
+	// jev is the optional TypeSafe System One decision layer. Nil disables it,
+	// and every caller must behave identically either way.
+	jev *jevRuntime
 
 	// usageSession binds OnUsage accumulation to the active session so
 	// token totals persist across reloads.
@@ -204,6 +207,14 @@ func New(cfg config.Config, opts ...Option) (*App, error) {
 
 	recordFileChange := newFileChangeRecorder(graphStore)
 
+	// Jev is an optional decision layer (TypeSafe System One). It only advises
+	// decisions that already have deterministic fallbacks, so a nil runtime is
+	// the normal case and behaves exactly like Jev being absent.
+	jev, err := buildJev(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("configure jev: %w", err)
+	}
+
 	// Construct App first so engine OnUsage can bind to emitUsage for session totals.
 	application := &App{
 		Config:           cfg,
@@ -231,8 +242,12 @@ func New(cfg config.Config, opts ...Option) (*App, error) {
 		onAskUser:        options.onAskUser,
 		textFileSystem:   options.textFileSystem,
 		queuedPrompts:    options.queuedPrompts,
+		jev:              jev,
 	}
-	eng := engine.NewEngine(engineConfig(cfg, client, runtime, registry, permissions, options.onTextDelta, options.onThinkingDelta, options.onToolStart, options.onToolDone, application.emitUsage, options.onStatus, options.onAgentProgress, options.onAskUser, options.textFileSystem, options.queuedPrompts, recordFileChange, application.captureCheckpoint, application.uncaptureCheckpoint, application.listCheckpointPaths, application.fingerprintBaseline, application.compactMessagesMidRun))
+	engineCfg := engineConfig(cfg, client, runtime, registry, permissions, options.onTextDelta, options.onThinkingDelta, options.onToolStart, options.onToolDone, application.emitUsage, options.onStatus, options.onAgentProgress, options.onAskUser, options.textFileSystem, options.queuedPrompts, recordFileChange, application.captureCheckpoint, application.uncaptureCheckpoint, application.listCheckpointPaths, application.fingerprintBaseline, application.compactMessagesMidRun)
+	engineCfg.Router = jev.router()
+	engineCfg.Guardrail = jev.guardrail()
+	eng := engine.NewEngine(engineCfg)
 	coordinator := agent.NewCoordinator(eng)
 	subagent := tool.NewSubagentTool(coordinator)
 	registry.Register(subagent, tool.NewTaskToolWithSubagent(subagent))
@@ -247,11 +262,20 @@ func New(cfg config.Config, opts ...Option) (*App, error) {
 		memoryStore := memory.NewFileStore(cfg.Memory.Dir)
 		memoryModel := memoryModelName(cfg)
 		application.MemoryStore = memoryStore
+		// The chat-model judge asks an LLM to emit JSON and parses the text,
+		// which fails on any stray prose. When Jev is available its typed
+		// questions replace that path; otherwise the existing judge stays.
+		judge := memory.Judge(memory.AnthropicJudge{Client: client, Model: memoryModel})
+		extractor := memory.Extractor(memory.AnthropicExtractor{Client: client, Model: memoryModel})
+		if jevJudge := jev.memoryJudge(); jevJudge != nil {
+			judge = jevJudge
+			extractor = jev.memoryExtractor()
+		}
 		application.MemoryManager = memory.NewManagerWithExtractor(
 			memoryStore,
 			memory.DefaultGate{},
-			memory.AnthropicJudge{Client: client, Model: memoryModel},
-			memory.AnthropicExtractor{Client: client, Model: memoryModel},
+			judge,
+			extractor,
 		).WithLifecycle(memory.Lifecycle{Config: memory.LifecycleConfig{
 			M1TTL:                    time.Duration(cfg.Memory.TierM1TTLHours) * time.Hour,
 			M2TTL:                    time.Duration(cfg.Memory.TierM2TTLHours) * time.Hour,
@@ -519,16 +543,33 @@ func (a *App) ReloadFeatures(cfg config.Config, mcpFactory mcp.ClientFactory) er
 	a.ChangeGraph = graphStore
 	subagent := tool.NewSubagentTool(a.Coordinator)
 	registry.Register(subagent, tool.NewTaskToolWithSubagent(subagent))
+	// Rebuild the Jev decision layer from the new config. Without this a
+	// settings save would leave the router, guardrail, and memory judge wired to
+	// the previous config — or, when Jev was just enabled in the UI, wired to
+	// nothing at all.
+	jev, err := buildJev(cfg)
+	if err != nil {
+		return fmt.Errorf("configure jev: %w", err)
+	}
+	a.jev = jev
 	if cfg.Memory.Enabled {
 		if a.MemoryStore == nil {
 			a.MemoryStore = memory.NewFileStore(cfg.Memory.Dir)
 		}
 		memoryModel := memoryModelName(cfg)
+		// Keep the same judge/extractor preference as startup: Jev's typed
+		// questions when available, the chat-model judge otherwise.
+		judge := memory.Judge(memory.AnthropicJudge{Client: a.Client, Model: memoryModel})
+		extractor := memory.Extractor(memory.AnthropicExtractor{Client: a.Client, Model: memoryModel})
+		if jevJudge := jev.memoryJudge(); jevJudge != nil {
+			judge = jevJudge
+			extractor = jev.memoryExtractor()
+		}
 		a.MemoryManager = memory.NewManagerWithExtractor(
 			a.MemoryStore,
 			memory.DefaultGate{},
-			memory.AnthropicJudge{Client: a.Client, Model: memoryModel},
-			memory.AnthropicExtractor{Client: a.Client, Model: memoryModel},
+			judge,
+			extractor,
 		).WithLifecycle(memory.Lifecycle{Config: memory.LifecycleConfig{
 			M1TTL:                    time.Duration(cfg.Memory.TierM1TTLHours) * time.Hour,
 			M2TTL:                    time.Duration(cfg.Memory.TierM2TTLHours) * time.Hour,
@@ -539,7 +580,10 @@ func (a *App) ReloadFeatures(cfg config.Config, mcpFactory mcp.ClientFactory) er
 	} else {
 		a.MemoryManager = nil
 	}
-	a.Engine.UpdateConfig(engineConfig(cfg, a.Client, a.Hooks, a.Tools, a.Permissions, a.onTextDelta, a.onThinkingDelta, a.onToolStart, a.onToolDone, a.emitUsage, a.onStatus, a.onAgentProgress, a.onAskUser, a.textFileSystem, a.queuedPrompts, newFileChangeRecorder(a.ChangeGraph), a.captureCheckpoint, a.uncaptureCheckpoint, a.listCheckpointPaths, a.fingerprintBaseline, a.compactMessagesMidRun))
+	engineCfg := engineConfig(cfg, a.Client, a.Hooks, a.Tools, a.Permissions, a.onTextDelta, a.onThinkingDelta, a.onToolStart, a.onToolDone, a.emitUsage, a.onStatus, a.onAgentProgress, a.onAskUser, a.textFileSystem, a.queuedPrompts, newFileChangeRecorder(a.ChangeGraph), a.captureCheckpoint, a.uncaptureCheckpoint, a.listCheckpointPaths, a.fingerprintBaseline, a.compactMessagesMidRun)
+	engineCfg.Router = jev.router()
+	engineCfg.Guardrail = jev.guardrail()
+	a.Engine.UpdateConfig(engineCfg)
 	return nil
 }
 
@@ -3187,6 +3231,26 @@ func (a *App) ReloadWorkflows() {
 	a.WorkflowRegistry = loadWorkflows(a.Config)
 }
 
+// SuggestWorkflow asks Jev which loaded workflow best fits a request.
+//
+// Workflows are only ever invoked explicitly by the user, so this is a hint for
+// a picker or a slash-command completion — never an automatic dispatch. It
+// returns "" when Jev is off, no workflow is loaded, or nothing matched
+// confidently, and callers should then fall back to listing the workflows.
+func (a *App) SuggestWorkflow(ctx context.Context, request string) string {
+	if a == nil {
+		return ""
+	}
+	candidates := make([]engine.WorkflowCandidate, 0)
+	for _, def := range a.ListWorkflows() {
+		candidates = append(candidates, engine.WorkflowCandidate{
+			Name:        def.Name,
+			Description: def.Description,
+		})
+	}
+	return a.jev.SuggestWorkflow(ctx, request, candidates)
+}
+
 // SaveWorkflow writes a workflow definition to the user or project workflows directory
 // and reloads the in-memory registry.
 func (a *App) SaveWorkflow(def workflow.Definition, scope workflow.SaveScope) (string, error) {
@@ -3260,6 +3324,50 @@ func workflowDirForScope(cfg config.Config, scope workflow.SaveScope) (string, e
 	}
 }
 
+// builtinSkillCacheDir is where bundled skills are materialized on disk. They
+// live under the user config dir so a skill's Root is a real path the Skill tool
+// and View/Bash can resolve.
+func builtinSkillCacheDir() string {
+	return filepath.Join(config.UserConfigDir(), "builtin-skills")
+}
+
+// registerBuiltinSkills adds the bundled workflow skills that ship with solcode.
+//
+// They are registered only when Jev is doing skill routing. Without Jev the
+// catalog is just another list the chat model has to reason about on its own,
+// and these skills describe methodology the model already follows by default —
+// so the default build stays lean and the bundle appears only in the mode that
+// can actually make use of it.
+//
+// Individual skills can still be disabled with skills.disabled, and an explicit
+// skills.enabled list is honored.
+func registerBuiltinSkills(registry *skill.Registry, cfg config.Config) {
+	if registry == nil || !jevSkillRoutingEnabled(cfg) {
+		return
+	}
+	defs, err := builtin.MaterializeBuiltinSkills(builtinSkillCacheDir())
+	if err != nil {
+		jevLog("bundled skills unavailable: " + err.Error())
+		return
+	}
+	for _, def := range defs {
+		if len(cfg.Skills.Enabled) > 0 && !contains(cfg.Skills.Enabled, def.Name) {
+			continue
+		}
+		if contains(cfg.Skills.Disabled, def.Name) {
+			continue
+		}
+		registry.Add(def)
+	}
+}
+
+// jevSkillRoutingEnabled reports whether the Jev decision layer is configured to
+// pick skills. It mirrors JevEnabled so the registration gate and the router
+// cannot disagree about whether skills should exist.
+func jevSkillRoutingEnabled(cfg config.Config) bool {
+	return cfg.JevEnabled() && cfg.Jev.Routing
+}
+
 func loadSkills(cfg config.Config) *skill.Registry {
 	registry := skill.NewRegistry()
 	for _, dir := range cfg.Skills.Paths {
@@ -3288,6 +3396,7 @@ func loadSkills(cfg config.Config) *skill.Registry {
 			}
 		}
 	}
+	registerBuiltinSkills(registry, cfg)
 	return registry
 }
 

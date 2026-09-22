@@ -56,8 +56,21 @@ var hiddenFromModel = map[string]bool{
 // sub-agents). nil or empty allowed enables dynamic routing over all tools.
 // Wait and Subagent are never model-visible (see hiddenFromModel).
 func SelectToolsForTurn(all []tool.Tool, allowed []string, query string, enabled map[string]bool) []tool.Tool {
+	selected, _ := selectToolsForTurn(all, allowed, query, enabled)
+	return selected
+}
+
+// selectToolsForTurn is SelectToolsForTurn with a report of which tools the
+// current selection contains. The report lets the semantic router ask only
+// about candidates lexical matching could not resolve.
+func selectToolsForTurn(all []tool.Tool, allowed []string, query string, enabled map[string]bool) ([]tool.Tool, map[string]bool) {
 	if len(allowed) > 0 {
-		return filterTools(all, allowed)
+		selected := filterTools(all, allowed)
+		names := make(map[string]bool, len(selected))
+		for _, candidate := range selected {
+			names[candidate.Name()] = true
+		}
+		return selected, names
 	}
 	selected := make(map[string]bool)
 	for _, candidate := range all {
@@ -108,7 +121,7 @@ func SelectToolsForTurn(all []tool.Tool, allowed []string, query string, enabled
 			out = append(out, candidate)
 		}
 	}
-	return out
+	return out, selected
 }
 
 func filterTools(all []tool.Tool, allowed []string) []tool.Tool {
