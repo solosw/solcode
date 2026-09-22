@@ -252,6 +252,10 @@ func New(cfg config.Config, opts ...Option) (*App, error) {
 	subagent := tool.NewSubagentTool(coordinator)
 	registry.Register(subagent, tool.NewTaskToolWithSubagent(subagent))
 	registry.Register(tool.NewModeSwitchToolWithGoal(application.SwitchMode, application.startGoalFlow))
+	// When Jev is on, screen WebSearch hits against the search query itself.
+	if jev != nil && jev.decider != nil {
+		tool.ConfigureWebSearchScreening(registry, jev.decider, jev.routeConfidence())
+	}
 	application.Engine = eng
 	application.Coordinator = coordinator
 
@@ -552,6 +556,9 @@ func (a *App) ReloadFeatures(cfg config.Config, mcpFactory mcp.ClientFactory) er
 		return fmt.Errorf("configure jev: %w", err)
 	}
 	a.jev = jev
+	if jev != nil && jev.decider != nil {
+		tool.ConfigureWebSearchScreening(registry, jev.decider, jev.routeConfidence())
+	}
 	if cfg.Memory.Enabled {
 		if a.MemoryStore == nil {
 			a.MemoryStore = memory.NewFileStore(cfg.Memory.Dir)

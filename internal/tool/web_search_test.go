@@ -42,7 +42,7 @@ func TestWebSearchUsesMetasearchCategoryAndDeduplicates(t *testing.T) {
 		{Category: websearch.CategoryNews, News: &websearch.NewsResult{Title: "News", URL: "https://news.example.com/a", Body: "News result"}},
 		{Category: websearch.CategoryNews, News: &websearch.NewsResult{Title: "Duplicate", URL: "https://news.example.com/a", Body: "Duplicate result"}},
 	}}
-	wt := newWebSearchTool(fake, nil).(*webSearchTool)
+	wt := newWebSearchTool(fake, nil, nil, nil).(*webSearchTool)
 	wt.timeout = time.Second
 
 	result, err := wt.Invoke(context.Background(), nil, json.RawMessage(`{"query":"agent skills","category":"news","max_results":50}`))
@@ -68,7 +68,7 @@ func TestWebSearchUsesMetasearchCategoryAndDeduplicates(t *testing.T) {
 
 func TestWebSearchUsesBaiduFallbackOnlyAfterTextTimeout(t *testing.T) {
 	fallback := &fakeBaiduSearcher{hits: []SearchHit{{Title: "Baidu result", URL: "https://example.cn/a", Snippet: "fallback"}}}
-	wt := newWebSearchTool(&fakeWebSearcher{err: context.DeadlineExceeded}, fallback).(*webSearchTool)
+	wt := newWebSearchTool(&fakeWebSearcher{err: context.DeadlineExceeded}, fallback, nil, nil).(*webSearchTool)
 	result, err := wt.Invoke(context.Background(), nil, json.RawMessage(`{"query":"agent skills","category":"text","max_results":7}`))
 	if err != nil {
 		t.Fatal(err)
@@ -83,7 +83,7 @@ func TestWebSearchUsesBaiduFallbackOnlyAfterTextTimeout(t *testing.T) {
 
 func TestWebSearchUsesBaiduFallbackAfterBackendPanic(t *testing.T) {
 	fallback := &fakeBaiduSearcher{hits: []SearchHit{{Title: "Baidu panic fallback", URL: "https://example.cn/b", Snippet: "fallback"}}}
-	wt := newWebSearchTool(&fakeWebSearcher{err: errors.New("websearch backend panicked: runtime error: invalid memory address or nil pointer dereference")}, fallback).(*webSearchTool)
+	wt := newWebSearchTool(&fakeWebSearcher{err: errors.New("websearch backend panicked: runtime error: invalid memory address or nil pointer dereference")}, fallback, nil, nil).(*webSearchTool)
 	result, err := wt.Invoke(context.Background(), nil, json.RawMessage(`{"query":"agent skills","category":"text"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -98,7 +98,7 @@ func TestWebSearchUsesBaiduFallbackAfterBackendPanic(t *testing.T) {
 
 func TestWebSearchDoesNotUseBaiduFallbackForNonTimeoutOrNonText(t *testing.T) {
 	fallback := &fakeBaiduSearcher{hits: []SearchHit{{Title: "should not appear"}}}
-	wt := newWebSearchTool(&fakeWebSearcher{err: errors.New("backend unavailable")}, fallback).(*webSearchTool)
+	wt := newWebSearchTool(&fakeWebSearcher{err: errors.New("backend unavailable")}, fallback, nil, nil).(*webSearchTool)
 	result, err := wt.Invoke(context.Background(), nil, json.RawMessage(`{"query":"agent skills","category":"text"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -107,7 +107,7 @@ func TestWebSearchDoesNotUseBaiduFallbackForNonTimeoutOrNonText(t *testing.T) {
 		t.Fatalf("non-timeout result/fallback = %+v / %+v", result, fallback)
 	}
 
-	wt = newWebSearchTool(&fakeWebSearcher{err: context.DeadlineExceeded}, fallback).(*webSearchTool)
+	wt = newWebSearchTool(&fakeWebSearcher{err: context.DeadlineExceeded}, fallback, nil, nil).(*webSearchTool)
 	result, err = wt.Invoke(context.Background(), nil, json.RawMessage(`{"query":"agent skills","category":"news"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -118,7 +118,7 @@ func TestWebSearchDoesNotUseBaiduFallbackForNonTimeoutOrNonText(t *testing.T) {
 }
 
 func TestWebSearchRejectsUnknownCategory(t *testing.T) {
-	wt := newWebSearchTool(&fakeWebSearcher{}, nil).(*webSearchTool)
+	wt := newWebSearchTool(&fakeWebSearcher{}, nil, nil, nil).(*webSearchTool)
 	result, err := wt.Invoke(context.Background(), nil, json.RawMessage(`{"query":"agent skills","category":"invalid"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -129,7 +129,7 @@ func TestWebSearchRejectsUnknownCategory(t *testing.T) {
 }
 
 func TestWebSearchReturnsToolErrorWhenBackendFails(t *testing.T) {
-	wt := newWebSearchTool(&fakeWebSearcher{err: errors.New("backend unavailable")}, nil).(*webSearchTool)
+	wt := newWebSearchTool(&fakeWebSearcher{err: errors.New("backend unavailable")}, nil, nil, nil).(*webSearchTool)
 	result, err := wt.Invoke(context.Background(), nil, json.RawMessage(`{"query":"agent skills"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -156,5 +156,91 @@ func TestWebSearchCategory(t *testing.T) {
 		if err != nil || got != tc.want {
 			t.Fatalf("webSearchCategory(%q) = %q, %v; want %q, nil", tc.in, got, err, tc.want)
 		}
+	}
+}
+
+type fakeParallelSearcher struct {
+	hits  []SearchHit
+	err   error
+	query string
+	limit int
+}
+
+func (f *fakeParallelSearcher) Search(_ context.Context, query string, maxResults int) ([]SearchHit, error) {
+	f.query = query
+	f.limit = maxResults
+	return f.hits, f.err
+}
+
+type fakeSearchScreener struct {
+	query string
+	hits  []SearchHit
+	out   []SearchHit
+}
+
+func (f *fakeSearchScreener) Screen(_ context.Context, query string, hits []SearchHit) []SearchHit {
+	f.query = query
+	f.hits = append([]SearchHit(nil), hits...)
+	if f.out != nil {
+		return f.out
+	}
+	return hits
+}
+
+func TestWebSearchMergesParallelAheadOfMetasearch(t *testing.T) {
+	fake := &fakeWebSearcher{results: []websearch.SearchResult{
+		{Category: websearch.CategoryText, Text: &websearch.TextResult{Title: "Meta", Href: "https://meta.example/a", Body: "from meta"}},
+		{Category: websearch.CategoryText, Text: &websearch.TextResult{Title: "Dup", Href: "https://parallel.example/a", Body: "dup from meta"}},
+	}}
+	parallel := &fakeParallelSearcher{hits: []SearchHit{
+		{Title: "Parallel", URL: "https://parallel.example/a", Snippet: "from parallel"},
+		{Title: "OnlyParallel", URL: "https://parallel.example/b", Snippet: "only"},
+	}}
+	wt := newWebSearchTool(fake, nil, parallel, nil).(*webSearchTool)
+	result, err := wt.Invoke(context.Background(), nil, json.RawMessage(`{"query":"agent skills","category":"text","max_results":3}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("result = %+v", result)
+	}
+	if parallel.query != "agent skills" || parallel.limit != 3 {
+		t.Fatalf("parallel query/limit = %q/%d", parallel.query, parallel.limit)
+	}
+	if !strings.Contains(result.Text, "1. Parallel") || !strings.Contains(result.Text, "2. OnlyParallel") || !strings.Contains(result.Text, "3. Meta") {
+		t.Fatalf("merged output = %q", result.Text)
+	}
+	if strings.Contains(result.Text, "Dup") {
+		t.Fatalf("duplicate parallel URL should be dropped: %q", result.Text)
+	}
+}
+
+func TestWebSearchScreensResultsWithQuery(t *testing.T) {
+	fake := &fakeWebSearcher{results: []websearch.SearchResult{
+		{Category: websearch.CategoryText, Text: &websearch.TextResult{Title: "Keep", Href: "https://keep.example", Body: "yes"}},
+		{Category: websearch.CategoryText, Text: &websearch.TextResult{Title: "Drop", Href: "https://drop.example", Body: "no"}},
+	}}
+	screener := &fakeSearchScreener{out: []SearchHit{{Title: "Keep", URL: "https://keep.example", Snippet: "yes"}}}
+	wt := newWebSearchTool(fake, nil, nil, screener).(*webSearchTool)
+	result, err := wt.Invoke(context.Background(), nil, json.RawMessage(`{"query":"agent skills","category":"text"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError || screener.query != "agent skills" {
+		t.Fatalf("result=%+v screener.query=%q", result, screener.query)
+	}
+	if !strings.Contains(result.Text, "Keep") || strings.Contains(result.Text, "Drop") {
+		t.Fatalf("screened output = %q", result.Text)
+	}
+}
+
+func TestMergeSearchHitsPrefersPrimary(t *testing.T) {
+	got := mergeSearchHits(
+		[]SearchHit{{Title: "P", URL: "https://p", Snippet: "p"}},
+		[]SearchHit{{Title: "S", URL: "https://s", Snippet: "s"}, {Title: "Dup", URL: "https://p", Snippet: "dup"}},
+		2,
+	)
+	if len(got) != 2 || got[0].URL != "https://p" || got[1].URL != "https://s" {
+		t.Fatalf("got %#v", got)
 	}
 }
