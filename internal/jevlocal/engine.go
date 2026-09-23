@@ -36,8 +36,9 @@ type InferenceEngine interface {
 	Close() error
 }
 
-// UnimplementedEngine is the default production backend until onnx-go / ORT /
-// CUDA is wired. Ready is false; RunNamed always returns ErrEngineNotReady.
+// UnimplementedEngine is the explicit stub backend (engine=stub). Ready is
+// false; RunNamed always returns ErrEngineNotReady. Local configs default to
+// ORT instead — keep this for dry runs and Decider fallback tests.
 type UnimplementedEngine struct{}
 
 func (UnimplementedEngine) Name() string { return "unimplemented" }

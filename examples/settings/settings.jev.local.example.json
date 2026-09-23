@@ -2,8 +2,8 @@
   "jev": {
     "enabled": true,
     "type": "local",
-    "model": "open-jev-deberta-v3-large",
-    "model_dir": "~/.solcode/models/open-jev-deberta-v3-large",
+    "model": "laya-onnx",
+    "model_dir": "~/.solcode/models/laya-onnx",
     "dtype": "q4",
     "engine": "ort",
     "ort_lib": "",

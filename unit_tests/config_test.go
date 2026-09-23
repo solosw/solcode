@@ -192,6 +192,9 @@ func TestJevLocalNormalizesAndRequiresArtifacts(t *testing.T) {
 	if cfg.Jev.DType != "q4" {
 		t.Fatalf("DType = %q, want q4", cfg.Jev.DType)
 	}
+	if cfg.Jev.Engine != "ort" {
+		t.Fatalf("Engine = %q, want ort default for local", cfg.Jev.Engine)
+	}
 
 	empty := config.Default()
 	empty.Jev = config.JevConfig{
@@ -206,6 +209,23 @@ func TestJevLocalNormalizesAndRequiresArtifacts(t *testing.T) {
 	}
 	if empty.JevEnabled() {
 		t.Fatal("local without artifacts must stay disabled")
+	}
+	if empty.Jev.Engine != "ort" {
+		t.Fatalf("empty Engine should normalize to ort, got %q", empty.Jev.Engine)
+	}
+
+	stub := config.Default()
+	stub.Jev = config.JevConfig{
+		Enabled: true,
+		Type:    config.JevBackendLocal,
+		Model:   "open-jev-deberta-v3-large",
+		Engine:  "stub",
+	}
+	if err := stub.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	if stub.Jev.Engine != "stub" {
+		t.Fatalf("explicit stub must be preserved, got %q", stub.Jev.Engine)
 	}
 }
 

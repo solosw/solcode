@@ -69,15 +69,22 @@
     // jev
     jevState: document.getElementById("jev-state"),
     setJevEnabled: document.getElementById("set-jev-enabled"),
+    setJevType: document.getElementById("set-jev-type"),
     setJevBaseUrl: document.getElementById("set-jev-base-url"),
     setJevModel: document.getElementById("set-jev-model"),
     setJevApiKey: document.getElementById("set-jev-api-key"),
     setJevApiKeyEnv: document.getElementById("set-jev-api-key-env"),
+    setJevModelDir: document.getElementById("set-jev-model-dir"),
+    setJevDType: document.getElementById("set-jev-dtype"),
+    setJevEngine: document.getElementById("set-jev-engine"),
+    setJevOrtLib: document.getElementById("set-jev-ort-lib"),
     setJevTimeout: document.getElementById("set-jev-timeout"),
     setJevConfidence: document.getElementById("set-jev-confidence"),
     setJevRouting: document.getElementById("set-jev-routing"),
     setJevMemoryJudge: document.getElementById("set-jev-memory-judge"),
     setJevGuardrail: document.getElementById("set-jev-guardrail"),
+    jevApiFields: document.getElementById("jev-api-fields"),
+    jevLocalFields: document.getElementById("jev-local-fields"),
   };
 
   function emptyWorkflow() {
@@ -824,9 +831,14 @@
     d.computer_use = { enabled: Boolean(el.setComputerUse.checked) };
     const jev = d.jev || (d.jev = {});
     jev.enabled = Boolean(el.setJevEnabled.checked);
+    jev.type = (el.setJevType.value || "api").trim().toLowerCase() || "api";
     jev.base_url = el.setJevBaseUrl.value.trim();
     jev.model = el.setJevModel.value.trim();
     jev.api_key_env = el.setJevApiKeyEnv.value.trim();
+    jev.model_dir = el.setJevModelDir.value.trim();
+    jev.dtype = el.setJevDType.value.trim();
+    jev.engine = (el.setJevEngine.value || "ort").trim() || "ort";
+    jev.ort_lib = el.setJevOrtLib.value.trim();
     jev.timeout_sec = numberInput(el.setJevTimeout.value, jev.timeout_sec);
     jev.route_min_confidence = floatInput(el.setJevConfidence.value, jev.route_min_confidence);
     jev.routing = Boolean(el.setJevRouting.checked);
@@ -843,6 +855,13 @@
     } else {
       delete jev.api_key;
     }
+    updateJevBackendVisibility(jev.type);
+  }
+
+  function updateJevBackendVisibility(type) {
+    const local = String(type || "api").toLowerCase() === "local";
+    el.jevApiFields.classList.toggle("hidden", local);
+    el.jevLocalFields.classList.toggle("hidden", !local);
   }
 
   function floatInput(value, fallback) {
@@ -949,9 +968,14 @@
 
     const jev = d.jev || {};
     el.setJevEnabled.checked = Boolean(jev.enabled);
+    el.setJevType.value = (jev.type || "api").toLowerCase() === "local" ? "local" : "api";
     el.setJevBaseUrl.value = jev.base_url || "";
     el.setJevModel.value = jev.model || "";
     el.setJevApiKeyEnv.value = jev.api_key_env || "";
+    el.setJevModelDir.value = jev.model_dir || "";
+    el.setJevDType.value = jev.dtype || "";
+    el.setJevEngine.value = jev.engine || "ort";
+    el.setJevOrtLib.value = jev.ort_lib || "";
     el.setJevTimeout.value = jev.timeout_sec ?? 20;
     el.setJevConfidence.value = jev.route_min_confidence ?? 0.6;
     el.setJevRouting.checked = Boolean(jev.routing);
@@ -963,14 +987,21 @@
       ? "A key is stored — leave blank to keep it"
       : "Leave blank to use the env var below";
 
-    el.jevState.textContent = jevStateLabel(jev);
-    el.jevState.className = "badge" + (jevStateLabel(jev) === "active" ? " ok" : "");
+    updateJevBackendVisibility(el.setJevType.value);
+    const label = jevStateLabel(jev);
+    el.jevState.textContent = label;
+    el.jevState.className = "badge" + (label === "active" || label === "local" ? " ok" : "");
   }
 
-  // jevStateLabel mirrors the backend rule: enabled without a resolvable key is
-  // not active, because every call would fail and fall back.
+  // jevStateLabel mirrors the backend rule for the selected backend.
   function jevStateLabel(jev) {
     if (!jev.enabled) return "off";
+    const type = String(jev.type || "api").toLowerCase();
+    if (type === "local") {
+      if (!(jev.model || "").trim()) return "needs a model";
+      if (!(jev.model_dir || "").trim()) return "needs model_dir";
+      return "local";
+    }
     if (!jev.api_key_set && !(jev.api_key_env || "").trim()) return "needs a key";
     return "active";
   }
@@ -981,7 +1012,7 @@
     const jev = settings.draft?.jev || {};
     const label = jevStateLabel(jev);
     el.jevState.textContent = label;
-    el.jevState.className = "badge" + (label === "active" ? " ok" : "");
+    el.jevState.className = "badge" + (label === "active" || label === "local" ? " ok" : "");
   }
 
   async function saveSettingsV2() {
@@ -999,9 +1030,14 @@
       skills_disabled: Object.fromEntries((d.skills || []).filter((s) => !s.enabled).map((s) => [s.name, true])),
       computer_use_enabled: Boolean(d.computer_use?.enabled),
       jev_enabled: Boolean(d.jev?.enabled),
+      jev_type: d.jev?.type || "api",
       jev_base_url: d.jev?.base_url || "",
       jev_api_key_env: d.jev?.api_key_env || "",
       jev_model: d.jev?.model || "",
+      jev_model_dir: d.jev?.model_dir || "",
+      jev_dtype: d.jev?.dtype || "",
+      jev_engine: d.jev?.engine || "ort",
+      jev_ort_lib: d.jev?.ort_lib || "",
       jev_timeout_sec: d.jev?.timeout_sec ?? 20,
       jev_route_min_confidence: d.jev?.route_min_confidence ?? 0.6,
       jev_routing: Boolean(d.jev?.routing),
@@ -1232,6 +1268,8 @@
     [
       el.setComputerUse,
       el.setJevEnabled,
+      el.setJevType,
+      el.setJevEngine,
       el.setJevApiKey,
       el.setJevRouting,
       el.setJevMemoryJudge,
@@ -1247,6 +1285,9 @@
       el.setJevBaseUrl,
       el.setJevModel,
       el.setJevApiKeyEnv,
+      el.setJevModelDir,
+      el.setJevDType,
+      el.setJevOrtLib,
       el.setJevTimeout,
       el.setJevConfidence,
     ].forEach((input) => {

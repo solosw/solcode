@@ -204,9 +204,10 @@ type JevConfig struct {
 	// (e.g. "q4", "q4f16", "fp16", "fp32"). local only; default "q4" for OpenJev.
 	DType string `json:"dtype,omitempty"`
 	// Engine selects the local InferenceEngine implementation.
-	// Empty/"stub" keeps the unimplemented backend (Ask falls back).
-	// "ort" uses ONNX Runtime and auto-downloads the CPU shared library into
-	// ~/.solcode/lib when missing (Win/Linux). "onnx-go" is reserved.
+	// Empty defaults to "ort" for type=local (ONNX Runtime; auto-downloads the
+	// CPU shared library into ~/.solcode/lib when missing on Win/Linux).
+	// Explicit "stub"/"unimplemented" keeps the unimplemented backend so Ask
+	// falls back. "onnx-go" is reserved.
 	Engine string `json:"engine,omitempty"`
 	// ORTLib is an optional path to onnxruntime.dll / libonnxruntime.so.
 	// Empty with engine=ort installs into ~/.solcode/lib when missing.
@@ -1673,8 +1674,8 @@ func (c Config) JevType() string {
 //
 // api requires enabled=true plus a resolvable api_key.
 // local requires enabled=true, a model id, and a model_dir that looks like an
-// OpenJev or Laya artifact root. The local InferenceEngine may still be a stub
-// — Ask then fails and Decider falls back.
+// OpenJev or Laya artifact root. Local defaults to engine=ort; an explicit
+// stub engine still lets Ask fail into Decider fallbacks.
 func (c Config) JevEnabled() bool {
 	if !c.Jev.Enabled {
 		return false
@@ -1779,6 +1780,11 @@ func (cfg *Config) normalizeJev() {
 	}
 	if jev.Type == JevBackendLocal && jev.DType == "" {
 		jev.DType = "q4"
+	}
+	// Local inference defaults to ORT so a model_dir-only config actually runs.
+	// Explicit stub/unimplemented remains an opt-out for dry runs / CI.
+	if jev.Type == JevBackendLocal && jev.Engine == "" {
+		jev.Engine = "ort"
 	}
 	if jev.TimeoutSec <= 0 {
 		jev.TimeoutSec = 20

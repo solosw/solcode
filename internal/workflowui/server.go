@@ -303,12 +303,18 @@ type computerUseSettings struct {
 //
 // APIKeySet reports whether a key is resolvable without ever sending the key
 // itself to the browser; APIKeyEnv lets the UI show which env var supplies it.
+// Type is "api" (hosted) or "local" (OpenJev/Laya ONNX).
 type jevSettings struct {
 	Enabled            bool    `json:"enabled"`
+	Type               string  `json:"type"`
 	BaseURL            string  `json:"base_url"`
 	APIKeyEnv          string  `json:"api_key_env"`
 	APIKeySet          bool    `json:"api_key_set"`
 	Model              string  `json:"model"`
+	ModelDir           string  `json:"model_dir"`
+	DType              string  `json:"dtype"`
+	Engine             string  `json:"engine"`
+	ORTLib             string  `json:"ort_lib"`
 	TimeoutSec         int     `json:"timeout_sec"`
 	RouteMinConfidence float64 `json:"route_min_confidence"`
 	Routing            bool    `json:"routing"`
@@ -465,10 +471,15 @@ func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
 		},
 		Jev: jevSettings{
 			Enabled:            cfg.Jev.Enabled,
+			Type:               cfg.JevType(),
 			BaseURL:            cfg.Jev.BaseURL,
 			APIKeyEnv:          cfg.Jev.APIKeyEnv,
 			APIKeySet:          strings.TrimSpace(cfg.Jev.APIKey) != "",
 			Model:              cfg.Jev.Model,
+			ModelDir:           cfg.Jev.ModelDir,
+			DType:              cfg.Jev.DType,
+			Engine:             cfg.Jev.Engine,
+			ORTLib:             cfg.Jev.ORTLib,
 			TimeoutSec:         cfg.Jev.TimeoutSec,
 			RouteMinConfidence: cfg.Jev.RouteMinConfidence,
 			Routing:            cfg.Jev.Routing,
@@ -525,10 +536,15 @@ type settingsUpdate struct {
 	// Jev fields. Absent fields leave the current value untouched, so a partial
 	// update cannot silently reset a subsystem the caller did not mention.
 	JevEnabled            *bool    `json:"jev_enabled,omitempty"`
+	JevType               *string  `json:"jev_type,omitempty"`
 	JevBaseURL            *string  `json:"jev_base_url,omitempty"`
 	JevAPIKey             *string  `json:"jev_api_key,omitempty"`
 	JevAPIKeyEnv          *string  `json:"jev_api_key_env,omitempty"`
 	JevModel              *string  `json:"jev_model,omitempty"`
+	JevModelDir           *string  `json:"jev_model_dir,omitempty"`
+	JevDType              *string  `json:"jev_dtype,omitempty"`
+	JevEngine             *string  `json:"jev_engine,omitempty"`
+	JevORTLib             *string  `json:"jev_ort_lib,omitempty"`
 	JevTimeoutSec         *int     `json:"jev_timeout_sec,omitempty"`
 	JevRouteMinConfidence *float64 `json:"jev_route_min_confidence,omitempty"`
 	JevRouting            *bool    `json:"jev_routing,omitempty"`
@@ -626,6 +642,9 @@ func applyJevSettings(cfg *config.Config, req settingsUpdate) {
 	if req.JevEnabled != nil {
 		cfg.Jev.Enabled = *req.JevEnabled
 	}
+	if req.JevType != nil {
+		cfg.Jev.Type = strings.ToLower(strings.TrimSpace(*req.JevType))
+	}
 	if req.JevBaseURL != nil {
 		cfg.Jev.BaseURL = strings.TrimSpace(*req.JevBaseURL)
 	}
@@ -637,6 +656,18 @@ func applyJevSettings(cfg *config.Config, req settingsUpdate) {
 	}
 	if req.JevModel != nil {
 		cfg.Jev.Model = strings.TrimSpace(*req.JevModel)
+	}
+	if req.JevModelDir != nil {
+		cfg.Jev.ModelDir = strings.TrimSpace(*req.JevModelDir)
+	}
+	if req.JevDType != nil {
+		cfg.Jev.DType = strings.ToLower(strings.TrimSpace(*req.JevDType))
+	}
+	if req.JevEngine != nil {
+		cfg.Jev.Engine = strings.ToLower(strings.TrimSpace(*req.JevEngine))
+	}
+	if req.JevORTLib != nil {
+		cfg.Jev.ORTLib = strings.TrimSpace(*req.JevORTLib)
 	}
 	if req.JevTimeoutSec != nil {
 		cfg.Jev.TimeoutSec = *req.JevTimeoutSec

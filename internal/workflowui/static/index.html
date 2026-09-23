@@ -246,14 +246,16 @@
               TypeSafe System One decides <em>how</em> work is routed: which skill or
               tool fits, how to classify a memory, whether an action looks unsafe. It
               never writes code and never replaces the chat model. Every decision has a
-              fallback, so leaving this off changes nothing.
+              fallback, so leaving this off changes nothing. Choose the hosted API or a
+              local OpenJev/Laya ONNX backend.
             </p>
             <div class="settings-list">
               <label class="settings-row settings-toggle-row">
                 <div class="settings-row-main">
                   <strong>Enable Jev</strong>
                   <div class="settings-row-detail">
-                    Requires a resolvable API key. Enabled without a key is treated as off.
+                    API mode needs a resolvable key. Local mode needs a model id and an
+                    on-disk artifact directory. Enabled without those is treated as off.
                   </div>
                 </div>
                 <input type="checkbox" id="set-jev-enabled" />
@@ -261,11 +263,26 @@
             </div>
 
             <div class="settings-grid">
-              <label>Base URL
-                <input id="set-jev-base-url" type="url" placeholder="https://api.typesafe.ai" />
+              <label>Backend
+                <select id="set-jev-type">
+                  <option value="api">Hosted API</option>
+                  <option value="local">Local ONNX</option>
+                </select>
               </label>
               <label>Model
-                <input id="set-jev-model" type="text" placeholder="jev-latest" />
+                <input id="set-jev-model" type="text" placeholder="jev-latest or open-jev-…" />
+              </label>
+              <label>Timeout (sec)
+                <input id="set-jev-timeout" type="number" min="1" max="120" step="1" />
+              </label>
+              <label>Min confidence
+                <input id="set-jev-confidence" type="number" min="0" max="1" step="0.05" />
+              </label>
+            </div>
+
+            <div id="jev-api-fields" class="settings-grid">
+              <label>Base URL
+                <input id="set-jev-base-url" type="url" placeholder="https://api.typesafe.ai" />
               </label>
               <label>API key
                 <input id="set-jev-api-key" type="password" placeholder="Leave blank to keep the current key" />
@@ -273,11 +290,23 @@
               <label>API key env var
                 <input id="set-jev-api-key-env" type="text" placeholder="TYPESAFE_API_KEY" />
               </label>
-              <label>Timeout (sec)
-                <input id="set-jev-timeout" type="number" min="1" max="120" step="1" />
+            </div>
+
+            <div id="jev-local-fields" class="settings-grid hidden">
+              <label>Model directory
+                <input id="set-jev-model-dir" type="text" placeholder="~/.solcode/models/open-jev-…" />
               </label>
-              <label>Min confidence
-                <input id="set-jev-confidence" type="number" min="0" max="1" step="0.05" />
+              <label>DType
+                <input id="set-jev-dtype" type="text" placeholder="q4" />
+              </label>
+              <label>Engine
+                <select id="set-jev-engine">
+                  <option value="ort">ort (ONNX Runtime)</option>
+                  <option value="stub">stub (Ask falls back)</option>
+                </select>
+              </label>
+              <label>ORT library path
+                <input id="set-jev-ort-lib" type="text" placeholder="Empty auto-installs into ~/.solcode/lib" />
               </label>
             </div>
 

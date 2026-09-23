@@ -102,7 +102,7 @@ Local computer-use build (matches CI):
 - An Anthropic API key (set `ANTHROPIC_API_KEY` environment variable)
 - For source builds only: Go 1.26.2+ (toolchain pin in `go.mod`)
 - Optional: language servers on `PATH` for the [LSP](#lsp-language-server-protocol) tool (e.g. `gopls`, `pyright-langserver`)
-- Optional local Jev: OpenJev/Laya model directory; with `jev.engine=ort`, CPU ONNX Runtime is auto-installed under `~/.solcode/lib` on Windows/Linux when missing
+- Optional local Jev: OpenJev/Laya model directory; local defaults to `engine=ort` (CPU ONNX Runtime auto-installed under `~/.solcode/lib` on Windows/Linux when missing)
 
 ### First run
 

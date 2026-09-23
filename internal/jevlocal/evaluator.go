@@ -15,12 +15,13 @@ type Options struct {
 	Model    string
 	DType    string
 	// EngineName selects a built-in InferenceEngine when Engine is nil.
-	// Currently: "ort" loads ONNX Runtime. Empty/"stub" keeps the unimplemented backend.
+	// Empty and "ort" load ONNX Runtime. "stub"/"unimplemented" keep the
+	// unimplemented backend so Ask fails into Decider fallbacks.
 	EngineName string
 	// ORTLib is an optional path to onnxruntime.dll / .so for engine=ort.
 	ORTLib string
 	// Engine overrides the inference backend. Nil selects from EngineName
-	// (or UnimplementedEngine when unset/unavailable).
+	// (or UnimplementedEngine when stub/unavailable).
 	Engine InferenceEngine
 }
 
@@ -62,9 +63,9 @@ func New(opts Options) (*LocalEvaluator, error) {
 
 func defaultEngine(arts Artifacts, opts Options) (InferenceEngine, error) {
 	switch strings.ToLower(strings.TrimSpace(opts.EngineName)) {
-	case "", "stub", "unimplemented":
+	case "stub", "unimplemented":
 		return UnimplementedEngine{}, nil
-	case EngineORT:
+	case "", EngineORT:
 		lib, err := EnsureORTLibrary(opts.ORTLib)
 		if err != nil {
 			return nil, fmt.Errorf("%w: %v", ErrEngineNotReady, err)

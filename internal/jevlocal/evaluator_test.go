@@ -13,7 +13,7 @@ import (
 func TestLocalEvaluatorAskFallsBackWhenEngineNotReady(t *testing.T) {
 	dir := openJevFixtureDir(t)
 
-	eval, err := New(Options{ModelDir: dir, Model: "open-jev-test", DType: "q4"})
+	eval, err := New(Options{ModelDir: dir, Model: "open-jev-test", DType: "q4", EngineName: "stub"})
 	if err != nil {
 		t.Fatal(err)
 	}

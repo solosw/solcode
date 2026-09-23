@@ -24,9 +24,10 @@ import (
 // and the callers keep their deterministic behavior.
 //
 // type=api builds the hosted HTTP evaluator. type=local builds a LocalEvaluator
-// over OpenJev/Laya artifacts. Set jev.engine=ort to load ONNX Runtime (auto-
-// installs the CPU shared library into ~/.solcode/lib when missing); otherwise
-// the InferenceEngine stays a stub and Ask fails into Decider fallbacks.
+// over OpenJev/Laya artifacts. Local defaults to engine=ort (ONNX Runtime; auto-
+// installs the CPU shared library into ~/.solcode/lib when missing). Explicit
+// jev.engine=stub keeps the unimplemented backend so Ask fails into Decider
+// fallbacks.
 //
 // Each subsystem is opt-in independently so a deployment can adopt routing
 // without adopting the guardrail, or vice versa.

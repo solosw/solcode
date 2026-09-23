@@ -169,3 +169,71 @@ Expanded the root README Jev section for api vs local backends, OpenJev/Laya lay
 - files: !ids.includes(n)), $null, README.md, examples/settings/README.md, examples/settings/settings.full.example.json, examples/settings/settings.jev.local.example.json, go.mod, go.sum, internal/app/app.go, internal/app/engine_wiring_test.go, internal/app/jev.go, internal/app/jev_test.go, internal/app/session_files.go, internal/app/session_judge.go, internal/app/session_memory.go, internal/app/session_memory_test.go, internal/checkpoint/store.go, internal/checkpoint/store_test.go, internal/config/config.go, internal/engine/context_builder.go, internal/engine/engine.go, internal/engine/folded_tools.go, internal/engine/folded_tools_test.go, internal/engine/force_skill_test.go, internal/engine/router.go, internal/engine/router_route_test.go, internal/engine/router_test.go, internal/jevlocal/artifact.go, internal/jevlocal/artifact_test.go, internal/jevlocal/builder.go, internal/jevlocal/engine.go, internal/jevlocal/evaluator.go, internal/jevlocal/evaluator_test.go, internal/jevlocal/family.go, internal/jevlocal/laya.go, internal/jevlocal/laya_test.go, internal/jevlocal/openjev.go, internal/jevlocal/openjev_family.go, internal/jevlocal/ort_engine.go, internal/jevlocal/ort_engine_test.go
 
 Removed the pure-Go build-default job from .github/workflows/publish-master.yml so only build-computeruse publishes. Install scripts now always download *_computeruse assets; README installation/Computer Use docs updated to a single CGO release channel. Local scripts/build-release.sh left in place for optional local use.
+
+## 2026-09-23 20:12:49 · session session-20260919-235046 · turn 65 · importance 0.35
+- keywords: todolist, todo-write
+- todos: 1|Inspect WebUI Jev settings UI + persist API|in_progress|valid|open; 2|Update WebUI for api/local Jev fields|pending|valid|open; 3|Verify persist/load + tests|pending|valid|open
+
+Todolist update (3 items).
+
+## 2026-09-23 20:14:02 · session session-20260919-235046 · turn 65 · importance 0.35
+- keywords: todolist, todo-write
+- todos: 1|Inspect WebUI Jev settings UI + persist API|completed|valid|done; 2|Update WebUI for api/local Jev fields|in_progress|valid|open; 3|Verify persist/load + tests|pending|valid|open
+
+Todolist update (3 items).
+
+## 2026-09-23 20:17:13 · session session-20260919-235046 · turn 65 · importance 0.50
+- keywords: webui, jev, settings, local, ort
+- files: !ids.includes(n)), $null, README.md, cmd/solcode/main.go, examples/settings/README.md, examples/settings/settings.full.example.json, examples/settings/settings.jev.local.example.json, go.mod, internal/app/app.go, internal/app/jev.go, internal/app/jev_test.go, internal/app/session_files.go, internal/app/session_judge.go, internal/app/session_memory.go, internal/app/session_memory_test.go, internal/checkpoint/store.go, internal/checkpoint/store_test.go, internal/config/config.go, internal/engine/context_builder.go, internal/engine/engine.go, internal/engine/folded_tools.go, internal/engine/folded_tools_test.go, internal/engine/router.go, internal/engine/router_route_test.go, internal/engine/router_test.go, internal/jevlocal/artifact.go, internal/jevlocal/artifact_test.go, internal/jevlocal/builder.go, internal/jevlocal/engine.go, internal/jevlocal/evaluator.go, internal/jevlocal/evaluator_test.go, internal/jevlocal/family.go, internal/jevlocal/laya.go, internal/jevlocal/laya_test.go, internal/jevlocal/openjev.go, internal/jevlocal/openjev_family.go, internal/jevlocal/ort_engine.go, internal/jevlocal/ort_engine_test.go, internal/jevlocal/ort_install.go, internal/jevlocal/ort_install_test.go
+- todos: 1|Inspect WebUI Jev settings UI + persist API|completed|valid|done; 2|Update WebUI for api/local Jev fields|in_progress|valid|open; 3|Verify persist/load + tests|pending|valid|open
+
+Updated WebUI Jev settings for api vs local backends: type/model_dir/dtype/engine/ort_lib fields, local-only visibility, server GET/POST + cmd persistence, and TestPostSettingsAppliesLocalJev.
+
+## 2026-09-23 20:17:13 · session session-20260919-235046 · turn 65 · importance 0.35
+- keywords: todolist, todo-write
+- todos: 1|Inspect WebUI Jev settings UI + persist API|completed|valid|done; 2|Update WebUI for api/local Jev fields|completed|valid|done; 3|Verify persist/load + tests|completed|valid|done
+
+Todolist update (3 items).
+
+## 2026-09-23 20:17:40 · session session-20260919-235046 · turn 65 · importance 0.40
+- keywords: turn, todolist
+- files: !ids.includes(n)), $null, README.md, cmd/solcode/main.go, examples/settings/README.md, examples/settings/settings.full.example.json, examples/settings/settings.jev.local.example.json, go.mod, internal/app/app.go, internal/app/jev.go, internal/app/jev_test.go, internal/app/session_files.go, internal/app/session_judge.go, internal/app/session_memory.go, internal/app/session_memory_test.go, internal/checkpoint/store.go, internal/checkpoint/store_test.go, internal/config/config.go, internal/engine/context_builder.go, internal/engine/engine.go, internal/engine/folded_tools.go, internal/engine/folded_tools_test.go, internal/engine/router.go, internal/engine/router_route_test.go, internal/engine/router_test.go, internal/jevlocal/artifact.go, internal/jevlocal/artifact_test.go, internal/jevlocal/builder.go, internal/jevlocal/engine.go, internal/jevlocal/evaluator.go, internal/jevlocal/evaluator_test.go, internal/jevlocal/family.go, internal/jevlocal/laya.go, internal/jevlocal/laya_test.go, internal/jevlocal/openjev.go, internal/jevlocal/openjev_family.go, internal/jevlocal/ort_engine.go, internal/jevlocal/ort_engine_test.go, internal/jevlocal/ort_install.go, internal/jevlocal/ort_install_test.go
+
+Turn memory: webui里面关于Jev模型的设置要更新
+
+## 2026-09-23 20:18:39 · session session-20260919-235046 · turn 66 · importance 0.35
+- keywords: todolist, todo-write
+- todos: 1|Find where 'unimplemented' / engine not ready is raised|in_progress|valid|open; 2|Trace local Jev engine init and readiness path|pending|valid|open; 3|Identify root cause and fix or explain what's missing|pending|valid|open
+
+Todolist update (3 items).
+
+## 2026-09-23 20:19:17 · session session-20260919-235046 · turn 66 · importance 0.35
+- keywords: todolist, todo-write
+- todos: 1|Find where 'unimplemented' / engine not ready is raised|completed|valid|done; 2|Trace local Jev engine init and readiness path|in_progress|valid|open; 3|Identify root cause and fix so local Jev defaults to ORT|pending|valid|open
+
+Todolist update (3 items).
+
+## 2026-09-23 20:23:01 · session session-20260919-235046 · turn 66 · importance 0.35
+- keywords: todolist, todo-write
+- todos: 1|Find where 'unimplemented' / engine not ready is raised|completed|valid|done; 2|Trace local Jev engine init and readiness path|completed|valid|done; 3|Default empty local Jev engine to ORT + tests|in_progress|valid|open
+
+Todolist update (3 items).
+
+## 2026-09-23 20:31:51 · session session-20260919-235046 · turn 66 · importance 0.70
+- keywords: jev, local, ort, engine, unimplemented, defaultengine
+- files: !ids.includes(n)), $null, README.md, cmd/solcode/main.go, examples/settings/README.md, examples/settings/settings.full.example.json, examples/settings/settings.jev.local.example.json, go.mod, internal/app/app.go, internal/app/jev.go, internal/app/jev_test.go, internal/app/session_files.go, internal/app/session_judge.go, internal/app/session_memory.go, internal/app/session_memory_test.go, internal/checkpoint/store.go, internal/checkpoint/store_test.go, internal/config/config.go, internal/engine/context_builder.go, internal/engine/engine.go, internal/engine/folded_tools.go, internal/engine/folded_tools_test.go, internal/engine/router.go, internal/engine/router_route_test.go, internal/engine/router_test.go, internal/jevlocal/artifact.go, internal/jevlocal/artifact_test.go, internal/jevlocal/builder.go, internal/jevlocal/engine.go, internal/jevlocal/evaluator.go, internal/jevlocal/evaluator_test.go, internal/jevlocal/family.go, internal/jevlocal/laya.go, internal/jevlocal/laya_test.go, internal/jevlocal/openjev.go, internal/jevlocal/openjev_family.go, internal/jevlocal/ort_engine.go, internal/jevlocal/ort_engine_test.go, internal/jevlocal/ort_install.go, internal/jevlocal/ort_install_test.go
+- todos: 1|Find where 'unimplemented' / engine not ready is raised|completed|valid|done; 2|Trace local Jev engine init and readiness path|completed|valid|done; 3|Default empty local Jev engine to ORT + tests|in_progress|valid|open
+
+Diagnosed local Jev falling back with ErrEngineNotReady (unimplemented): empty jev.engine selected UnimplementedEngine. Changed type=local empty engine to default to ort in config.normalizeJev and jevlocal.defaultEngine; WebUI engine select/save now defaults to ort; explicit stub/unimplemented remains an opt-out. Updated docs/tests; TestBuildJevLocalUsesOpenJevArtifacts now asserts real ORT confidence.
+
+## 2026-09-23 20:31:51 · session session-20260919-235046 · turn 66 · importance 0.35
+- keywords: todolist, todo-write
+- todos: 1|Find where 'unimplemented' / engine not ready is raised|completed|valid|done; 2|Trace local Jev engine init and readiness path|completed|valid|done; 3|Default empty local Jev engine to ORT + tests|completed|valid|done
+
+Todolist update (3 items).
+
+## 2026-09-23 20:31:59 · session session-20260919-235046 · turn 66 · importance 0.40
+- keywords: turn, todolist
+- files: !ids.includes(n)), $null, README.md, cmd/solcode/main.go, examples/settings/README.md, examples/settings/settings.full.example.json, examples/settings/settings.jev.local.example.json, go.mod, internal/app/app.go, internal/app/jev.go, internal/app/jev_test.go, internal/app/session_files.go, internal/app/session_judge.go, internal/app/session_memory.go, internal/app/session_memory_test.go, internal/checkpoint/store.go, internal/checkpoint/store_test.go, internal/config/config.go, internal/engine/context_builder.go, internal/engine/engine.go, internal/engine/folded_tools.go, internal/engine/folded_tools_test.go, internal/engine/router.go, internal/engine/router_route_test.go, internal/engine/router_test.go, internal/jevlocal/artifact.go, internal/jevlocal/artifact_test.go, internal/jevlocal/builder.go, internal/jevlocal/engine.go, internal/jevlocal/evaluator.go, internal/jevlocal/evaluator_test.go, internal/jevlocal/family.go, internal/jevlocal/laya.go, internal/jevlocal/laya_test.go, internal/jevlocal/openjev.go, internal/jevlocal/openjev_family.go, internal/jevlocal/ort_engine.go, internal/jevlocal/ort_engine_test.go, internal/jevlocal/ort_install.go, internal/jevlocal/ort_install_test.go
+
+Turn memory: jev: jev decision fell back: jev local inference engine is not ready (unimplemented)

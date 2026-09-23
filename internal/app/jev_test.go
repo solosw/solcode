@@ -78,6 +78,9 @@ func TestBuildJevLocalUsesOpenJevArtifacts(t *testing.T) {
 	if cfg.JevType() != config.JevBackendLocal {
 		t.Fatalf("JevType = %q", cfg.JevType())
 	}
+	if cfg.Jev.Engine != "ort" {
+		t.Fatalf("Engine = %q, want ort default", cfg.Jev.Engine)
+	}
 	if !cfg.JevEnabled() {
 		t.Fatal("local with artifacts should enable Jev")
 	}
@@ -91,11 +94,15 @@ func TestBuildJevLocalUsesOpenJevArtifacts(t *testing.T) {
 	if jev.router() == nil {
 		t.Fatal("routing toggle should enable the router")
 	}
-	// Stub engine: Choose must fall back, not panic or hang.
+	// Default engine is ORT: Choose should return a real answer, not the
+	// deterministic fallback (confidence 0).
 	got, conf := jev.decider.Choose(context.Background(), "state", "which?",
 		map[string]string{"a": "A", "b": "B"}, 0.6, "a")
-	if got != "a" || conf != 0 {
-		t.Fatalf("Choose = %q/%v, want fallback a/0", got, conf)
+	if got == "" {
+		t.Fatal("Choose returned empty with local ORT")
+	}
+	if conf == 0 {
+		t.Fatalf("Choose = %q/%v, want a non-zero confidence from ORT", got, conf)
 	}
 }
 

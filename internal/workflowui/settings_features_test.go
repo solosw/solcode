@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/solosw/solcode/internal/config"
@@ -71,6 +73,7 @@ func TestSettingsExposeComputerUseAndJev(t *testing.T) {
 	cfg.ComputerUse.Enabled = true
 	cfg.Jev = config.JevConfig{
 		Enabled:            true,
+		Type:               config.JevBackendAPI,
 		BaseURL:            "https://api.typesafe.ai",
 		APIKeyEnv:          "TYPESAFE_API_KEY",
 		APIKey:             "ts_secret",
@@ -99,6 +102,9 @@ func TestSettingsExposeComputerUseAndJev(t *testing.T) {
 	}
 	if jev["enabled"] != true || jev["routing"] != true || jev["guardrail"] != true {
 		t.Fatalf("jev toggles = %#v", jev)
+	}
+	if jev["type"] != "api" {
+		t.Fatalf("jev.type = %v", jev["type"])
 	}
 	if jev["model"] != "jev-latest" {
 		t.Fatalf("jev.model = %v", jev["model"])
@@ -132,6 +138,7 @@ func TestPostSettingsAppliesComputerUseAndJev(t *testing.T) {
 	res := postSettings(t, url, map[string]any{
 		"computer_use_enabled":     true,
 		"jev_enabled":              true,
+		"jev_type":                 "api",
 		"jev_base_url":             "https://api.typesafe.ai",
 		"jev_model":                "jev-latest",
 		"jev_timeout_sec":          45,
@@ -163,6 +170,43 @@ func TestPostSettingsAppliesComputerUseAndJev(t *testing.T) {
 	}
 	if applied.Jev.APIKeyEnv != "TYPESAFE_API_KEY" {
 		t.Fatalf("api_key_env = %q", applied.Jev.APIKeyEnv)
+	}
+	if applied.Jev.Type != config.JevBackendAPI {
+		t.Fatalf("type = %q", applied.Jev.Type)
+	}
+}
+
+// Local backend fields must round-trip through the settings API.
+func TestPostSettingsAppliesLocalJev(t *testing.T) {
+	cfg := config.Default()
+	cfg.WorkDir = t.TempDir()
+	_, url, applied := settingsServer(t, cfg)
+
+	res := postSettings(t, url, map[string]any{
+		"jev_enabled":   true,
+		"jev_type":      "local",
+		"jev_model":     "open-jev-deberta-v3-large",
+		"jev_model_dir": "~/.solcode/models/open-jev-deberta-v3-large",
+		"jev_dtype":     "q4",
+		"jev_engine":    "ort",
+		"jev_ort_lib":   "",
+		"jev_routing":   true,
+	})
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", res.StatusCode)
+	}
+	if applied.Jev.Type != config.JevBackendLocal {
+		t.Fatalf("type = %q", applied.Jev.Type)
+	}
+	if applied.Jev.Model != "open-jev-deberta-v3-large" || applied.Jev.DType != "q4" {
+		t.Fatalf("jev = %+v", applied.Jev)
+	}
+	if applied.Jev.Engine != "ort" {
+		t.Fatalf("engine = %q", applied.Jev.Engine)
+	}
+	if !strings.Contains(filepath.ToSlash(applied.Jev.ModelDir), "/models/open-jev-deberta-v3-large") {
+		t.Fatalf("model_dir = %q", applied.Jev.ModelDir)
 	}
 }
 
