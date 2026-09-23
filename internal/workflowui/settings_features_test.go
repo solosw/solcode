@@ -3,6 +3,7 @@ package workflowui
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -282,6 +283,135 @@ func TestPostSettingsKeepsJevAPIKeyWhenOmitted(t *testing.T) {
 	}
 	if applied.Jev.APIKey != "keep-me" {
 		t.Fatalf("api key = %q, want it preserved", applied.Jev.APIKey)
+	}
+}
+
+func TestSettingsExposeEmbedding(t *testing.T) {
+	cfg := config.Default()
+	cfg.WorkDir = t.TempDir()
+	cfg.Embedding = config.EmbeddingConfig{
+		Enabled:    true,
+		Type:       config.EmbeddingBackendAPI,
+		BaseURL:    "https://api.openai.com/v1",
+		APIKeyEnv:  "OPENAI_API_KEY",
+		APIKey:     "emb_secret",
+		Model:      "text-embedding-3-small",
+		TimeoutSec: 45,
+		Dimensions: 1536,
+	}
+	if err := cfg.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	_, url, _ := settingsServer(t, cfg)
+
+	body := decodeSettings(t, url)
+	emb, ok := body["embedding"].(map[string]any)
+	if !ok {
+		t.Fatalf("embedding = %#v", body["embedding"])
+	}
+	if emb["enabled"] != true || emb["type"] != "api" {
+		t.Fatalf("embedding toggles = %#v", emb)
+	}
+	if emb["model"] != "text-embedding-3-small" {
+		t.Fatalf("model = %v", emb["model"])
+	}
+	if emb["timeout_sec"] != float64(45) || emb["dimensions"] != float64(1536) {
+		t.Fatalf("embedding = %#v", emb)
+	}
+	if emb["api_key_set"] != true {
+		t.Fatalf("api_key_set = %v", emb["api_key_set"])
+	}
+	if _, leaked := emb["api_key"]; leaked {
+		t.Fatal("embedding api key must not be sent to the client")
+	}
+	if !strings.Contains(filepath.ToSlash(fmt.Sprint(emb["dir"])), "/embeddings") {
+		t.Fatalf("dir = %v", emb["dir"])
+	}
+	serialized, _ := json.Marshal(body)
+	if bytes.Contains(serialized, []byte("emb_secret")) {
+		t.Fatal("settings response leaked the embedding API key")
+	}
+}
+
+func TestPostSettingsAppliesEmbeddingAPIAndLocal(t *testing.T) {
+	cfg := config.Default()
+	cfg.WorkDir = t.TempDir()
+	_, url, applied := settingsServer(t, cfg)
+
+	res := postSettings(t, url, map[string]any{
+		"embedding_enabled":     true,
+		"embedding_type":        "api",
+		"embedding_base_url":    "https://api.openai.com/v1",
+		"embedding_model":       "text-embedding-3-small",
+		"embedding_timeout_sec": 40,
+		"embedding_dimensions":  1024,
+		"embedding_api_key_env": "OPENAI_API_KEY",
+		"embedding_api_key":     "emb_key",
+	})
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", res.StatusCode)
+	}
+	if !applied.Embedding.Enabled || applied.Embedding.Type != config.EmbeddingBackendAPI {
+		t.Fatalf("embedding = %+v", applied.Embedding)
+	}
+	if applied.Embedding.Model != "text-embedding-3-small" || applied.Embedding.APIKey != "emb_key" {
+		t.Fatalf("embedding = %+v", applied.Embedding)
+	}
+	if applied.Embedding.TimeoutSec != 40 || applied.Embedding.Dimensions != 1024 {
+		t.Fatalf("embedding = %+v", applied.Embedding)
+	}
+
+	res2 := postSettings(t, url, map[string]any{
+		"embedding_type":  "local",
+		"embedding_model": "local-emb",
+	})
+	defer res2.Body.Close()
+	if res2.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", res2.StatusCode)
+	}
+	if applied.Embedding.Type != config.EmbeddingBackendLocal {
+		t.Fatalf("type = %q", applied.Embedding.Type)
+	}
+	if applied.Embedding.Model != "local-emb" {
+		t.Fatalf("model = %q", applied.Embedding.Model)
+	}
+	// Custom dirs from clients are ignored; normalize forces the fixed path.
+	if err := applied.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	if applied.Embedding.Dir != config.DefaultEmbeddingDir(applied.WorkDir) {
+		t.Fatalf("dir = %q", applied.Embedding.Dir)
+	}
+}
+
+func TestPostSettingsDoesNotResetUnmentionedEmbeddingFields(t *testing.T) {
+	cfg := config.Default()
+	cfg.WorkDir = t.TempDir()
+	cfg.Embedding = config.EmbeddingConfig{
+		Enabled:    true,
+		Type:       config.EmbeddingBackendAPI,
+		APIKey:     "keep-emb",
+		BaseURL:    "https://api.openai.com/v1",
+		Model:      "text-embedding-3-small",
+		TimeoutSec: 30,
+		Dimensions: 512,
+	}
+	_, url, applied := settingsServer(t, cfg)
+
+	res := postSettings(t, url, map[string]any{"embedding_enabled": false})
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", res.StatusCode)
+	}
+	if applied.Embedding.Enabled {
+		t.Fatal("embedding should be disabled")
+	}
+	if applied.Embedding.APIKey != "keep-emb" || applied.Embedding.Model != "text-embedding-3-small" {
+		t.Fatalf("embedding wiped: %+v", applied.Embedding)
+	}
+	if applied.Embedding.TimeoutSec != 30 || applied.Embedding.Dimensions != 512 {
+		t.Fatalf("embedding = %+v", applied.Embedding)
 	}
 }
 

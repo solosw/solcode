@@ -85,6 +85,19 @@
     setJevGuardrail: document.getElementById("set-jev-guardrail"),
     jevApiFields: document.getElementById("jev-api-fields"),
     jevLocalFields: document.getElementById("jev-local-fields"),
+    // embedding
+    embeddingState: document.getElementById("embedding-state"),
+    setEmbeddingEnabled: document.getElementById("set-embedding-enabled"),
+    setEmbeddingType: document.getElementById("set-embedding-type"),
+    setEmbeddingBaseUrl: document.getElementById("set-embedding-base-url"),
+    setEmbeddingModel: document.getElementById("set-embedding-model"),
+    setEmbeddingApiKey: document.getElementById("set-embedding-api-key"),
+    setEmbeddingApiKeyEnv: document.getElementById("set-embedding-api-key-env"),
+    setEmbeddingDir: document.getElementById("set-embedding-dir"),
+    setEmbeddingTimeout: document.getElementById("set-embedding-timeout"),
+    setEmbeddingDimensions: document.getElementById("set-embedding-dimensions"),
+    embeddingApiFields: document.getElementById("embedding-api-fields"),
+    embeddingLocalFields: document.getElementById("embedding-local-fields"),
   };
 
   function emptyWorkflow() {
@@ -856,12 +869,39 @@
       delete jev.api_key;
     }
     updateJevBackendVisibility(jev.type);
+
+    const emb = d.embedding || (d.embedding = {});
+    emb.enabled = Boolean(el.setEmbeddingEnabled.checked);
+    emb.type = (el.setEmbeddingType.value || "api").trim().toLowerCase() || "api";
+    emb.base_url = el.setEmbeddingBaseUrl.value.trim();
+    emb.model = el.setEmbeddingModel.value.trim();
+    emb.api_key_env = el.setEmbeddingApiKeyEnv.value.trim();
+    emb.timeout_sec = numberInput(el.setEmbeddingTimeout.value, emb.timeout_sec);
+    emb.dimensions = numberInput(el.setEmbeddingDimensions.value, emb.dimensions);
+    // Dir is fixed server-side; keep whatever GET returned for display.
+    if (!emb.dir) {
+      emb.dir = el.setEmbeddingDir.value.trim();
+    }
+    const embKey = el.setEmbeddingApiKey.value.trim();
+    if (embKey) {
+      emb.api_key = embKey;
+      emb.api_key_set = true;
+    } else {
+      delete emb.api_key;
+    }
+    updateEmbeddingBackendVisibility(emb.type);
   }
 
   function updateJevBackendVisibility(type) {
     const local = String(type || "api").toLowerCase() === "local";
     el.jevApiFields.classList.toggle("hidden", local);
     el.jevLocalFields.classList.toggle("hidden", !local);
+  }
+
+  function updateEmbeddingBackendVisibility(type) {
+    const local = String(type || "api").toLowerCase() === "local";
+    el.embeddingApiFields.classList.toggle("hidden", local);
+    el.embeddingLocalFields.classList.toggle("hidden", !local);
   }
 
   function floatInput(value, fallback) {
@@ -991,6 +1031,24 @@
     const label = jevStateLabel(jev);
     el.jevState.textContent = label;
     el.jevState.className = "badge" + (label === "active" || label === "local" ? " ok" : "");
+
+    const emb = d.embedding || {};
+    el.setEmbeddingEnabled.checked = Boolean(emb.enabled);
+    el.setEmbeddingType.value = (emb.type || "api").toLowerCase() === "local" ? "local" : "api";
+    el.setEmbeddingBaseUrl.value = emb.base_url || "";
+    el.setEmbeddingModel.value = emb.model || "";
+    el.setEmbeddingApiKeyEnv.value = emb.api_key_env || "";
+    el.setEmbeddingDir.value = emb.dir || "";
+    el.setEmbeddingTimeout.value = emb.timeout_sec ?? 30;
+    el.setEmbeddingDimensions.value = emb.dimensions ?? 0;
+    el.setEmbeddingApiKey.value = "";
+    el.setEmbeddingApiKey.placeholder = emb.api_key_set
+      ? "A key is stored — leave blank to keep it"
+      : "Leave blank to use the env var below";
+    updateEmbeddingBackendVisibility(el.setEmbeddingType.value);
+    const embLabel = embeddingStateLabel(emb);
+    el.embeddingState.textContent = embLabel;
+    el.embeddingState.className = "badge" + (embLabel === "active" || embLabel === "local" ? " ok" : "");
   }
 
   // jevStateLabel mirrors the backend rule for the selected backend.
@@ -1006,6 +1064,15 @@
     return "active";
   }
 
+  function embeddingStateLabel(emb) {
+    if (!emb.enabled) return "off";
+    const type = String(emb.type || "api").toLowerCase();
+    if (!(emb.model || "").trim()) return "needs a model";
+    if (type === "local") return "local";
+    if (!emb.api_key_set && !(emb.api_key_env || "").trim()) return "needs a key";
+    return "active";
+  }
+
   // refreshJevBadge updates the badge without re-rendering the whole form, so
   // typing in a text field does not lose focus.
   function refreshJevBadge() {
@@ -1013,6 +1080,13 @@
     const label = jevStateLabel(jev);
     el.jevState.textContent = label;
     el.jevState.className = "badge" + (label === "active" || label === "local" ? " ok" : "");
+  }
+
+  function refreshEmbeddingBadge() {
+    const emb = settings.draft?.embedding || {};
+    const label = embeddingStateLabel(emb);
+    el.embeddingState.textContent = label;
+    el.embeddingState.className = "badge" + (label === "active" || label === "local" ? " ok" : "");
   }
 
   async function saveSettingsV2() {
@@ -1043,10 +1117,20 @@
       jev_routing: Boolean(d.jev?.routing),
       jev_memory_judge: Boolean(d.jev?.memory_judge),
       jev_guardrail: Boolean(d.jev?.guardrail),
+      embedding_enabled: Boolean(d.embedding?.enabled),
+      embedding_type: d.embedding?.type || "api",
+      embedding_base_url: d.embedding?.base_url || "",
+      embedding_api_key_env: d.embedding?.api_key_env || "",
+      embedding_model: d.embedding?.model || "",
+      embedding_timeout_sec: d.embedding?.timeout_sec ?? 30,
+      embedding_dimensions: d.embedding?.dimensions ?? 0,
     };
     // Only send the key when the user typed one; otherwise the stored key stays.
     if (d.jev?.api_key) {
       payload.jev_api_key = d.jev.api_key;
+    }
+    if (d.embedding?.api_key) {
+      payload.embedding_api_key = d.embedding.api_key;
     }
     try {
       await api("/api/settings", {
@@ -1274,10 +1358,14 @@
       el.setJevRouting,
       el.setJevMemoryJudge,
       el.setJevGuardrail,
+      el.setEmbeddingEnabled,
+      el.setEmbeddingType,
+      el.setEmbeddingApiKey,
     ].forEach((input) => {
       input.addEventListener("change", () => {
         syncFeatureSettings(settings.draft || {});
         refreshJevBadge();
+        refreshEmbeddingBadge();
         markSettingsDirty();
       });
     });
@@ -1290,10 +1378,16 @@
       el.setJevOrtLib,
       el.setJevTimeout,
       el.setJevConfidence,
+      el.setEmbeddingBaseUrl,
+      el.setEmbeddingModel,
+      el.setEmbeddingApiKeyEnv,
+      el.setEmbeddingTimeout,
+      el.setEmbeddingDimensions,
     ].forEach((input) => {
       input.addEventListener("input", () => {
         syncFeatureSettings(settings.draft || {});
         refreshJevBadge();
+        refreshEmbeddingBadge();
         markSettingsDirty();
       });
     });

@@ -808,6 +808,17 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 						"memory_judge":         next.Jev.MemoryJudge,
 						"guardrail":            next.Jev.Guardrail,
 					},
+					"embedding": map[string]any{
+						"enabled":     next.Embedding.Enabled,
+						"type":        next.Embedding.Type,
+						"base_url":    next.Embedding.BaseURL,
+						"api_key":     next.Embedding.APIKey,
+						"api_key_env": next.Embedding.APIKeyEnv,
+						"model":       next.Embedding.Model,
+						"dir":         next.Embedding.Dir,
+						"timeout_sec": next.Embedding.TimeoutSec,
+						"dimensions":  next.Embedding.Dimensions,
+					},
 				}
 				if err := config.SaveLocalOverrides(persistencePath, updates); err != nil {
 					return fmt.Errorf("could not persist settings: %w", err)

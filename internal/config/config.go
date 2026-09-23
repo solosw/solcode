@@ -160,6 +160,11 @@ type Config struct {
 	ComputerUse ComputerUseConfig `json:"computer_use,omitempty"`
 	// Jev configures the TypeSafe System One decision layer. Off by default.
 	Jev JevConfig `json:"jev,omitempty"`
+	// Embedding configures optional vector embeddings for semantic search.
+	// Off by default. Project index lives under ProjectStateDir/embeddings
+	// (sibling of knowledge.db); shared ONNX weights fall back to
+	// ~/.solcode/embeddings. api uses an OpenAI-compatible embeddings endpoint.
+	Embedding EmbeddingConfig `json:"embedding,omitempty"`
 
 	Provider  string           `json:"provider,omitempty"`
 	Providers []ProviderConfig `json:"providers,omitempty"`
@@ -170,6 +175,60 @@ type Config struct {
 type ComputerUseConfig struct {
 	// Enabled registers the ComputerUse tool and loads the builtin skill.
 	Enabled bool `json:"enabled,omitempty"`
+}
+
+// EmbeddingBackendAPI / EmbeddingBackendLocal are allowed EmbeddingConfig.Type values.
+const (
+	EmbeddingBackendAPI   = "api"
+	EmbeddingBackendLocal = "local"
+)
+
+// DefaultEmbeddingDir is the project-scoped embedding root (chromem index +
+// optional project-local ONNX), sibling of knowledge.db under ProjectStateDir.
+func DefaultEmbeddingDir(workDir string) string {
+	if projectSubDir(workDir) != "" {
+		return filepath.Join(ProjectStateDir(workDir), "embeddings")
+	}
+	return filepath.Join(UserStateDir(), "embeddings")
+}
+
+// SharedEmbeddingModelDir is the user-level ONNX/tokenizer cache
+// (~/.solcode/embeddings). Local backends look here when the project Dir
+// does not contain a model.
+func SharedEmbeddingModelDir() string {
+	return filepath.Join(UserConfigDir(), "embeddings")
+}
+
+// EmbeddingConfig configures optional vector embeddings for semantic search.
+//
+// type=api talks to an OpenAI-compatible /v1/embeddings endpoint.
+// type=local uses ONNX under Dir (project) with fallback to SharedEmbeddingModelDir.
+// Dir is always normalized to DefaultEmbeddingDir(WorkDir); custom values are ignored.
+type EmbeddingConfig struct {
+	// Enabled turns on embeddings. Activation still depends on Type:
+	// api needs a resolvable APIKey and model; local needs a model id.
+	Enabled bool `json:"enabled,omitempty"`
+	// Type selects the backend: "api" (OpenAI-compatible, default) or "local".
+	Type string `json:"type,omitempty"`
+	// BaseURL is the API origin (default https://api.openai.com/v1). api only.
+	BaseURL string `json:"base_url,omitempty"`
+	// BaseURLEnv names an env var holding BaseURL.
+	BaseURLEnv string `json:"base_url_env,omitempty"`
+	// APIKey authenticates the embeddings endpoint. api only.
+	APIKey string `json:"api_key,omitempty"`
+	// APIKeyEnv names an env var holding APIKey (default OPENAI_API_KEY).
+	APIKeyEnv string `json:"api_key_env,omitempty"`
+	// Model is the embedding model id (e.g. text-embedding-3-small, or embeddinggemma-300m).
+	Model string `json:"model,omitempty"`
+	// Dir is the project embedding root (index + optional local ONNX).
+	// Always forced to DefaultEmbeddingDir(WorkDir) on normalize; kept in JSON
+	// so UIs can display the fixed path.
+	Dir string `json:"dir,omitempty"`
+	// TimeoutSec bounds one embedding request (default 30, max 300).
+	TimeoutSec int `json:"timeout_sec,omitempty"`
+	// Dimensions optionally requests a truncated output size (provider-specific).
+	// For EmbeddingGemma local, truncates the 768-d vector then re-normalizes (MRL).
+	Dimensions int `json:"dimensions,omitempty"`
 }
 
 // JevConfig configures the TypeSafe System One (Jev) decision layer.
@@ -547,6 +606,7 @@ func (cfg *Config) Normalize() error {
 	cfg.LSP = normalizeLSPConfig(cfg.LSP)
 	cfg.normalizeImage()
 	cfg.normalizeJev()
+	cfg.normalizeEmbedding()
 
 	cfg.normalizeSessionMemory()
 	ensureDefaultToolResultCompressHook(cfg)
@@ -1226,6 +1286,10 @@ func applyJSONConfig(cfg *Config, data []byte) error {
 			if err := json.Unmarshal(value, &cfg.Jev); err != nil {
 				return err
 			}
+		case "embedding":
+			if err := json.Unmarshal(value, &cfg.Embedding); err != nil {
+				return err
+			}
 		case "provider":
 			if err := json.Unmarshal(value, &cfg.Provider); err != nil {
 				return err
@@ -1651,6 +1715,84 @@ func (c Config) ImageEnabled() bool {
 // ComputerUseEnabled reports whether desktop automation tools/skills register.
 func (c Config) ComputerUseEnabled() bool {
 	return c.ComputerUse.Enabled
+}
+
+// normalizeEmbedding resolves env indirection and forces the project-scoped dir.
+func (cfg *Config) normalizeEmbedding() {
+	if cfg == nil {
+		return
+	}
+	emb := &cfg.Embedding
+	emb.Type = strings.ToLower(strings.TrimSpace(emb.Type))
+	if emb.Type == "" {
+		emb.Type = EmbeddingBackendAPI
+	}
+	emb.BaseURL = strings.TrimSpace(emb.BaseURL)
+	emb.Model = strings.TrimSpace(emb.Model)
+	emb.BaseURLEnv = strings.TrimSpace(emb.BaseURLEnv)
+	emb.APIKeyEnv = strings.TrimSpace(emb.APIKeyEnv)
+	if emb.APIKeyEnv != "" {
+		if v := strings.TrimSpace(os.Getenv(emb.APIKeyEnv)); v != "" {
+			emb.APIKey = v
+		}
+	}
+	if emb.BaseURLEnv != "" {
+		if v := strings.TrimSpace(os.Getenv(emb.BaseURLEnv)); v != "" {
+			emb.BaseURL = v
+		}
+	}
+	if strings.TrimSpace(emb.APIKey) == "" {
+		emb.APIKey = strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))
+	}
+	if strings.TrimSpace(emb.BaseURL) == "" {
+		if v := strings.TrimSpace(os.Getenv("OPENAI_BASE_URL")); v != "" {
+			emb.BaseURL = v
+		} else {
+			emb.BaseURL = "https://api.openai.com/v1"
+		}
+	}
+	emb.APIKey = strings.TrimSpace(emb.APIKey)
+	emb.BaseURL = strings.TrimRight(strings.TrimSpace(emb.BaseURL), "/")
+	// Project index root is fixed; ignore any custom dir from settings.
+	emb.Dir = DefaultEmbeddingDir(cfg.WorkDir)
+	if emb.TimeoutSec <= 0 {
+		emb.TimeoutSec = 30
+	}
+	if emb.TimeoutSec > 300 {
+		emb.TimeoutSec = 300
+	}
+	if emb.Dimensions < 0 {
+		emb.Dimensions = 0
+	}
+}
+
+// EmbeddingType returns the normalized backend type. Empty Type means api.
+func (c Config) EmbeddingType() string {
+	switch strings.ToLower(strings.TrimSpace(c.Embedding.Type)) {
+	case EmbeddingBackendLocal:
+		return EmbeddingBackendLocal
+	default:
+		return EmbeddingBackendAPI
+	}
+}
+
+// EmbeddingEnabled reports whether vector embeddings should be used.
+//
+// api requires enabled=true plus a resolvable api_key and model.
+// local requires enabled=true and a model id (dir is ProjectStateDir/embeddings).
+func (c Config) EmbeddingEnabled() bool {
+	if !c.Embedding.Enabled {
+		return false
+	}
+	if strings.TrimSpace(c.Embedding.Model) == "" {
+		return false
+	}
+	switch c.EmbeddingType() {
+	case EmbeddingBackendLocal:
+		return true
+	default:
+		return strings.TrimSpace(c.Embedding.APIKey) != ""
+	}
 }
 
 // JevBackendAPI / JevBackendLocal are the allowed JevConfig.Type values.

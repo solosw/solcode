@@ -80,6 +80,9 @@ type Config struct {
 	OnAgentProgress  func(tool.AgentProgressEvent)
 	OnUsage          func(Usage)
 	OnAskUser        func(ctx context.Context, params tool.AskUserParams) (map[string]string, error)
+	// AskUserAutoSelect answers AskUser without a human (Jev or first-option
+	// fallback). Used for nested agents and AskUser timeouts.
+	AskUserAutoSelect func(ctx context.Context, params tool.AskUserParams) (map[string]string, error)
 	// OnTodosUpdated records a session-memory todolist snapshot after each
 	// successful TodoWrite. Nil keeps TodoWrite persistence-only.
 	OnTodosUpdated   func(ctx context.Context, sessionID, workDir string, todos []tool.TodoItem)
@@ -454,6 +457,7 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 					WorkDir:        cfg.WorkDir,
 					SkillRoots:     orderedSkillRoots(activeSkillRoot, e.config.SkillRoots),
 					AgentID:        string(cfg.ID),
+					AgentRole:      string(cfg.Role),
 					TodoPath:       e.config.TodoPath,
 					FastModel:      e.config.FastModelName,
 					TextFileSystem: e.config.TextFileSystem,
@@ -481,7 +485,8 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 						}
 						return e.config.FingerprintBaseline()
 					}(),
-					AskUser: e.config.OnAskUser,
+					AskUser:           e.config.OnAskUser,
+					AskUserAutoSelect: e.config.AskUserAutoSelect,
 					OnTodosUpdated: func(todoCtx context.Context, todos []tool.TodoItem) {
 						if e.config.OnTodosUpdated == nil {
 							return

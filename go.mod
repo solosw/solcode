@@ -14,8 +14,10 @@ require (
 	github.com/charmbracelet/glamour v1.0.0
 	github.com/charmbracelet/lipgloss v1.1.1-0.20250404203927-76690c660834
 	github.com/go-vgo/robotgo v1.0.2
+	github.com/hashirmuzaffar/hfbpe v0.0.0
 	github.com/modelcontextprotocol/go-sdk v1.6.1
 	github.com/odvcencio/gotreesitter v0.22.5
+	github.com/philippgille/chromem-go v0.7.0
 	github.com/proiceremo/websearch v0.0.2
 	github.com/sergi/go-diff v1.4.0
 	github.com/superops-team/headroom-go v0.8.0
@@ -32,8 +34,6 @@ require (
 	github.com/JohannesKaufmann/dom v0.2.0 // indirect
 	github.com/antchfx/htmlquery v1.3.6 // indirect
 	github.com/antchfx/xpath v1.3.6 // indirect
-	github.com/apache/arrow/go/arrow v0.0.0-20211112161151-bc219186db40 // indirect
-	github.com/awalterschulze/gographviz v2.0.3+incompatible // indirect
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
 	github.com/aymerick/douceur v0.2.0 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
@@ -46,8 +46,6 @@ require (
 	github.com/charmbracelet/x/term v0.2.2 // indirect
 	github.com/charmbracelet/x/termios v0.1.1 // indirect
 	github.com/charmbracelet/x/windows v0.2.2 // indirect
-	github.com/chewxy/hm v1.0.0 // indirect
-	github.com/chewxy/math32 v1.10.1 // indirect
 	github.com/clipperhouse/displaywidth v0.11.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/dblohm7/wingoes v0.0.0-20250822163801-6d8e6105c62d // indirect
@@ -58,18 +56,13 @@ require (
 	github.com/gen2brain/shm v0.2.1 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
 	github.com/godbus/dbus/v5 v5.2.2 // indirect
-	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da // indirect
-	github.com/golang/protobuf v1.5.4 // indirect
-	github.com/google/flatbuffers v2.0.6+incompatible // indirect
 	github.com/google/jsonschema-go v0.4.3 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/css v1.0.1 // indirect
-	github.com/hashirmuzaffar/hfbpe v0.0.0 // indirect
 	github.com/invopop/jsonschema v0.14.0 // indirect
 	github.com/jezek/xgb v1.3.0 // indirect
 	github.com/jezek/xgbutil v0.0.0-20260124183602-9fd151d6a51a // indirect
-	github.com/leesper/go_rng v0.0.0-20190531154944-a612b043e353 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.0 // indirect
 	github.com/lufia/plan9stats v0.0.0-20260324052639-156f7da3f749 // indirect
 	github.com/mattn/go-isatty v0.0.22 // indirect
@@ -80,9 +73,7 @@ require (
 	github.com/muesli/termenv v0.16.0 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/otiai10/gosseract/v2 v2.4.1 // indirect
-	github.com/owulveryck/onnx-go v0.5.0 // indirect
 	github.com/pb33f/ordered-map/v2 v2.3.1 // indirect
-	github.com/pkg/errors v0.9.1 // indirect
 	github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
@@ -103,28 +94,18 @@ require (
 	github.com/vcaesar/screenshot v0.11.1 // indirect
 	github.com/vcaesar/tt v0.20.1 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
-	github.com/xtgo/set v1.0.0 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	github.com/yuin/goldmark v1.8.2 // indirect
 	github.com/yuin/goldmark-emoji v1.0.6 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	go.yaml.in/yaml/v4 v4.0.0-rc.2 // indirect
-	go4.org/unsafe/assume-no-moving-gc v0.0.0-20231121144256-b99613f794b6 // indirect
 	golang.org/x/exp v0.0.0-20260312153236-7ab1446f8b90 // indirect
 	golang.org/x/net v0.55.0 // indirect
 	golang.org/x/oauth2 v0.35.0 // indirect
 	golang.org/x/sync v0.23.0 // indirect
 	golang.org/x/term v0.43.0 // indirect
 	golang.org/x/text v0.42.0 // indirect
-	golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1 // indirect
-	gonum.org/v1/gonum v0.11.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
-	gorgonia.org/cu v0.9.4 // indirect
-	gorgonia.org/dawson v1.2.0 // indirect
-	gorgonia.org/gorgonia v0.9.18 // indirect
-	gorgonia.org/tensor v0.9.23 // indirect
-	gorgonia.org/vecf32 v0.9.0 // indirect
-	gorgonia.org/vecf64 v0.9.0 // indirect
 	modernc.org/libc v1.73.4 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect

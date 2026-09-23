@@ -13,8 +13,84 @@ import (
 	"github.com/solosw/solcode/internal/config"
 	"github.com/solosw/solcode/internal/engine"
 	"github.com/solosw/solcode/internal/systemone"
+	"github.com/solosw/solcode/internal/tool"
 	"github.com/solosw/solcode/internal/workflow"
 )
+
+func TestAnswerAskUserFallsBackWithoutJev(t *testing.T) {
+	params := tool.AskUserParams{Questions: []tool.Question{{
+		Question: "Which approach?",
+		Options: []tool.QuestionOption{
+			{Label: "Fast", Description: "quick"},
+			{Label: "Safe", Description: "careful"},
+		},
+	}}}
+	var nilRuntime *jevRuntime
+	got := nilRuntime.AnswerAskUser(context.Background(), params)
+	if got["Which approach?"] != "Fast" {
+		t.Fatalf("nil runtime answers = %#v", got)
+	}
+}
+
+func TestAnswerAskUserUsesChoice(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"answers": {"question": {"type": "choice", "choice": "Safe", "confidence": 0.9}}}`))
+	}))
+	defer server.Close()
+
+	jev := &jevRuntime{
+		decider: systemone.NewDecider(systemone.NewClient(systemone.Options{
+			BaseURL: server.URL, APIKey: "k", HTTPClient: server.Client(),
+		})),
+		routeMin: 0.6,
+	}
+	params := tool.AskUserParams{Questions: []tool.Question{{
+		Question: "Which approach?",
+		Header:   "scope",
+		Options: []tool.QuestionOption{
+			{Label: "Fast", Description: "quick"},
+			{Label: "Safe", Description: "careful"},
+		},
+	}}}
+	got := jev.AnswerAskUser(context.Background(), params)
+	if got["Which approach?"] != "Safe" {
+		t.Fatalf("answers = %#v, want Safe", got)
+	}
+}
+
+func TestAnswerAskUserMultiSelectScreensOptions(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"answers": {
+			"candidate_0": {"type": "noul", "noul": 0.9},
+			"candidate_1": {"type": "noul", "noul": 0.1},
+			"candidate_2": {"type": "noul", "noul": 0.8}
+		}}`))
+	}))
+	defer server.Close()
+
+	jev := &jevRuntime{
+		decider: systemone.NewDecider(systemone.NewClient(systemone.Options{
+			BaseURL: server.URL, APIKey: "k", HTTPClient: server.Client(),
+		})),
+		routeMin: 0.6,
+	}
+	params := tool.AskUserParams{Questions: []tool.Question{{
+		Question:    "Which features?",
+		MultiSelect: true,
+		Options: []tool.QuestionOption{
+			{Label: "A", Description: "feature a"},
+			{Label: "B", Description: "feature b"},
+			{Label: "C", Description: "feature c"},
+		},
+	}}}
+	got := jev.AnswerAskUser(context.Background(), params)
+	answer := got["Which features?"]
+	if !strings.Contains(answer, "A") || !strings.Contains(answer, "C") || strings.Contains(answer, "B") {
+		t.Fatalf("multi-select answers = %q, want A and C", answer)
+	}
+}
 
 // TestBuildJevDisabledReturnsNil pins the default: with Jev off there is no
 // runtime, and every consumer must treat nil as "feature absent".

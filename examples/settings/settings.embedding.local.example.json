@@ -1,0 +1,9 @@
+{
+  "embedding": {
+    "enabled": true,
+    "type": "local",
+    "model": "embeddinggemma-300m",
+    "timeout_sec": 60,
+    "dimensions": 0
+  }
+}

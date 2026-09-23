@@ -28,6 +28,10 @@ type UseContext struct {
 	// when they are not found under WorkDir (or prefer them when skill-shaped).
 	SkillRoots       []string
 	AgentID          string
+	// AgentRole is the agent.AgentRole string for this invoke ("main", "task",
+	// "sub"). Empty means main. AskUser uses it to skip the interactive user
+	// dialog for nested agents and let Jev choose instead.
+	AgentRole        string
 	TodoPath         string
 	FastModel        string
 	Status           func(string)
@@ -49,6 +53,10 @@ type UseContext struct {
 	// temps are not recorded. Nil falls back to a per-invoke before snapshot.
 	FingerprintBaseline map[string]FileFingerprint
 	AskUser             func(ctx context.Context, params AskUserParams) (map[string]string, error)
+	// AskUserAutoSelect answers AskUser without a human. Used for nested agents
+	// and for timeouts while waiting on the interactive dialog. Nil falls back
+	// to the first option of each question.
+	AskUserAutoSelect   func(ctx context.Context, params AskUserParams) (map[string]string, error)
 	// OnAgentProgress reports nested sub-agent lifecycle / tool activity to the UI.
 	OnAgentProgress func(AgentProgressEvent)
 	// OnTodosUpdated is invoked after TodoWrite successfully persists a list.

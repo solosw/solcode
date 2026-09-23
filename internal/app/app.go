@@ -18,6 +18,7 @@ import (
 	"github.com/solosw/solcode/internal/changegraph"
 	"github.com/solosw/solcode/internal/computeruse"
 	"github.com/solosw/solcode/internal/config"
+	"github.com/solosw/solcode/internal/embedding"
 	"github.com/solosw/solcode/internal/engine"
 	"github.com/solosw/solcode/internal/hook"
 	"github.com/solosw/solcode/internal/lsp"
@@ -43,6 +44,8 @@ type App struct {
 	Sessions         *session.Manager
 	MemoryStore      *memory.FileStore
 	MemoryManager    *memory.Manager
+	// EmbeddingStore holds the optional chromem index for durable memories.
+	EmbeddingStore   *embedding.Store
 	SkillRegistry    *skill.Registry
 	WorkflowRegistry *workflow.Registry
 	MCPRegistry      *mcp.Registry
@@ -247,6 +250,7 @@ func New(cfg config.Config, opts ...Option) (*App, error) {
 	engineCfg := engineConfig(cfg, client, runtime, registry, permissions, options.onTextDelta, options.onThinkingDelta, options.onToolStart, options.onToolDone, application.emitUsage, options.onStatus, options.onAgentProgress, options.onAskUser, options.textFileSystem, options.queuedPrompts, recordFileChange, application.captureCheckpoint, application.uncaptureCheckpoint, application.listCheckpointPaths, application.fingerprintBaseline, application.compactMessagesMidRun)
 	engineCfg.Router = jev.router()
 	engineCfg.Guardrail = jev.guardrail()
+	engineCfg.AskUserAutoSelect = application.askUserAutoSelect
 	// Snapshot todolist on every TodoWrite so mid-turn updates are not lost;
 	// turn-end recording still captures the final state plus pruned files.
 	engineCfg.OnTodosUpdated = application.recordTodoSessionMemory
@@ -289,6 +293,17 @@ func New(cfg config.Config, opts ...Option) (*App, error) {
 			PromotionAccessThreshold: cfg.Memory.PromotionAccessThreshold,
 			PromotionConfidence:      cfg.Memory.PromotionConfidence,
 		}}).WithRetrievalBudget(cfg.Memory.RetrievalM2Limit, cfg.Memory.RetrievalM3Limit, cfg.Memory.RetrievalM4Limit, cfg.Memory.RetrievalM5Limit)
+		if cfg.EmbeddingEnabled() {
+			if embStore, err := openEmbeddingStore(cfg); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: embedding disabled: %v\n", err)
+			} else if embStore != nil {
+				application.EmbeddingStore = embStore
+				application.MemoryManager.WithVectorIndex(embStore)
+			}
+		}
+		if jev != nil && jev.decider != nil && jev.decider.Enabled() {
+			application.MemoryManager.WithDecider(jev.decider)
+		}
 		// Let the model decide when a fact is worth remembering, and let it
 		// look up what was remembered before instead of re-deriving it.
 		registry.Register(tool.NewWriteMemoryTool(application), tool.NewReadMemoryTool(application))
@@ -395,6 +410,25 @@ func (a *App) bindUsageSession(s *session.Session) func() {
 	}
 }
 
+func openEmbeddingStore(cfg config.Config) (*embedding.Store, error) {
+	if !cfg.EmbeddingEnabled() {
+		return nil, nil
+	}
+	provider, err := embedding.NewProvider(embedding.Options{
+		Config: cfg.Embedding,
+		ORTLib: cfg.Jev.ORTLib,
+	})
+	if err != nil {
+		return nil, err
+	}
+	store, err := embedding.OpenStore(cfg.Embedding.Dir, provider)
+	if err != nil {
+		_ = provider.Close()
+		return nil, err
+	}
+	return store, nil
+}
+
 func openChangeGraph(cfg config.Config) (*changegraph.Store, error) {
 	if !cfg.KnowledgeGraph.Enabled {
 		return nil, nil
@@ -439,6 +473,12 @@ func (a *App) Close() error {
 		if err := a.ChangeGraph.Close(); firstErr == nil {
 			firstErr = err
 		}
+	}
+	if a.EmbeddingStore != nil {
+		if err := a.EmbeddingStore.Close(); firstErr == nil {
+			firstErr = err
+		}
+		a.EmbeddingStore = nil
 	}
 	if a.jev != nil {
 		if err := a.jev.Close(); firstErr == nil {
@@ -520,6 +560,7 @@ func (a *App) SwitchModel(cfg config.Config) error {
 	}
 	ec := engineConfig(cfg, client, a.Hooks, a.Tools, a.Permissions, a.onTextDelta, a.onThinkingDelta, a.onToolStart, a.onToolDone, a.emitUsage, a.onStatus, a.onAgentProgress, a.onAskUser, a.textFileSystem, a.queuedPrompts, newFileChangeRecorder(a.ChangeGraph), a.captureCheckpoint, a.uncaptureCheckpoint, a.listCheckpointPaths, a.fingerprintBaseline, a.compactMessagesMidRun)
 	ec.OnTodosUpdated = a.recordTodoSessionMemory
+	ec.AskUserAutoSelect = a.askUserAutoSelect
 	a.Engine.UpdateConfig(ec)
 	return nil
 }
@@ -605,6 +646,7 @@ func (a *App) ReloadFeatures(cfg config.Config, mcpFactory mcp.ClientFactory) er
 	engineCfg := engineConfig(cfg, a.Client, a.Hooks, a.Tools, a.Permissions, a.onTextDelta, a.onThinkingDelta, a.onToolStart, a.onToolDone, a.emitUsage, a.onStatus, a.onAgentProgress, a.onAskUser, a.textFileSystem, a.queuedPrompts, newFileChangeRecorder(a.ChangeGraph), a.captureCheckpoint, a.uncaptureCheckpoint, a.listCheckpointPaths, a.fingerprintBaseline, a.compactMessagesMidRun)
 	engineCfg.Router = jev.router()
 	engineCfg.Guardrail = jev.guardrail()
+	engineCfg.AskUserAutoSelect = a.askUserAutoSelect
 	engineCfg.OnTodosUpdated = a.recordTodoSessionMemory
 	a.Engine.UpdateConfig(engineCfg)
 	return nil
@@ -3030,6 +3072,13 @@ func memoryModelName(cfg config.Config) string {
 		return strings.TrimSpace(cfg.FastModel)
 	}
 	return cfg.Model
+}
+
+func (a *App) askUserAutoSelect(ctx context.Context, params tool.AskUserParams) (map[string]string, error) {
+	if a == nil {
+		return tool.DefaultAskUserAnswers(params), nil
+	}
+	return a.jev.AnswerAskUser(ctx, params), nil
 }
 
 func engineConfig(cfg config.Config, client *cpanthropic.Client, runtime *hook.Runtime, registry *tool.Registry, permissions *permission.Service, onTextDelta, onThinkingDelta func(string), onToolStart func(name string, input json.RawMessage, toolUseID string), onToolDone func(name string, output string, isError bool, toolUseID string), onUsage func(engine.Usage), onStatus func(string), onAgentProgress func(tool.AgentProgressEvent), onAskUser func(ctx context.Context, params tool.AskUserParams) (map[string]string, error), textFileSystem tool.TextFileSystem, queuedPrompts func() []string, recordFileChange func(ctx context.Context, uctx *tool.UseContext, change tool.FileChange), captureCheckpoint func(path string, content *string), uncaptureCheckpoint func(path string), listCheckpointPaths func() []string, fingerprintBaseline func() map[string]tool.FileFingerprint, compactMessages func(ctx context.Context, messages []sdk.MessageParam) ([]sdk.MessageParam, error)) engine.Config {

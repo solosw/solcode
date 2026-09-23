@@ -1,0 +1,11 @@
+{
+  "embedding": {
+    "enabled": true,
+    "type": "api",
+    "base_url": "https://api.openai.com/v1",
+    "api_key_env": "OPENAI_API_KEY",
+    "model": "text-embedding-3-small",
+    "timeout_sec": 30,
+    "dimensions": 0
+  }
+}

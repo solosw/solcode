@@ -206,6 +206,113 @@ func (j *jevRuntime) routeConfidence() float64 {
 	return j.routeMin
 }
 
+// AnswerAskUser picks answers for AskUser questions via Jev Choice / Screen.
+//
+// Nested agents and AskUser timeouts call this instead of prompting a human.
+// When Jev is off or uncertain it falls back to the first option of each
+// question so the tool still returns a usable answer map.
+func (j *jevRuntime) AnswerAskUser(ctx context.Context, params tool.AskUserParams) map[string]string {
+	fallback := tool.DefaultAskUserAnswers(params)
+	if j == nil || j.decider == nil || !j.decider.Enabled() || len(params.Questions) == 0 {
+		return fallback
+	}
+	answers := make(map[string]string, len(params.Questions))
+	minConfidence := j.routeConfidence()
+	for _, question := range params.Questions {
+		key := question.Question
+		if len(question.Options) == 0 {
+			continue
+		}
+		if question.MultiSelect {
+			if selected := j.answerAskUserMulti(ctx, question, minConfidence); len(selected) > 0 {
+				answers[key] = strings.Join(selected, ", ")
+				continue
+			}
+			answers[key] = fallback[key]
+			continue
+		}
+		options := make(map[string]string, len(question.Options))
+		for _, option := range question.Options {
+			label := strings.TrimSpace(option.Label)
+			if label == "" {
+				continue
+			}
+			desc := strings.TrimSpace(option.Description)
+			if desc == "" {
+				desc = label
+			}
+			options[label] = desc
+		}
+		if len(options) == 0 {
+			answers[key] = fallback[key]
+			continue
+		}
+		fallbackLabel := fallback[key]
+		if fallbackLabel == "" {
+			fallbackLabel = question.Options[0].Label
+		}
+		instructions := strings.TrimSpace(question.Question)
+		if header := strings.TrimSpace(question.Header); header != "" {
+			instructions = header + ": " + instructions
+		}
+		if instructions == "" {
+			instructions = "Which option should be chosen?"
+		}
+		state := map[string]any{
+			"question": question.Question,
+			"header":   question.Header,
+			"options":  options,
+		}
+		choice, _ := j.decider.Choose(ctx, state, instructions, options, minConfidence, fallbackLabel)
+		if choice == "" {
+			choice = fallbackLabel
+		}
+		answers[key] = choice
+	}
+	return answers
+}
+
+func (j *jevRuntime) answerAskUserMulti(ctx context.Context, question tool.Question, minProbability float64) []string {
+	if j == nil || j.decider == nil || !j.decider.Enabled() {
+		return nil
+	}
+	candidates := make([]systemone.Candidate, 0, len(question.Options))
+	for _, option := range question.Options {
+		label := strings.TrimSpace(option.Label)
+		if label == "" {
+			continue
+		}
+		desc := strings.TrimSpace(option.Description)
+		if desc == "" {
+			desc = label
+		}
+		candidates = append(candidates, systemone.Candidate{Name: label, Description: desc})
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+	instructions := strings.TrimSpace(question.Question)
+	if header := strings.TrimSpace(question.Header); header != "" {
+		instructions = header + ": " + instructions
+	}
+	if instructions == "" {
+		instructions = "Should this option be selected for the multi-select question?"
+	}
+	state := map[string]any{
+		"question": question.Question,
+		"header":   question.Header,
+	}
+	ranked := j.decider.Screen(ctx, state, instructions, candidates, minProbability, len(candidates))
+	if len(ranked) == 0 {
+		return nil
+	}
+	selected := make([]string, 0, len(ranked))
+	for _, item := range ranked {
+		selected = append(selected, item.Name)
+	}
+	return selected
+}
+
 // jevGuardrail adapts systemone.Guardrail to engine.ToolGuardrail.
 //
 // It only inspects calls that mutate something. Read-only tools cannot damage

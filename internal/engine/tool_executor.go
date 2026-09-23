@@ -75,6 +75,10 @@ func timeoutForTool(selected tool.Tool) time.Duration {
 	switch selected.Name() {
 	case tool.TaskToolName, tool.SubagentToolName:
 		return taskToolTimeout
+	case tool.AskUserToolName:
+		// AskUser waits on a human dialog; keep the executor ceiling above the
+		// tool's own AskUserTimeout so the tool can fall back to Jev first.
+		return time.Duration(tool.AskUserTimeout)*time.Second + 30*time.Second
 	case tool.WaitToolName:
 		// Wait is internal (not model-visible); same ceiling as Bash auto-wait.
 		return bashToolTimeout

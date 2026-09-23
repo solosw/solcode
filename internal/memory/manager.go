@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/solosw/solcode/internal/systemone"
 )
 
 type GateDecision struct {
@@ -73,6 +75,10 @@ type Manager struct {
 	RetrieveM3Limit int
 	RetrieveM4Limit int
 	RetrieveM5Limit int
+	// Vectors optionally indexes durable memories for semantic retrieval.
+	Vectors VectorIndex
+	// Decider optionally re-ranks merged lexical+vector candidates via Jev.
+	Decider *systemone.Decider
 }
 
 func NewManager(store *FileStore, gate Gate, judge Judge) *Manager {
@@ -158,6 +164,9 @@ func (m *Manager) remember(ctx context.Context, text, sourceSessionID, workDir, 
 		item = mergeItems(item, Item{Text: text, SourceSessionID: sourceSessionID}, time.Now())
 		item = m.lifecycle().Apply(item, time.Now())
 		updated, err := m.Store.Save(ctx, item)
+		if err == nil {
+			m.indexMemory(ctx, updated)
+		}
 		return updated, false, err
 	}
 	judgement := MemoryJudgement{
@@ -209,11 +218,17 @@ func (m *Manager) remember(ctx context.Context, text, sourceSessionID, workDir, 
 			merged := mergeItems(existing, item, time.Now())
 			merged = m.lifecycle().Apply(merged, time.Now())
 			updated, err := m.Store.Save(ctx, merged)
+			if err == nil {
+				m.indexMemory(ctx, updated)
+			}
 			return updated, false, err
 		}
 	}
 	item = m.lifecycle().Apply(item, time.Now())
 	created, err := m.Store.Save(ctx, item)
+	if err == nil {
+		m.indexMemory(ctx, created)
+	}
 	return created, true, err
 }
 
@@ -304,6 +319,7 @@ func (m *Manager) RememberDirect(ctx context.Context, input DirectInput) (Direct
 			if err != nil {
 				return DirectOutcome{}, err
 			}
+			m.indexMemory(ctx, saved)
 			return DirectOutcome{
 				Item:     saved,
 				Stored:   true,
@@ -325,6 +341,7 @@ func (m *Manager) RememberDirect(ctx context.Context, input DirectInput) (Direct
 	if err != nil {
 		return DirectOutcome{}, err
 	}
+	m.indexMemory(ctx, saved)
 	return DirectOutcome{Item: saved, Stored: true}, nil
 }
 
@@ -346,6 +363,9 @@ func (m *Manager) Retrieve(ctx context.Context, query, currentSessionID string, 
 		M4Limit:           m.RetrieveM4Limit,
 		M5Limit:           m.RetrieveM5Limit,
 	})
+	// Expand with semantic neighbors, then optionally Jev-rank the union.
+	merged := m.mergeVectorCandidates(ctx, query, currentSessionID, allowCrossSession, items, selected, limit)
+	selected = m.rankWithJev(ctx, query, merged, limit)
 	cleaned := make([]Item, 0, len(selected))
 	for _, item := range selected {
 		next, _, keep := sanitizeStoredMemoryItem(item)
@@ -414,6 +434,7 @@ func (m *Manager) RememberExtracted(ctx context.Context, input ExtractionInput) 
 			if err != nil {
 				return stored, err
 			}
+			m.indexMemory(ctx, created)
 			stored = append(stored, created)
 			mergedExisting = true
 			break
@@ -426,6 +447,7 @@ func (m *Manager) RememberExtracted(ctx context.Context, input ExtractionInput) 
 		if err != nil {
 			return stored, err
 		}
+		m.indexMemory(ctx, created)
 		stored = append(stored, created)
 		workingItems = append(workingItems, created)
 	}

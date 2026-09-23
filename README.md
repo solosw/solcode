@@ -754,6 +754,9 @@ solcode/
 ## Jev model
 - modelscope.cn/models/onnx-community/open-jev-deberta-v3-large-ONNX
 - huggingface.co/tozp/laya-onnx/tree/main
+
+## Embedded
+https://huggingface.co/onnx-community/embeddinggemma-300m-ONNX
 ## License
 
 MIT

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // AskUserParams is the input schema for the AskUser tool.
@@ -73,6 +74,8 @@ or offer choices. Use this when you need user input to make decisions.
 - Use for: gathering preferences, clarifying ambiguity, making decisions
 - Each question needs 2-4 options; header labels the question briefly
 - In interactive mode, results are returned as answers map
+- Nested agents (Task/Subagent) do not prompt the user; Jev (or a first-option
+  fallback) answers automatically
 - Do not use this to ask for facts you can discover with tools (files, tests, errors, repo layout)`
 }
 
@@ -154,13 +157,40 @@ func (t *askUserTool) Invoke(ctx context.Context, uctx *UseContext, input json.R
 		}
 	}
 
-	// In interactive mode, ask the TUI and wait for answers.
-	if uctx != nil && uctx.AskUser != nil {
-		answers, err := uctx.AskUser(ctx, params)
-		if err != nil {
-			return ErrorResult("AskUser failed: " + err.Error()), nil
-		}
+	timeout := time.Duration(t.timeoutSecs) * time.Second
+	if timeout <= 0 {
+		timeout = time.Duration(AskUserTimeout) * time.Second
+	}
+
+	// Nested agents never prompt the interactive user — Jev (or the first-option
+	// fallback) answers so Task/Subagent runs stay unattended.
+	if isNestedAgent(uctx) {
+		answers := autoSelectAskUser(ctx, uctx, params)
 		return buildStructuredResult(params.Questions, answers), nil
+	}
+
+	// Interactive mode: ask the TUI/ACP callback and wait, falling back to Jev
+	// when the wait times out or the callback is unavailable.
+	if uctx != nil && uctx.AskUser != nil {
+		askCtx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		answers, err := uctx.AskUser(askCtx, params)
+		if err == nil {
+			return buildStructuredResult(params.Questions, answers), nil
+		}
+		if ctx.Err() != nil {
+			return ErrorResult("AskUser cancelled: " + ctx.Err().Error()), nil
+		}
+		// Timeout or soft callback failure while the parent run is still live:
+		// let Jev finish the decision instead of failing the tool.
+		if uctx.Status != nil {
+			if askCtx.Err() == context.DeadlineExceeded {
+				uctx.Status("AskUser timed out; Jev selecting answers")
+			} else {
+				uctx.Status("AskUser unavailable; Jev selecting answers")
+			}
+		}
+		return buildStructuredResult(params.Questions, autoSelectAskUser(ctx, uctx, params)), nil
 	}
 
 	// Try to get answers from the channel (legacy interactive mode)
@@ -176,6 +206,36 @@ func (t *askUserTool) Invoke(ctx context.Context, uctx *UseContext, input json.R
 			Text: buildAskUserSummary(params.Questions),
 		}, nil
 	}
+}
+
+func isNestedAgent(uctx *UseContext) bool {
+	if uctx == nil {
+		return false
+	}
+	role := strings.ToLower(strings.TrimSpace(uctx.AgentRole))
+	return role == "task" || role == "sub"
+}
+
+func autoSelectAskUser(ctx context.Context, uctx *UseContext, params AskUserParams) map[string]string {
+	if uctx != nil && uctx.AskUserAutoSelect != nil {
+		if answers, err := uctx.AskUserAutoSelect(ctx, params); err == nil && answers != nil {
+			return answers
+		}
+	}
+	return DefaultAskUserAnswers(params)
+}
+
+// DefaultAskUserAnswers picks the first option of each question. Used when Jev
+// is unavailable or fails so AskUser still returns a usable answer map.
+func DefaultAskUserAnswers(params AskUserParams) map[string]string {
+	answers := make(map[string]string, len(params.Questions))
+	for _, q := range params.Questions {
+		if len(q.Options) == 0 {
+			continue
+		}
+		answers[q.Question] = q.Options[0].Label
+	}
+	return answers
 }
 
 func buildAskUserSummary(questions []Question) string {

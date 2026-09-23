@@ -345,6 +345,68 @@
               </label>
             </div>
           </section>
+
+          <section class="settings-section">
+            <div class="section-heading">
+              <h2>Embedding</h2>
+              <span class="badge" id="embedding-state"></span>
+            </div>
+            <p class="settings-hint">
+              Optional vector embeddings for semantic search. Choose an OpenAI-compatible
+              API or a local ONNX model. The project index lives under
+              <code>ProjectStateDir/embeddings</code> (sibling of <code>knowledge.db</code>);
+              shared model weights fall back to <code>~/.solcode/embeddings</code>.
+              Off by default.
+            </p>
+            <div class="settings-list">
+              <label class="settings-row settings-toggle-row">
+                <div class="settings-row-main">
+                  <strong>Enable Embedding</strong>
+                  <div class="settings-row-detail">
+                    API mode needs a resolvable key and model. Local mode needs a model id;
+                    the project directory is always next to <code>knowledge.db</code>.
+                  </div>
+                </div>
+                <input type="checkbox" id="set-embedding-enabled" />
+              </label>
+            </div>
+
+            <div class="settings-grid">
+              <label>Backend
+                <select id="set-embedding-type">
+                  <option value="api">OpenAI-compatible API</option>
+                  <option value="local">Local (ONNX / EmbeddingGemma)</option>
+                </select>
+              </label>
+              <label>Model
+                <input id="set-embedding-model" type="text" placeholder="text-embedding-3-small" />
+              </label>
+              <label>Timeout (sec)
+                <input id="set-embedding-timeout" type="number" min="1" max="300" step="1" />
+              </label>
+              <label>Dimensions (optional)
+                <input id="set-embedding-dimensions" type="number" min="0" step="1" placeholder="0 = provider default" />
+              </label>
+            </div>
+
+            <div id="embedding-api-fields" class="settings-grid">
+              <label>Base URL
+                <input id="set-embedding-base-url" type="url" placeholder="https://api.openai.com/v1" />
+              </label>
+              <label>API key
+                <input id="set-embedding-api-key" type="password" placeholder="Leave blank to keep the current key" />
+              </label>
+              <label>API key env var
+                <input id="set-embedding-api-key-env" type="text" placeholder="OPENAI_API_KEY" />
+              </label>
+            </div>
+
+            <div id="embedding-local-fields" class="settings-grid hidden">
+              <label>Local directory (fixed)
+                <input id="set-embedding-dir" type="text" readonly />
+              </label>
+            </div>
+          </section>
         </div>
       </main>
     </div>

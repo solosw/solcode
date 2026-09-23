@@ -292,6 +292,8 @@ type settingsResponse struct {
 	ComputerUse computerUseSettings `json:"computer_use"`
 	// Jev configures the TypeSafe System One decision layer.
 	Jev jevSettings `json:"jev"`
+	// Embedding configures optional vector embeddings for semantic search.
+	Embedding embeddingSettings `json:"embedding"`
 }
 
 // computerUseSettings is the UI-facing view of the ComputerUse toggle.
@@ -320,6 +322,22 @@ type jevSettings struct {
 	Routing            bool    `json:"routing"`
 	MemoryJudge        bool    `json:"memory_judge"`
 	Guardrail          bool    `json:"guardrail"`
+}
+
+// embeddingSettings is the UI-facing view of the embedding backend.
+//
+// APIKeySet reports whether a key is resolvable without ever sending the key
+// itself to the browser. Dir is the project-scoped ProjectStateDir/embeddings path.
+type embeddingSettings struct {
+	Enabled    bool   `json:"enabled"`
+	Type       string `json:"type"`
+	BaseURL    string `json:"base_url"`
+	APIKeyEnv  string `json:"api_key_env"`
+	APIKeySet  bool   `json:"api_key_set"`
+	Model      string `json:"model"`
+	Dir        string `json:"dir"`
+	TimeoutSec int    `json:"timeout_sec"`
+	Dimensions int    `json:"dimensions"`
 }
 
 type providerSummary struct {
@@ -486,6 +504,17 @@ func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
 			MemoryJudge:        cfg.Jev.MemoryJudge,
 			Guardrail:          cfg.Jev.Guardrail,
 		},
+		Embedding: embeddingSettings{
+			Enabled:    cfg.Embedding.Enabled,
+			Type:       cfg.EmbeddingType(),
+			BaseURL:    cfg.Embedding.BaseURL,
+			APIKeyEnv:  cfg.Embedding.APIKeyEnv,
+			APIKeySet:  strings.TrimSpace(cfg.Embedding.APIKey) != "",
+			Model:      cfg.Embedding.Model,
+			Dir:        cfg.Embedding.Dir,
+			TimeoutSec: cfg.Embedding.TimeoutSec,
+			Dimensions: cfg.Embedding.Dimensions,
+		},
 	}
 	for _, p := range cfg.Providers {
 		summary := providerSummary{
@@ -550,6 +579,16 @@ type settingsUpdate struct {
 	JevRouting            *bool    `json:"jev_routing,omitempty"`
 	JevMemoryJudge        *bool    `json:"jev_memory_judge,omitempty"`
 	JevGuardrail          *bool    `json:"jev_guardrail,omitempty"`
+
+	// Embedding fields. Absent fields leave the current value untouched.
+	EmbeddingEnabled    *bool   `json:"embedding_enabled,omitempty"`
+	EmbeddingType       *string `json:"embedding_type,omitempty"`
+	EmbeddingBaseURL    *string `json:"embedding_base_url,omitempty"`
+	EmbeddingAPIKey     *string `json:"embedding_api_key,omitempty"`
+	EmbeddingAPIKeyEnv  *string `json:"embedding_api_key_env,omitempty"`
+	EmbeddingModel      *string `json:"embedding_model,omitempty"`
+	EmbeddingTimeoutSec *int    `json:"embedding_timeout_sec,omitempty"`
+	EmbeddingDimensions *int    `json:"embedding_dimensions,omitempty"`
 }
 
 func (s *Server) postSettings(w http.ResponseWriter, r *http.Request) {
@@ -582,6 +621,7 @@ func (s *Server) postSettings(w http.ResponseWriter, r *http.Request) {
 	applyActiveModelSettings(&next, req)
 	applyComputerUseSettings(&next, req)
 	applyJevSettings(&next, req)
+	applyEmbeddingSettings(&next, req)
 
 	// MCP toggles
 	if len(req.MCPDisabled) > 0 {
@@ -683,6 +723,41 @@ func applyJevSettings(cfg *config.Config, req settingsUpdate) {
 	}
 	if req.JevGuardrail != nil {
 		cfg.Jev.Guardrail = *req.JevGuardrail
+	}
+}
+
+// applyEmbeddingSettings applies the Embedding fields that were provided.
+//
+// Each field is optional so a partial update cannot silently reset the rest.
+// Dir is never taken from the request — normalizeEmbedding always forces
+// DefaultEmbeddingDir(WorkDir) (sibling of knowledge.db).
+func applyEmbeddingSettings(cfg *config.Config, req settingsUpdate) {
+	if cfg == nil {
+		return
+	}
+	if req.EmbeddingEnabled != nil {
+		cfg.Embedding.Enabled = *req.EmbeddingEnabled
+	}
+	if req.EmbeddingType != nil {
+		cfg.Embedding.Type = strings.ToLower(strings.TrimSpace(*req.EmbeddingType))
+	}
+	if req.EmbeddingBaseURL != nil {
+		cfg.Embedding.BaseURL = strings.TrimSpace(*req.EmbeddingBaseURL)
+	}
+	if req.EmbeddingAPIKey != nil {
+		cfg.Embedding.APIKey = strings.TrimSpace(*req.EmbeddingAPIKey)
+	}
+	if req.EmbeddingAPIKeyEnv != nil {
+		cfg.Embedding.APIKeyEnv = strings.TrimSpace(*req.EmbeddingAPIKeyEnv)
+	}
+	if req.EmbeddingModel != nil {
+		cfg.Embedding.Model = strings.TrimSpace(*req.EmbeddingModel)
+	}
+	if req.EmbeddingTimeoutSec != nil {
+		cfg.Embedding.TimeoutSec = *req.EmbeddingTimeoutSec
+	}
+	if req.EmbeddingDimensions != nil {
+		cfg.Embedding.Dimensions = *req.EmbeddingDimensions
 	}
 }
 

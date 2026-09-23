@@ -46,6 +46,13 @@ func TestTimeoutForBashAndWaitAllowTwentyFourHours(t *testing.T) {
 	}
 }
 
+func TestTimeoutForAskUserAllowsDialogPlusGrace(t *testing.T) {
+	want := time.Duration(tool.AskUserTimeout)*time.Second + 30*time.Second
+	if got := timeoutForTool(timeoutTestTool{name: tool.AskUserToolName}); got != want {
+		t.Fatalf("AskUser timeout = %s, want %s", got, want)
+	}
+}
+
 func TestTimeoutForRegularToolIsTwoMinutes(t *testing.T) {
 	if got := timeoutForTool(timeoutTestTool{name: "Other"}); got != 2*time.Minute {
 		t.Fatalf("regular tool timeout = %s, want 2m", got)

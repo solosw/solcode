@@ -47,6 +47,17 @@ func TestSettingsPersistFeaturesThroughDisk(t *testing.T) {
 				"memory_judge":         next.Jev.MemoryJudge,
 				"guardrail":            next.Jev.Guardrail,
 			},
+			"embedding": map[string]any{
+				"enabled":     next.Embedding.Enabled,
+				"type":        next.Embedding.Type,
+				"base_url":    next.Embedding.BaseURL,
+				"api_key":     next.Embedding.APIKey,
+				"api_key_env": next.Embedding.APIKeyEnv,
+				"model":       next.Embedding.Model,
+				"dir":         next.Embedding.Dir,
+				"timeout_sec": next.Embedding.TimeoutSec,
+				"dimensions":  next.Embedding.Dimensions,
+			},
 		}); err != nil {
 			return err
 		}
@@ -79,6 +90,13 @@ func TestSettingsPersistFeaturesThroughDisk(t *testing.T) {
 		"jev_routing":              true,
 		"jev_memory_judge":         true,
 		"jev_guardrail":            true,
+		"embedding_enabled":        true,
+		"embedding_type":           "api",
+		"embedding_api_key":        "emb_persisted",
+		"embedding_base_url":       "https://api.openai.com/v1",
+		"embedding_model":          "text-embedding-3-small",
+		"embedding_timeout_sec":    30,
+		"embedding_dimensions":     1536,
 	})
 	res, err := http.Post(url+"/api/settings", "application/json", bytes.NewReader(raw))
 	if err != nil {
@@ -130,5 +148,21 @@ func TestSettingsPersistFeaturesThroughDisk(t *testing.T) {
 	}
 	if reloaded.Jev.TimeoutSec != 30 || reloaded.Jev.RouteMinConfidence != 0.7 {
 		t.Fatalf("reloaded jev = %+v", reloaded.Jev)
+	}
+	if !reloaded.EmbeddingEnabled() {
+		t.Fatalf("reloaded Embedding should be active: %+v", reloaded.Embedding)
+	}
+	if reloaded.Embedding.Model != "text-embedding-3-small" || reloaded.Embedding.APIKey != "emb_persisted" {
+		t.Fatalf("reloaded embedding = %+v", reloaded.Embedding)
+	}
+	if reloaded.Embedding.Dir != config.DefaultEmbeddingDir(reloaded.WorkDir) {
+		t.Fatalf("reloaded embedding dir = %q", reloaded.Embedding.Dir)
+	}
+	emb, ok := persisted["embedding"].(map[string]any)
+	if !ok || emb["enabled"] != true {
+		t.Fatalf("persisted embedding = %#v", persisted["embedding"])
+	}
+	if emb["api_key"] != "emb_persisted" {
+		t.Fatalf("persisted embedding api key = %v", emb["api_key"])
 	}
 }

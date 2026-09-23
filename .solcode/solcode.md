@@ -2,498 +2,83 @@
 
 Written by the model at session end. Newest entries last.
 
-## 2026-09-17 20:18:32 · session session-20260910-203238 · turn 5 · importance 0.50
-- keywords: readme, checkpoint, session-memory, tool-selector
-- files: README.md, _find.py, _patch_app.py, _patch_mapper.py, _patch_readme.py, _peek.py, _result.txt, cmd/solcode/main.go, internal/acp/commands.go, internal/acp/mapper.go, internal/acp/status_command_test.go, internal/app/app.go, internal/app/rewind_commands.go, internal/app/session_memory.go, internal/app/session_memory_test.go, internal/checkpoint/store.go, internal/checkpoint/store_test.go, internal/engine/context_builder.go, internal/engine/tool_selector.go, internal/engine/tool_selector_test.go, internal/sessionmemory/store.go, internal/sessionmemory/store_test.go, internal/tool/read_session_memory.go, internal/tool/write_session_memory.go, unit_tests/memory_prompt_test.go
+## 2026-09-23 22:56:16 · session task-1 · turn -1 · importance 0.50
+- keywords: todolist, todo-write, jevconfig, webui settings, embeddingconfig, normalizejev, applyjevsettings
 
-Updated README.md to document three things shipped this session: (1) Checkpoints & Rewind — per-prompt turn snapshots, Bash SHA-256 fingerprint capture (2000 files / 1 MiB caps, skip .git/node_modules/binaries/hidden), code-only restore; (2) two memory layers with a comparison table splitting WriteMemory/ReadMemory (durable cross-session facts) from WriteSessionMemory/ReadSessionMemory (chronological log in <project>/.solcode/solcode.md); (3) new built-in tool rows and slash commands /checkpoints, /checkpoint-name, /rewind. Also added checkpoint/ and sessionmemory/ to the project structure tree. Separately fixed a real routing bug: WriteSessionMemory/ReadSessionMemory were registered but absent from coreToolNames in internal/engine/tool_selector.go, so the model could never see them under dynamic routing; added both plus TestSelectToolsIncludesSessionMemory. Note the user had already committed the session-memory implementation as f40d442 before this README pass. Two pre-existing caveats: unit_tests has 3 unrelated failures (TestLoadSolcodeLayeredConfig, TestMultiModel*Provider*, TestListWorkflows) confirmed present at pristine HEAD; README tree lines contain pre-existing mojibake in the tree-drawing characters.
+Mapped how optional Jev feature settings flow: JevConfig in internal/config/config.go (normalizeJev/JevEnabled/JevType), WebUI DTO+handlers in workflowui/server.go (jevSettings/settingsUpdate/applyJevSettings/getSettings), static conditional api/local fields in index.html+app.js, persistence via cmd/solcode ApplySettings → SaveLocalOverrides(~/.solcode/settings.local.json). Existing embedding mentions are lexical Vector maps in memory retriever plus README embeddinggemma link — no EmbeddingConfig yet. Recommended parallel EmbeddingConfig shape: type=local|api, enabled, model, model_dir, api base/key/env.
 
-## 2026-09-18 00:44:00 · session session-20260910-203238 · turn 7 · importance 0.75
-- keywords: checkpoint, fingerprint, baseline, uncapture, ephemeral, rewind
-- files: README.md, _find.py, _find_ckpt.py, _find_ckpt2.py, _find_ckpt3.py, _find_ckpt4.py, _patch_app.py, _patch_mapper.py, _patch_readme.py, _peek.py, _result.txt, cmd/solcode/main.go, internal/acp/commands.go, internal/acp/mapper.go, internal/acp/status_command_test.go, internal/app/app.go, internal/app/rewind.go, internal/app/rewind_commands.go, internal/app/rewind_test.go, internal/app/session_memory.go, internal/app/session_memory_test.go, internal/checkpoint/store.go, internal/checkpoint/store_test.go, internal/engine/context_builder.go, internal/engine/engine.go, internal/engine/tool_executor.go, internal/engine/tool_executor_test.go, internal/engine/tool_selector.go, internal/engine/tool_selector_test.go, internal/sessionmemory/store.go, internal/sessionmemory/store_test.go, internal/tool/read_session_memory.go, internal/tool/tool.go, internal/tool/write_session_memory.go, unit_tests/memory_prompt_test.go
+## 2026-09-23 23:16:05 · session session-20260919-235046 · turn 72 · importance 0.40
+- keywords: todolist, todo-write, embedding, settings, webui, config, turn
+- files: README.md, cmd/solcode/main.go, examples/settings/README.md, examples/settings/settings.full.example.json, examples/settings/settings.jev.local.example.json, go.mod, internal/app/app.go, internal/app/jev.go, internal/app/jev_test.go, internal/app/session_memory.go, internal/app/session_memory_test.go, internal/config/config.go, internal/engine/context_builder.go, internal/engine/engine.go, internal/engine/folded_tools.go, internal/engine/folded_tools_test.go, internal/engine/tool_selector.go, internal/engine/tool_selector_test.go, internal/jevlocal/artifact.go, internal/jevlocal/artifact_test.go, internal/jevlocal/builder.go, internal/jevlocal/engine.go, internal/jevlocal/evaluator.go, internal/jevlocal/evaluator_test.go, internal/jevlocal/family.go, internal/jevlocal/laya.go, internal/jevlocal/laya_test.go, internal/jevlocal/lazy_ort.go, internal/jevlocal/openjev.go, internal/jevlocal/openjev_family.go, internal/jevlocal/ort_engine.go, internal/jevlocal/ort_engine_test.go, internal/jevlocal/ort_install.go, internal/jevlocal/ort_install_test.go, internal/jevlocal/tensors.go, internal/jevlocal/tokenizer.go, internal/memory/manager.go, internal/sessionmemory/store_test.go, internal/systemone/decider.go, internal/systemone/evaluator.go
 
-Fixed checkpoint ephemeral-temp bug with turn-start Bash fingerprint baseline. beginCheckpointTurn now SnapshotWorkDir(keepContent) into ckpt.baseline; tool executor diffs Bash mutations against that baseline (fallback to per-invoke before if nil). Added Store.Uncapture plus UseContext UncaptureCheckpoint/ListCheckpointPaths so a later Bash call that nets out a prior create (or restore) drops the sticky capture. Edit/Write path-based capture unchanged. Tests: Store Uncapture, executor same-call and cross-call ephemeral, app rewind ephemeral. go build ./... and targeted package tests pass.
+Turn memory: 下面我们添加embbing模块（新增向量搜索) 在设置里面可以启用embbing（配置本地模式，本地模式目录固定，也可以启用远程api形式openai形式）下面先完成设置模块（webUI也要可以设置)
 
-## 2026-09-18 23:35:06 · session session-20260910-203238 · turn 10 · importance 0.80
-- keywords: computer-use, robotgo, skill, computeruse, buildtag
-- files: README.md, _find.py, _find_ckpt.py, _find_ckpt2.py, _find_ckpt3.py, _find_ckpt4.py, _patch_app.py, _patch_cu_comment.py, _patch_mapper.py, _patch_readme.py, _patch_register.py, _patch_register2.py, _peek.py, _result.txt, cmd/solcode/main.go, go.mod, go.sum, internal/acp/commands.go, internal/acp/mapper.go, internal/acp/status_command_test.go, internal/app/app.go, internal/app/rewind.go, internal/app/rewind_commands.go, internal/app/rewind_test.go, internal/app/session_memory.go, internal/app/session_memory_test.go, internal/attach/image.go, internal/checkpoint/store.go, internal/checkpoint/store_test.go, internal/computeruse/robotgo.go, internal/config/config.go, internal/engine/context_builder.go, internal/engine/engine.go, internal/engine/tool_executor.go, internal/engine/tool_executor_test.go, internal/engine/tool_selector.go, internal/engine/tool_selector_test.go, internal/sessionmemory/store.go, internal/sessionmemory/store_test.go, internal/skill/builtin/computer-use/SKILL.md
+## 2026-09-23 23:18:49 · session session-20260919-235046 · turn 73 · importance 0.40
+- keywords: todolist, todo-write, turn
+- files: README.md, cmd/solcode/main.go, examples/settings/README.md, examples/settings/settings.full.example.json, examples/settings/settings.jev.local.example.json, go.mod, internal/app/app.go, internal/app/jev.go, internal/app/jev_test.go, internal/config/config.go, internal/engine/context_builder.go, internal/engine/engine.go, internal/engine/folded_tools.go, internal/engine/folded_tools_test.go, internal/engine/tool_selector.go, internal/engine/tool_selector_test.go, internal/jevlocal/artifact.go, internal/jevlocal/artifact_test.go, internal/jevlocal/builder.go, internal/jevlocal/engine.go, internal/jevlocal/evaluator.go, internal/jevlocal/evaluator_test.go, internal/jevlocal/family.go, internal/jevlocal/laya.go, internal/jevlocal/laya_test.go, internal/jevlocal/lazy_ort.go, internal/jevlocal/openjev.go, internal/jevlocal/openjev_family.go, internal/jevlocal/ort_engine.go, internal/jevlocal/ort_engine_test.go, internal/jevlocal/ort_install.go, internal/jevlocal/ort_install_test.go, internal/jevlocal/tensors.go, internal/jevlocal/tokenizer.go, internal/memory/manager.go, internal/sessionmemory/store_test.go, internal/systemone/decider.go, internal/systemone/evaluator.go, internal/systemone/guardrail.go, internal/systemone/systemone.go
+- todos: 1|Inspect ~/.solcode/embeddings layout and existing seams|in_progress|valid|open; 2|Implement local embedding client against fixed dir|pending|valid|open; 3|Wire config/app enablement for local mode|pending|valid|open; 4|Add tests and verify|pending|invalid|open
 
-Implemented optional ComputerUse: config gate computer_use.enabled, Driver+Fake+robotgo (build tag computeruse) / stub, ComputerUse tool with ImageResult screenshots, registerBuiltins when enabled (not core), embedded computer-use skill materialized under ~/.solcode/builtin-skills when enabled, Skill(computer-use) sticky-enables ComputerUse, README docs. Default go build/tests pass with stub; real robotgo needs CGO -tags computeruse.
+Turn memory: 先做本地模式，先使用本地模型C:\Users\solosw\.solcode\embeddings
 
-## 2026-09-19 13:22:07 · session session-20260910-203238 · turn 14 · importance 0.75
-- keywords: ci, workflow, computeruse, release, install
-- files: .github/workflows/publish-master.yml, .github/workflows/release.yml, README.md, _find.py, _find_ckpt.py, _find_ckpt2.py, _find_ckpt3.py, _find_ckpt4.py, _patch_app.py, _patch_cu_comment.py, _patch_mapper.py, _patch_readme.py, _patch_register.py, _patch_register2.py, _peek.py, _ps_check.ps1, _result.txt, _yaml_check.py, cmd/solcode/main.go, go.mod, go.sum, internal/acp/commands.go, internal/acp/mapper.go, internal/acp/status_command_test.go, internal/app/app.go, internal/app/rewind.go, internal/app/rewind_commands.go, internal/app/rewind_test.go, internal/app/session_memory.go, internal/app/session_memory_test.go, internal/attach/image.go, internal/checkpoint/store.go, internal/checkpoint/store_test.go, internal/computeruse/robotgo.go, internal/config/config.go, internal/engine/context_builder.go, internal/engine/engine.go, internal/engine/tool_executor.go, internal/engine/tool_executor_test.go, internal/engine/tool_selector.go
+## 2026-09-23 23:34:00 · session session-20260919-235046 · turn 74 · importance 0.40
+- keywords: todolist, todo-write, turn
+- files: README.md, cmd/solcode/main.go, examples/settings/README.md, examples/settings/settings.full.example.json, examples/settings/settings.jev.local.example.json, go.mod, internal/app/app.go, internal/app/jev.go, internal/app/jev_test.go, internal/config/config.go, internal/engine/context_builder.go, internal/engine/engine.go, internal/engine/folded_tools.go, internal/engine/folded_tools_test.go, internal/engine/tool_selector.go, internal/engine/tool_selector_test.go, internal/jevlocal/artifact.go, internal/jevlocal/artifact_test.go, internal/jevlocal/builder.go, internal/jevlocal/engine.go, internal/jevlocal/evaluator.go, internal/jevlocal/evaluator_test.go, internal/jevlocal/family.go, internal/jevlocal/laya.go, internal/jevlocal/laya_test.go, internal/jevlocal/lazy_ort.go, internal/jevlocal/openjev.go, internal/jevlocal/openjev_family.go, internal/jevlocal/ort_engine.go, internal/jevlocal/ort_engine_test.go, internal/jevlocal/ort_install.go, internal/jevlocal/ort_install_test.go, internal/jevlocal/tensors.go, internal/jevlocal/tokenizer.go, internal/memory/manager.go, internal/sessionmemory/store_test.go, internal/systemone/decider.go, internal/systemone/evaluator.go, internal/systemone/guardrail.go, internal/systemone/systemone.go
+- todos: 1|理清 AskUser 与子代理模式现状|in_progress|valid|open; 2|理清 Jev 决策/自动选择能力|pending|valid|open; 3|实现子代理模式 AskUser 交给 Jev|pending|valid|open; 4|实现 AskUser 超时交给 Jev|pending|valid|open; 5|补测并验证|pending|valid|open
 
-Added CI support for the CGO/robotgo ComputerUse build. New scripts/build-computeruse.sh builds one native CGO+-tags computeruse archive into dist (appends, unlike build-release.sh which resets). publish-master.yml and release.yml now have build-default + build-computeruse (matrix linux/windows amd64, arm64 experimental) + publish (merges artifacts, regenerates checksums). install.sh gained --computeruse, install.ps1 gained -ComputerUse. README documents the _computeruse asset. Validated: bash -n on scripts, YAML parse, PS parse, default go build + tool/engine tests pass.
+Turn memory: 向量记忆相关使用go get github.com/philippgille/chromem-go这个库，然后先完成本地嵌入模型
 
-## 2026-09-19 16:00:42 · session acp-1789804322112022000-1 · turn 1 · importance 0.80
-- keywords: computer-use, robotgo, captureimg, mousetoggle, toggle
-- files: _tmp_cleanup.py, internal/computeruse/_cleanup_robotgo.py, internal/computeruse/_copy_robotgo.py, internal/computeruse/_robotgo_api/img.go, internal/computeruse/_robotgo_api/key.go, internal/computeruse/_robotgo_api/robotgo.go, internal/computeruse/_robotgo_api/robotgo_fn_v1.go, internal/computeruse/_robotgo_api/screen.go, internal/computeruse/robotgo.go
-
-Fixed linux/windows computer-use CI compile errors in internal/computeruse/robotgo.go against robotgo v1.0.2: CaptureImg now returns (image.Image, error); MouseToggle was replaced by Toggle("left") / Toggle("left", "up") for drag. Click/DoubleClick now return robotgo.Click's error. Default (stub) go test/build of internal/computeruse and cmd/solcode pass; CGO computeruse build was not verified locally because gcc is not installed.
-
-## 2026-09-19 17:47:41 · session acp-1789804322112022000-1 · turn 3 · importance 0.75
-- keywords: computer-use, windows-ci, zip, cygpath, git-bash
-- files: _tmp_cleanup.py, internal/computeruse/_cleanup_robotgo.py, internal/computeruse/_copy_robotgo.py, internal/computeruse/_robotgo_api/img.go, internal/computeruse/_robotgo_api/key.go, internal/computeruse/_robotgo_api/robotgo.go, internal/computeruse/_robotgo_api/robotgo_fn_v1.go, internal/computeruse/_robotgo_api/screen.go, internal/computeruse/robotgo.go, probe_zip_fallback.sh, scripts/build-computeruse.sh, scripts/build-release.sh
-
-Diagnosed the remaining computer-use Windows CI failure: not a compile error (robotgo fixes from c0d8567 hold) but a packaging bug. The Windows leg runs build-computeruse.sh under Git Bash, which lacks `zip`; the python fallback interpolated the MSYS artifact path (/d/a/solcode/...) into native python.exe, causing FileNotFoundError. Added a native_path() (cygpath -w) helper and switched the fallback to pass paths via argv with a quoted heredoc, in both scripts/build-computeruse.sh and scripts/build-release.sh. Verified with a stub-based probe reproducing the old failure and confirming the fix; bash -n passes on both and default `go build ./cmd/solcode` succeeds. Full CGO computeruse build still unverified locally (no gcc).
-
-## 2026-09-19 18:28:53 · session acp-1789804322112022000-1 · turn 5 · importance 0.80
-- keywords: computer-use, windows-arm64, cgo, llvm-mingw, gcc_arm64.s
-- files: .github/workflows/publish-master.yml, .github/workflows/release.yml, _check_ps1.py, _check_yml.py, _parse_ps1.ps1, _scan_arm64.py, _tmp_cleanup.py, internal/computeruse/_cleanup_robotgo.py, internal/computeruse/_copy_robotgo.py, internal/computeruse/_robotgo_api/img.go, internal/computeruse/_robotgo_api/key.go, internal/computeruse/_robotgo_api/robotgo.go, internal/computeruse/_robotgo_api/robotgo_fn_v1.go, internal/computeruse/_robotgo_api/screen.go, internal/computeruse/robotgo.go, probe_zip_fallback.sh, scripts/build-computeruse.sh, scripts/build-release.sh, scripts/setup-windows-arm64-cgo.ps1
-
-Diagnosed remaining computer-use windows/arm64 CI failure as a C-toolchain mismatch, not robotgo or packaging: windows-11-arm's gcc is x86_64 MinGW (emulated) assembling runtime/cgo/gcc_arm64.S. Added scripts/setup-windows-arm64-cgo.ps1 (pinned llvm-mingw 20241030 ucrt-aarch64, exports CC=aarch64-w64-mingw32-clang), wired it into publish-master.yml and release.yml for Windows+arm64, and made build-computeruse.sh refuse windows/arm64 unless dumpmachine is aarch64/arm64. YAML parse, bash -n, ps1 parse, CC-mismatch guard, and default go build ./cmd/solcode all pass. Cell remains experimental/continue-on-error. Full CGO computeruse build still unverified locally (no gcc).
-
-## 2026-09-19 18:46:09 · session acp-1789804322112022000-1 · turn 6 · importance 0.50
-- keywords: readme, install, computeruse, powershell
-- files: .github/workflows/publish-master.yml, .github/workflows/release.yml, README.md, _check_ps1.py, _check_ps_pattern.ps1, _check_yml.py, _headings.py, _parse_ps1.ps1, _scan_arm64.py, _tmp_cleanup.py, internal/computeruse/_cleanup_robotgo.py, internal/computeruse/_copy_robotgo.py, internal/computeruse/_robotgo_api/img.go, internal/computeruse/_robotgo_api/key.go, internal/computeruse/_robotgo_api/robotgo.go, internal/computeruse/_robotgo_api/robotgo_fn_v1.go, internal/computeruse/_robotgo_api/screen.go, internal/computeruse/robotgo.go, probe_zip_fallback.sh, scripts/build-computeruse.sh, scripts/build-release.sh, scripts/setup-windows-arm64-cgo.ps1
-
-Added copy-pasteable quick-install commands for the computer-use build to README.md: bash `curl ... | bash -s -- --computeruse` and PowerShell `& ([scriptblock]::Create((irm <url>))) -ComputerUse` (the scriptblock form is required because `irm | iex` cannot take parameters). Added the snippets in two places: the one-line install block under Quick Start and the Computer Use section's prebuilt-asset part. Verified the PowerShell parameter-binding pattern with a stub script and confirmed the README renders correctly; only README.md changed.
-
-## 2026-09-20 00:06:18 · session session-20260919-235046 · turn 0 · importance 0.80
-- keywords: computer-use, applyjsonconfig, settings.local.json, builtin-skills
-- files: internal/config/config.go, unit_tests/config_test.go
-
-Diagnosed missing computer-use skill: settings.local.json already had computer_use.enabled=true, but applyJSONConfig ignored the computer_use key so ComputerUseEnabled stayed false and loadSkills never materialized ~/.solcode/builtin-skills/computer-use. Fixed by parsing computer_use in applyJSONConfig and added TestLoadComputerUseSettings. User still needs to rebuild/restart solcode for the skill to appear.
-
-## 2026-09-22 12:36:21 · session session-20260919-235046 · turn 9 · importance 0.85
-- keywords: jev, systemone, typesafe, routing, guardrail, memory-judge
-- files: README.md, examples/settings/settings.full.example.json, internal/app/app.go, internal/app/jev.go, internal/app/jev_test.go, internal/app/session_memory.go, internal/app/session_memory_test.go, internal/config/config.go, internal/engine/context_builder.go, internal/engine/engine.go, internal/engine/router.go, internal/engine/router_test.go, internal/engine/tool_executor.go, internal/engine/tool_selector.go, internal/memory/jev_judge.go, internal/memory/jev_judge_test.go, internal/memory/manager.go, internal/memory/tool_trace.go, internal/memory/tool_trace_test.go, internal/sessionmemory/store.go, internal/sessionmemory/store_test.go, internal/systemone/decider.go, internal/systemone/decider_test.go, internal/systemone/guardrail.go, internal/systemone/systemone.go, internal/systemone/systemone_test.go, internal/tool/read_session_memory.go, internal/tool/write_session_memory.go, unit_tests/change_description_test.go, unit_tests/config_test.go, unit_tests/edit_test.go, unit_tests/hook_compress_test.go, unit_tests/lsp_tool_test.go, unit_tests/memory_prompt_test.go, unit_tests/memory_summary_test.go, unit_tests/multi_file_tools_test.go, unit_tests/new_architecture_test.go, unit_tests/patch_recorder_test.go, unit_tests/permission_ask_test.go, unit_tests/session_test.go
-
-Integrated TypeSafe System One (Jev) as an optional decision layer. Added internal/systemone (HTTP client for POST /v1/systemone with typed Choice/Score/Noul primitives, request cache, Decider fallback wrapper, fail-closed Guardrail), a "jev" config block with applyJSONConfig parsing and normalizeJev, and internal/app/jev.go wiring it into three places: engine tool/skill routing (semantic fallback only on lexical miss, once per run), memory judging (JevJudge/JevExtractor replacing the JSON-emitting AnthropicJudge when enabled), and a tool-executor guardrail on mutating tools. Everything is off by default, enable-without-key counts as off, and all decisions keep deterministic fallbacks. Deliberately did NOT wire confidence-based automatic approval of destructive actions, and dropped an unwired goalPreScreen that would have broken the goal checker's goal.md update. Added ~30 tests across systemone/engine/memory/app plus config tests; build, vet, and gofmt clean; the 16 unit_tests failures are pre-existing on HEAD (verified via a pristine git worktree). README gained a "Jev decision layer" section and the full settings example a jev block.
-
-## 2026-09-22 13:11:06 · session session-20260919-235046 · turn 10 · importance 0.80
-- keywords: builtin-skills, jev, routing, skill-selection, routeskills
-- files: README.md, examples/settings/settings.full.example.json, internal/app/app.go, internal/app/builtin_skill_test.go, internal/app/jev.go, internal/app/jev_test.go, internal/app/session_memory.go, internal/app/session_memory_test.go, internal/config/config.go, internal/engine/context_builder.go, internal/engine/engine.go, internal/engine/router.go, internal/engine/router_test.go, internal/engine/tool_executor.go, internal/engine/tool_selector.go, internal/memory/jev_judge.go, internal/memory/jev_judge_test.go, internal/memory/manager.go, internal/memory/tool_trace.go, internal/memory/tool_trace_test.go, internal/sessionmemory/store.go, internal/sessionmemory/store_test.go, internal/skill/builtin/embed.go, internal/skill/builtin/embed_test.go, internal/skill/builtin/skills/debug/SKILL.md, internal/skill/builtin/skills/explore/SKILL.md, internal/skill/builtin/skills/implement/SKILL.md, internal/skill/builtin/skills/research/SKILL.md, internal/skill/builtin/skills/review/SKILL.md, internal/skill/builtin/skills/verify/SKILL.md, internal/skill/skill.go, internal/systemone/decider.go, internal/systemone/decider_test.go, internal/systemone/guardrail.go, internal/systemone/systemone.go, internal/systemone/systemone_test.go, internal/tool/read_session_memory.go, internal/tool/write_session_memory.go, unit_tests/change_description_test.go, unit_tests/config_test.go
-
-Added six bundled workflow skills (explore, implement, verify, research, debug, review) as internal/skill/builtin/skills/<name>/SKILL.md, embedded via a second embed.FS and materialized to ~/.solcode/builtin-skills by the new MaterializeBuiltinSkills/BuiltinSkillNames (which skips foreign skills already in that cache dir). Registration is gated on Jev routing (jevSkillRoutingEnabled = JevEnabled && Jev.Routing), so the bundle is absent in the default build and still honors skills.enabled/skills.disabled. Wired the previously-dead Router.RouteSkills through a new Engine.routedSkills that advertises only the Jev-chosen skill for the run and falls back to the full catalog when Jev declines or returns an unknown name; the answer is cached once per run since the prompt is fixed. Exported skill.SkillFileName (was skillFileName) for the materializer. Added tests for the bundle, the registration gate, and routedSkills fallback paths; build/vet/gofmt clean and the 16 unit_tests failures remain pre-existing.
-
-## 2026-09-22 13:31:22 · session session-20260919-235046 · turn 11 · importance 0.80
-- keywords: webui, settings, jev, computer-use, reloadfeatures
-- files: !ids.includes(n)), README.md, cmd/solcode/main.go, examples/settings/settings.full.example.json, internal/app/app.go, internal/app/builtin_skill_test.go, internal/app/jev.go, internal/app/jev_test.go, internal/app/session_memory.go, internal/app/session_memory_test.go, internal/config/config.go, internal/engine/context_builder.go, internal/engine/engine.go, internal/engine/router.go, internal/engine/router_test.go, internal/engine/tool_executor.go, internal/engine/tool_selector.go, internal/memory/jev_judge.go, internal/memory/jev_judge_test.go, internal/memory/manager.go, internal/memory/tool_trace.go, internal/memory/tool_trace_test.go, internal/sessionmemory/store.go, internal/sessionmemory/store_test.go, internal/skill/builtin/embed.go, internal/skill/builtin/embed_test.go, internal/skill/builtin/skills/debug/SKILL.md, internal/skill/builtin/skills/explore/SKILL.md, internal/skill/builtin/skills/implement/SKILL.md, internal/skill/builtin/skills/research/SKILL.md, internal/skill/builtin/skills/review/SKILL.md, internal/skill/builtin/skills/verify/SKILL.md, internal/skill/skill.go, internal/systemone/decider.go, internal/systemone/decider_test.go, internal/systemone/guardrail.go, internal/systemone/systemone.go, internal/systemone/systemone_test.go, internal/tool/read_session_memory.go, internal/tool/write_session_memory.go
-
-Added Computer Use and Jev configuration to the WebUI settings page. Backend: settingsResponse gained computer_use and jev blocks (never echoing the stored API key, only api_key_set), settingsUpdate gained optional pointer fields so partial updates cannot reset unmentioned values, and new applyComputerUseSettings/applyJevSettings; cmd/solcode ApplySettings now persists both as nested objects into ~/.solcode/settings.local.json. Frontend: new Features and Jev sections in index.html plus element refs, sync/render/payload wiring and a live state badge (off / needs a key / active) in app.js, and a .settings-hint style. Also fixed a real pre-existing bug: App.ReloadFeatures hardcoded AnthropicJudge and never rebuilt the Jev layer, so any WebUI settings save would have silently disabled Jev routing, the guardrail, and the Jev memory judge. Added workflowui tests for the settings DTO, partial-update safety, key replacement/preservation, feature disable round-trip, and a full persist-through-disk round trip that reloads the config and asserts JevEnabled. Verified app.js syntax with node --check and confirmed every getElementById resolves to an existing HTML id; build, vet, gofmt clean and the 16 unit_tests failures remain pre-existing.
-
-## 2026-09-22 15:03:45 · session session-20260919-235046 · turn 15 · importance 0.80
-- keywords: skill, force-load, jev, none-option, workflow
-- files: !ids.includes(n)), README.md, cmd/solcode/main.go, examples/settings/settings.full.example.json, internal/app/app.go, internal/app/builtin_skill_test.go, internal/app/engine_wiring_test.go, internal/app/jev.go, internal/app/jev_test.go, internal/app/session_memory.go, internal/app/session_memory_test.go, internal/config/config.go, internal/engine/context_builder.go, internal/engine/engine.go, internal/engine/force_skill_test.go, internal/engine/router.go, internal/engine/router_test.go, internal/engine/tool_executor.go, internal/engine/tool_selector.go, internal/memory/jev_judge.go, internal/memory/jev_judge_test.go, internal/memory/manager.go, internal/memory/tool_trace.go, internal/memory/tool_trace_test.go, internal/sessionmemory/store.go, internal/sessionmemory/store_test.go, internal/skill/builtin/embed.go, internal/skill/builtin/embed_test.go, internal/skill/builtin/skills/debug/SKILL.md, internal/skill/builtin/skills/explore/SKILL.md, internal/skill/builtin/skills/implement/SKILL.md, internal/skill/builtin/skills/research/SKILL.md, internal/skill/builtin/skills/review/SKILL.md, internal/skill/builtin/skills/verify/SKILL.md, internal/skill/skill.go, internal/systemone/decider.go, internal/systemone/decider_test.go, internal/systemone/guardrail.go, internal/systemone/systemone.go, internal/systemone/systemone_test.go
-
-Answered that bundled skills contain prose Workflow sections but are not connected to the workflow (Task graph) subsystem. Fixed the real gap that a Jev-selected skill was only advertised, never applied: extracted tool.RenderSkillActivation from the Skill tool so both activation paths render identical text, added Engine.forceLoadedSkill plus ContextBuilder.ForceSkill which injects the activation as a context block framed as already-loaded (do not call the Skill tool) while permitting the model to report that the skill does not fit. Made the none answer explicit via engine.RouterNoneSkill: nothing is force-loaded and the full catalog is advertised so the model decides. Added SkillRegistry to engine.Config (wired in app.engineConfig) so force-loading can resolve a name without a Skill tool round trip. New tests cover force-load rendering, the none hand-back, all six no-op fallback paths, reach-into-messages framing, byte-identical rendering vs the Skill tool, and the app-level registry wiring; build/vet/gofmt clean and the 16 unit_tests failures remain pre-existing.
-
-## 2026-09-22 17:36:01 · session session-20260919-235046 · turn 17 · importance 0.80
-- keywords: folded-tools, noul-screening, mcp-humanize, vcptoolbox
-- files: !ids.includes(n)), README.md, cmd/solcode/main.go, examples/settings/settings.full.example.json, internal/app/app.go, internal/app/builtin_skill_test.go, internal/app/engine_wiring_test.go, internal/app/jev.go, internal/app/jev_test.go, internal/app/session_memory.go, internal/app/session_memory_test.go, internal/config/config.go, internal/engine/context_builder.go, internal/engine/engine.go, internal/engine/folded_tools.go, internal/engine/folded_tools_test.go, internal/engine/force_skill_test.go, internal/engine/router.go, internal/engine/router_route_test.go, internal/engine/router_test.go, internal/engine/tool_executor.go, internal/engine/tool_selector.go, internal/mcp/client.go, internal/mcp/humanize.go, internal/mcp/humanize_test.go, internal/memory/jev_judge.go, internal/memory/jev_judge_test.go, internal/memory/manager.go, internal/memory/tool_trace.go, internal/memory/tool_trace_test.go, internal/sessionmemory/store.go, internal/sessionmemory/store_test.go, internal/skill/builtin/embed.go, internal/skill/builtin/embed_test.go, internal/skill/builtin/skills/debug/SKILL.md, internal/skill/builtin/skills/explore/SKILL.md, internal/skill/builtin/skills/implement/SKILL.md, internal/skill/builtin/skills/research/SKILL.md, internal/skill/builtin/skills/review/SKILL.md, internal/skill/builtin/skills/verify/SKILL.md
-
-Reviewed VCPToolBox (vcptoolbox.com) and assessed its "tools need not enter context" idea: it works there because VCP uses a plain-text tool-request protocol rather than native function calling, unlike solcode. Implemented the three applicable ideas. (1) engine/folded_tools.go folds registered-but-unsent tools into one grouped context block (by MCP server) so the model knows what exists and searches, rather than assuming absence. (2) Router.RouteTools switched from a single Choice to one Noul per candidate via new systemone Decider.Screen, since one request can need several tools; candidates are lexically pre-ordered and bounded at maxScreenedCandidates=24, and screenedCandidates deliberately omits a none sentinel. Skill routing still uses a Choice since exactly one skill should run. (3) internal/mcp/humanize.go renders JSON tool results as indented key/value text, losslessly with a depth guard, and describes non-text content blocks; plain prose passes through unchanged. Tests caught three real bugs in the renderer (lost key names from an over-clever single-key unwrap, orphaned empty-container output, unbounded nesting), all fixed by simplifying. Build/vet/gofmt clean; the 16 unit_tests failures remain pre-existing.
-
-## 2026-09-23 00:32:13 · session session-20260919-235046 · turn 18 · importance 0.50
-- keywords: parallel, websearch, china, cloudflare, mcp, accessibility
-- files: !ids.includes(n)), README.md, cmd/solcode/main.go, examples/settings/settings.full.example.json, internal/app/app.go, internal/app/builtin_skill_test.go, internal/app/engine_wiring_test.go, internal/app/jev.go, internal/app/jev_test.go, internal/app/session_memory.go, internal/app/session_memory_test.go, internal/config/config.go, internal/engine/context_builder.go, internal/engine/engine.go, internal/engine/folded_tools.go, internal/engine/folded_tools_test.go, internal/engine/force_skill_test.go, internal/engine/router.go, internal/engine/router_route_test.go, internal/engine/router_test.go, internal/engine/tool_executor.go, internal/engine/tool_selector.go, internal/mcp/client.go, internal/mcp/humanize.go, internal/mcp/humanize_test.go, internal/memory/jev_judge.go, internal/memory/jev_judge_test.go, internal/memory/manager.go, internal/memory/tool_trace.go, internal/memory/tool_trace_test.go, internal/sessionmemory/store.go, internal/sessionmemory/store_test.go, internal/skill/builtin/embed.go, internal/skill/builtin/embed_test.go, internal/skill/builtin/skills/debug/SKILL.md, internal/skill/builtin/skills/explore/SKILL.md, internal/skill/builtin/skills/implement/SKILL.md, internal/skill/builtin/skills/research/SKILL.md, internal/skill/builtin/skills/review/SKILL.md, internal/skill/builtin/skills/verify/SKILL.md
-
-Probed Parallel Search accessibility from the workstation: api.parallel.ai and search.parallel.ai resolve/TLS fine; REST returns 401 without key; keyless MCP is Cloudflare-protected (Error 1010 without browser UA) but works with a Chrome User-Agent and completed a real web_search. No evidence of a hard China block from this host; UA/bot filtering is the main gotcha.
-
-## 2026-09-23 00:50:02 · session session-20260919-235046 · turn 20 · importance 0.70
-- keywords: parallel, websearch, jev, screen, mcp, keyless
-- files: !ids.includes(n)), $null, README.md, cmd/solcode/main.go, examples/settings/settings.full.example.json, internal/app/app.go, internal/app/builtin_skill_test.go, internal/app/engine_wiring_test.go, internal/app/jev.go, internal/app/jev_test.go, internal/app/session_memory.go, internal/app/session_memory_test.go, internal/config/config.go, internal/engine/context_builder.go, internal/engine/engine.go, internal/engine/folded_tools.go, internal/engine/folded_tools_test.go, internal/engine/force_skill_test.go, internal/engine/router.go, internal/engine/router_route_test.go, internal/engine/router_test.go, internal/engine/tool_executor.go, internal/engine/tool_selector.go, internal/mcp/client.go, internal/mcp/humanize.go, internal/mcp/humanize_test.go, internal/memory/jev_judge.go, internal/memory/jev_judge_test.go, internal/memory/manager.go, internal/memory/tool_trace.go, internal/memory/tool_trace_test.go, internal/sessionmemory/store.go, internal/sessionmemory/store_test.go, internal/skill/builtin/embed.go, internal/skill/builtin/embed_test.go, internal/skill/builtin/skills/debug/SKILL.md, internal/skill/builtin/skills/explore/SKILL.md, internal/skill/builtin/skills/implement/SKILL.md, internal/skill/builtin/skills/research/SKILL.md, internal/skill/builtin/skills/review/SKILL.md
-
-Added Parallel keyless MCP into WebSearch at the tool layer (parallel merge with metasearch for text), and Jev screening of search hits against the search query when Jev is enabled (fail-open). Wired via ConfigureWebSearchScreening in App.New and ReloadFeatures. Tests cover Parallel parse/MCP client, merge order, and Jev screening.
-
-## 2026-09-23 10:59:42 · session session-20260919-235046 · turn 22 · importance 0.70
-- keywords: sessionmemory, todolist, jev, checkpoint, prune, turn-end
-- files: !ids.includes(n)), $null, README.md, cmd/solcode/main.go, examples/settings/settings.full.example.json, internal/app/app.go, internal/app/builtin_skill_test.go, internal/app/engine_wiring_test.go, internal/app/jev.go, internal/app/jev_test.go, internal/app/session_files.go, internal/app/session_judge.go, internal/app/session_memory.go, internal/app/session_memory_test.go, internal/checkpoint/store.go, internal/checkpoint/store_test.go, internal/config/config.go, internal/engine/context_builder.go, internal/engine/engine.go, internal/engine/folded_tools.go, internal/engine/folded_tools_test.go, internal/engine/force_skill_test.go, internal/engine/router.go, internal/engine/router_route_test.go, internal/engine/router_test.go, internal/engine/tool_executor.go, internal/engine/tool_selector.go, internal/mcp/client.go, internal/mcp/humanize.go, internal/mcp/humanize_test.go, internal/memory/jev_judge.go, internal/memory/jev_judge_test.go, internal/memory/manager.go, internal/memory/tool_trace.go, internal/memory/tool_trace_test.go, internal/sessionmemory/store.go, internal/sessionmemory/store_test.go, internal/sessionmemory/todos.go, internal/skill/builtin/embed.go, internal/skill/builtin/embed_test.go
-
-Wired recordTurnSessionMemory into RunPromptWithSession after the main agent finishes, so each turn persists a todolist snapshot (Jev-judged when enabled) plus rule+Jev pruned changed files. Also hooked checkpoint.IsUnimportantPath to isUnimportantSessionFile so checkpoint capture skips the same noise. Added tests for turn memory, file filter, todo merge/round-trip, and checkpoint skip; app/sessionmemory/checkpoint package tests pass.
-
-## 2026-09-23 11:15:06 · session session-20260919-235046 · turn 23 · importance 0.70
-- keywords: todolist, todowrite, ontodosupdated, sessionmemory, turn-end
-- files: !ids.includes(n)), $null, README.md, cmd/solcode/main.go, examples/settings/settings.full.example.json, internal/app/app.go, internal/app/builtin_skill_test.go, internal/app/engine_wiring_test.go, internal/app/jev.go, internal/app/jev_test.go, internal/app/session_files.go, internal/app/session_judge.go, internal/app/session_memory.go, internal/app/session_memory_test.go, internal/checkpoint/store.go, internal/checkpoint/store_test.go, internal/config/config.go, internal/engine/context_builder.go, internal/engine/engine.go, internal/engine/folded_tools.go, internal/engine/folded_tools_test.go, internal/engine/force_skill_test.go, internal/engine/router.go, internal/engine/router_route_test.go, internal/engine/router_test.go, internal/engine/tool_executor.go, internal/engine/tool_selector.go, internal/mcp/client.go, internal/mcp/humanize.go, internal/mcp/humanize_test.go, internal/memory/jev_judge.go, internal/memory/jev_judge_test.go, internal/memory/manager.go, internal/memory/tool_trace.go, internal/memory/tool_trace_test.go, internal/sessionmemory/store.go, internal/sessionmemory/store_test.go, internal/sessionmemory/todos.go, internal/skill/builtin/embed.go, internal/skill/builtin/embed_test.go
-
-Changed todolist session memory to record both mid-turn and turn-end states: TodoWrite now fires OnTodosUpdated → recordTodoSessionMemory (Jev-judged snapshot per update), while RunPromptWithSession still calls recordTurnSessionMemory at turn end with pruned files. Wired the callback through tool.UseContext, engine.Config, App.New/SwitchModel/ReloadFeatures. Tests cover multi-update snapshots and TodoWrite notification.
-
-## 2026-09-23 12:49:02 · session session-20260919-235046 · turn 30 · importance 0.80
-- keywords: jev, evaluator, phase-0, open-jev, local, onnx
-- files: !ids.includes(n)), $null, README.md, cmd/solcode/main.go, examples/settings/settings.full.example.json, internal/app/app.go, internal/app/builtin_skill_test.go, internal/app/engine_wiring_test.go, internal/app/jev.go, internal/app/jev_test.go, internal/app/session_files.go, internal/app/session_judge.go, internal/app/session_memory.go, internal/app/session_memory_test.go, internal/checkpoint/store.go, internal/checkpoint/store_test.go, internal/config/config.go, internal/engine/context_builder.go, internal/engine/engine.go, internal/engine/folded_tools.go, internal/engine/folded_tools_test.go, internal/engine/force_skill_test.go, internal/engine/router.go, internal/engine/router_route_test.go, internal/engine/router_test.go, internal/engine/tool_executor.go, internal/engine/tool_selector.go, internal/mcp/client.go, internal/mcp/humanize.go, internal/mcp/humanize_test.go, internal/memory/jev_judge.go, internal/memory/jev_judge_test.go, internal/memory/manager.go, internal/memory/tool_trace.go, internal/memory/tool_trace_test.go, internal/sessionmemory/store.go, internal/sessionmemory/store_test.go, internal/sessionmemory/todos.go, internal/skill/builtin/embed.go, internal/skill/builtin/embed_test.go
-
-Phase 0 done: extracted systemone.Evaluator; Decider now depends on Evaluator (*Client implements it). JevConfig gained type api|local, model_dir, dtype; normalize defaults type=api, local model_dir=~/.solcode/models/<model>, dtype=q4. Until LocalBackend ships, type=local keeps JevEnabled false and buildJev returns nil (user chose silent disable). OpenJev q4/q4f16 already downloaded to ~/.solcode/models/open-jev-deberta-v3-large. Relevant tests pass; unit_tests has unrelated pre-existing failures. Next: wire open-jev LocalBackend / ORT.
-
-## 2026-09-23 13:25:31 · session session-20260919-235046 · turn 35 · importance 0.80
-- keywords: jevlocal, inferenceengine, open-jev, local, onnx-go
-- files: !ids.includes(n)), $null, README.md, cmd/solcode/main.go, examples/settings/settings.full.example.json, internal/app/app.go, internal/app/builtin_skill_test.go, internal/app/engine_wiring_test.go, internal/app/jev.go, internal/app/jev_test.go, internal/app/session_files.go, internal/app/session_judge.go, internal/app/session_memory.go, internal/app/session_memory_test.go, internal/checkpoint/store.go, internal/checkpoint/store_test.go, internal/config/config.go, internal/engine/context_builder.go, internal/engine/engine.go, internal/engine/folded_tools.go, internal/engine/folded_tools_test.go, internal/engine/force_skill_test.go, internal/engine/router.go, internal/engine/router_route_test.go, internal/engine/router_test.go, internal/engine/tool_executor.go, internal/engine/tool_selector.go, internal/jevlocal/artifact.go, internal/jevlocal/artifact_test.go, internal/jevlocal/engine.go, internal/jevlocal/evaluator.go, internal/jevlocal/evaluator_test.go, internal/jevlocal/openjev.go, internal/mcp/client.go, internal/mcp/humanize.go, internal/mcp/humanize_test.go, internal/memory/jev_judge.go, internal/memory/jev_judge_test.go, internal/memory/manager.go, internal/memory/tool_trace.go
-
-Switched local Jev plan from ORT embed to InferenceEngine seam first (user chose interface-before-backend; pure Go onnx-go later, CUDA later). Added internal/jevlocal: InferenceEngine (UnimplementedEngine/FakeEngine), OpenJev artifact resolve, DecodeLogits, LocalEvaluator. buildJev wires type=local when model_dir has open_jev_config+tokenizer+onnx; Ask currently ErrEngineNotReady so Decider falls back. Tests pass for jevlocal/app/systemone. Next: open-jev tokenizer/sequence builder, then onnx-go or ORT/CUDA behind InferenceEngine.
-
-## 2026-09-23 14:52:36 · session session-20260919-235046 · turn 44 · importance 0.85
-- keywords: ort, onnxruntime, mingw, jevlocal, open-jev, cgo
-- files: !ids.includes(n)), $null, README.md, cmd/solcode/main.go, examples/settings/settings.full.example.json, go.mod, go.sum, internal/app/app.go, internal/app/builtin_skill_test.go, internal/app/engine_wiring_test.go, internal/app/jev.go, internal/app/jev_test.go, internal/app/session_files.go, internal/app/session_judge.go, internal/app/session_memory.go, internal/app/session_memory_test.go, internal/checkpoint/store.go, internal/checkpoint/store_test.go, internal/config/config.go, internal/engine/context_builder.go, internal/engine/engine.go, internal/engine/folded_tools.go, internal/engine/folded_tools_test.go, internal/engine/force_skill_test.go, internal/engine/router.go, internal/engine/router_route_test.go, internal/engine/router_test.go, internal/engine/tool_executor.go, internal/engine/tool_selector.go, internal/jevlocal/artifact.go, internal/jevlocal/artifact_test.go, internal/jevlocal/engine.go, internal/jevlocal/evaluator.go, internal/jevlocal/evaluator_test.go, internal/jevlocal/openjev.go, internal/jevlocal/ort_engine.go, internal/jevlocal/ort_engine_test.go, internal/mcp/client.go, internal/mcp/humanize.go, internal/mcp/humanize_test.go
-
-Configured MinGW at C:\\software\\mingw64 (user PATH updated). Switched local Jev to ORT CPU via yalue/onnxruntime_go: added jev.engine/ort_lib config, ORTEngine in internal/jevlocal, wired buildJev. Smoke/test on OpenJev model_q4.onnx: load ~3.5–7s, synthetic seq=32 run ~70–1200ms depending on cold/warm. engine=ort is explicit; Ask still needs tokenizer/sequence builder before end-to-end Decide works. DLL at ~/.solcode/lib/onnxruntime.dll.
-
-## 2026-09-23 15:20:56 · session session-20260919-235046 · turn 45 · importance 0.85
-- keywords: openjev, tokenizer, builder, ask, ort, spm
-- files: !ids.includes(n)), $null, README.md, cmd/solcode/main.go, examples/settings/settings.full.example.json, go.mod, go.sum, internal/app/app.go, internal/app/builtin_skill_test.go, internal/app/engine_wiring_test.go, internal/app/jev.go, internal/app/jev_test.go, internal/app/session_files.go, internal/app/session_judge.go, internal/app/session_memory.go, internal/app/session_memory_test.go, internal/checkpoint/store.go, internal/checkpoint/store_test.go, internal/config/config.go, internal/engine/context_builder.go, internal/engine/engine.go, internal/engine/folded_tools.go, internal/engine/folded_tools_test.go, internal/engine/force_skill_test.go, internal/engine/router.go, internal/engine/router_route_test.go, internal/engine/router_test.go, internal/engine/tool_executor.go, internal/engine/tool_selector.go, internal/jevlocal/artifact.go, internal/jevlocal/artifact_test.go, internal/jevlocal/builder.go, internal/jevlocal/engine.go, internal/jevlocal/evaluator.go, internal/jevlocal/evaluator_test.go, internal/jevlocal/openjev.go, internal/jevlocal/ort_engine.go, internal/jevlocal/ort_engine_test.go, internal/jevlocal/tokenizer.go, internal/mcp/client.go
-
-Wired OpenJev tokenizer + sequence builder into LocalEvaluator.Ask: load spm.model via goSentencePiece, hardcode [STATE]/[Q]/[OPT] IDs, buildOpenJevTensors truncates best-effort, DecodeLogits uses kept plans. Removed evaluator stub; FakeEngine unit test and ORT Ask e2e pass. Prefer spm.model over tokenizer.json because JSON path drops added tokens / inserts UNKs. Card-example noul ~0.90; area choice can be fees under q4.
-
-## 2026-09-23 16:55:50 · session session-20260919-235046 · turn 49 · importance 0.85
-- keywords: laya, openjev, ort, named-tensors, family, hfbpe
-- files: !ids.includes(n)), $null, README.md, cmd/solcode/main.go, examples/settings/settings.full.example.json, go.mod, go.sum, internal/app/app.go, internal/app/builtin_skill_test.go, internal/app/engine_wiring_test.go, internal/app/jev.go, internal/app/jev_test.go, internal/app/session_files.go, internal/app/session_judge.go, internal/app/session_memory.go, internal/app/session_memory_test.go, internal/checkpoint/store.go, internal/checkpoint/store_test.go, internal/config/config.go, internal/engine/context_builder.go, internal/engine/engine.go, internal/engine/folded_tools.go, internal/engine/folded_tools_test.go, internal/engine/force_skill_test.go, internal/engine/router.go, internal/engine/router_route_test.go, internal/engine/router_test.go, internal/engine/tool_executor.go, internal/engine/tool_selector.go, internal/jevlocal/artifact.go, internal/jevlocal/artifact_test.go, internal/jevlocal/builder.go, internal/jevlocal/engine.go, internal/jevlocal/evaluator.go, internal/jevlocal/evaluator_test.go, internal/jevlocal/family.go, internal/jevlocal/laya.go, internal/jevlocal/laya_test.go, internal/jevlocal/openjev.go, internal/jevlocal/openjev_family.go
-
-Landed multi-family local Jev: DetectFamily/ResolveArtifacts for open-jev+laya, NamedTensors/NamedOutputs, ORTEngine.RunNamed (int64+bool→float32), OpenJev ModelFamily adapter, full Laya packer/decode via hfbpe matching upstream build_sequence/collate, LocalEvaluator routed through ModelFamily. Laya ORT e2e needed pad-to-max_len=512 (ragged batch max broke ModernBERT reshape). jev.engine documents ort|stub|onnx-go(reserved). All jevlocal/app tests green.
-
-## 2026-09-23 17:40:23 · session session-20260919-235046 · turn 52 · importance 0.80
-- keywords: onnx-go, purego, onnxruntime-purego, fallback, evaluation
-- files: !ids.includes(n)), $null, README.md, cmd/solcode/main.go, examples/settings/settings.full.example.json, go.mod, go.sum, internal/app/app.go, internal/app/builtin_skill_test.go, internal/app/engine_wiring_test.go, internal/app/jev.go, internal/app/jev_test.go, internal/app/session_files.go, internal/app/session_judge.go, internal/app/session_memory.go, internal/app/session_memory_test.go, internal/checkpoint/store.go, internal/checkpoint/store_test.go, internal/config/config.go, internal/engine/context_builder.go, internal/engine/engine.go, internal/engine/folded_tools.go, internal/engine/folded_tools_test.go, internal/engine/force_skill_test.go, internal/engine/router.go, internal/engine/router_route_test.go, internal/engine/router_test.go, internal/engine/tool_executor.go, internal/engine/tool_selector.go, internal/jevlocal/artifact.go, internal/jevlocal/artifact_test.go, internal/jevlocal/builder.go, internal/jevlocal/engine.go, internal/jevlocal/evaluator.go, internal/jevlocal/evaluator_test.go, internal/jevlocal/family.go, internal/jevlocal/laya.go, internal/jevlocal/laya_test.go, internal/jevlocal/openjev.go, internal/jevlocal/openjev_family.go
-
-Paused onnx-go landing after evaluation: gorgonnx cannot load OpenJev/Laya (external weights / quant type 22 / missing ops). User asked to stop and evaluate alternatives. Notable candidate: shota3506/onnxruntime-purego — pure Go FFI via ebitengine/purego to native onnxruntime.dll (no CGO, but still needs the shared library). go.mod already pulled onnx-go/gorgonia during probing.
-
-## 2026-09-23 18:02:19 · session session-20260919-235046 · turn 56 · importance 0.85
-- keywords: gomlx, onnx-gomlx, probe, laya, openjev, int4
-- files: !ids.includes(n)), $null, README.md, cmd/solcode/main.go, examples/settings/settings.full.example.json, go.mod, go.sum, internal/app/app.go, internal/app/builtin_skill_test.go, internal/app/engine_wiring_test.go, internal/app/jev.go, internal/app/jev_test.go, internal/app/session_files.go, internal/app/session_judge.go, internal/app/session_memory.go, internal/app/session_memory_test.go, internal/checkpoint/store.go, internal/checkpoint/store_test.go, internal/config/config.go, internal/engine/context_builder.go, internal/engine/engine.go, internal/engine/folded_tools.go, internal/engine/folded_tools_test.go, internal/engine/force_skill_test.go, internal/engine/router.go, internal/engine/router_route_test.go, internal/engine/router_test.go, internal/engine/tool_executor.go, internal/engine/tool_selector.go, internal/jevlocal/artifact.go, internal/jevlocal/artifact_test.go, internal/jevlocal/builder.go, internal/jevlocal/engine.go, internal/jevlocal/evaluator.go, internal/jevlocal/evaluator_test.go, internal/jevlocal/family.go, internal/jevlocal/laya.go, internal/jevlocal/laya_test.go, internal/jevlocal/openjev.go, internal/jevlocal/openjev_family.go
-
-Probed GoMLX (onnx-gomlx v0.5.13 + compute gobackend) as pure-Go ORT alternative. Laya: parse+VariablesToScope OK, inference CallGraph fails (Reshape dynamic dims / BroadcastToShape Bool rank). OpenJev q4 and q4_single: parse OK, VariablesToScope fails on INT4. Probe left in tmp_probe_gomlx. Not ready to wire as jev.engine fallback yet.
-
-## 2026-09-23 18:12:16 · session session-20260919-235046 · turn 56 · importance 0.85
-- keywords: ort, auto-install, ensureortlibrary, 1.30.0, portable
-- files: !ids.includes(n)), $null, README.md, cmd/solcode/main.go, examples/settings/settings.full.example.json, go.mod, go.sum, internal/app/app.go, internal/app/builtin_skill_test.go, internal/app/engine_wiring_test.go, internal/app/jev.go, internal/app/jev_test.go, internal/app/session_files.go, internal/app/session_judge.go, internal/app/session_memory.go, internal/app/session_memory_test.go, internal/checkpoint/store.go, internal/checkpoint/store_test.go, internal/config/config.go, internal/engine/context_builder.go, internal/engine/engine.go, internal/engine/folded_tools.go, internal/engine/folded_tools_test.go, internal/engine/force_skill_test.go, internal/engine/router.go, internal/engine/router_route_test.go, internal/engine/router_test.go, internal/engine/tool_executor.go, internal/engine/tool_selector.go, internal/jevlocal/artifact.go, internal/jevlocal/artifact_test.go, internal/jevlocal/builder.go, internal/jevlocal/engine.go, internal/jevlocal/evaluator.go, internal/jevlocal/evaluator_test.go, internal/jevlocal/family.go, internal/jevlocal/laya.go, internal/jevlocal/laya_test.go, internal/jevlocal/openjev.go, internal/jevlocal/openjev_family.go
-
-Implemented ORT portable auto-install: EnsureORTLibrary downloads pinned v1.30.0 CPU packages for Win/Linux when engine=ort and default lib missing; wired into defaultEngine. GoMLX probe concluded Laya loads but CallGraph fails, OpenJev INT4 unsupported—kept ORT as primary path. All jevlocal/app tests green.
-
-## 2026-09-23 19:03:59 · session session-20260919-235046 · turn 61 · importance 0.50
-- keywords: readme, jev, ort, laya, settings
-- files: !ids.includes(n)), $null, README.md, examples/settings/README.md, examples/settings/settings.full.example.json, examples/settings/settings.jev.local.example.json, go.mod, go.sum, internal/app/app.go, internal/app/engine_wiring_test.go, internal/app/jev.go, internal/app/jev_test.go, internal/app/session_files.go, internal/app/session_judge.go, internal/app/session_memory.go, internal/app/session_memory_test.go, internal/checkpoint/store.go, internal/checkpoint/store_test.go, internal/config/config.go, internal/engine/context_builder.go, internal/engine/engine.go, internal/engine/folded_tools.go, internal/engine/folded_tools_test.go, internal/engine/force_skill_test.go, internal/engine/router.go, internal/engine/router_route_test.go, internal/engine/router_test.go, internal/jevlocal/artifact.go, internal/jevlocal/artifact_test.go, internal/jevlocal/builder.go, internal/jevlocal/engine.go, internal/jevlocal/evaluator.go, internal/jevlocal/evaluator_test.go, internal/jevlocal/family.go, internal/jevlocal/laya.go, internal/jevlocal/laya_test.go, internal/jevlocal/openjev.go, internal/jevlocal/openjev_family.go, internal/jevlocal/ort_engine.go, internal/jevlocal/ort_engine_test.go
-
-Expanded the root README Jev section for api vs local backends, OpenJev/Laya layouts, and ORT v1.30.0 auto-install; synced Go version to 1.26.2+, Project Structure (jevlocal/systemone), settings examples, and config.JevEnabled to accept Laya artifacts. Added unit_tests.TestJevEnabledRecognizesLayaArtifacts.
-
-## 2026-09-23 19:54:23 · session session-20260919-235046 · turn 64 · importance 0.50
-- keywords: workflow, computeruse, publish-master, install, build-default
-- files: !ids.includes(n)), $null, README.md, examples/settings/README.md, examples/settings/settings.full.example.json, examples/settings/settings.jev.local.example.json, go.mod, go.sum, internal/app/app.go, internal/app/engine_wiring_test.go, internal/app/jev.go, internal/app/jev_test.go, internal/app/session_files.go, internal/app/session_judge.go, internal/app/session_memory.go, internal/app/session_memory_test.go, internal/checkpoint/store.go, internal/checkpoint/store_test.go, internal/config/config.go, internal/engine/context_builder.go, internal/engine/engine.go, internal/engine/folded_tools.go, internal/engine/folded_tools_test.go, internal/engine/force_skill_test.go, internal/engine/router.go, internal/engine/router_route_test.go, internal/engine/router_test.go, internal/jevlocal/artifact.go, internal/jevlocal/artifact_test.go, internal/jevlocal/builder.go, internal/jevlocal/engine.go, internal/jevlocal/evaluator.go, internal/jevlocal/evaluator_test.go, internal/jevlocal/family.go, internal/jevlocal/laya.go, internal/jevlocal/laya_test.go, internal/jevlocal/openjev.go, internal/jevlocal/openjev_family.go, internal/jevlocal/ort_engine.go, internal/jevlocal/ort_engine_test.go
-
-Removed the pure-Go build-default job from .github/workflows/publish-master.yml so only build-computeruse publishes. Install scripts now always download *_computeruse assets; README installation/Computer Use docs updated to a single CGO release channel. Local scripts/build-release.sh left in place for optional local use.
-
-## 2026-09-23 20:12:49 · session session-20260919-235046 · turn 65 · importance 0.35
+## 2026-09-23 23:26:59 · session task-2 · turn -1 · importance 0.35
 - keywords: todolist, todo-write
-- todos: 1|Inspect WebUI Jev settings UI + persist API|in_progress|valid|open; 2|Update WebUI for api/local Jev fields|pending|valid|open; 3|Verify persist/load + tests|pending|valid|open
+- todos: 1|Read ort_engine.go API (NewORTEngine, RunNamed, etc.)|completed|valid|done; 2|Read tokenizer.go for HF tokenizer reuse|completed|valid|done; 3|Check go.mod for ort/chromem deps|completed|valid|done; 4|Find EmbeddingConfig / paths in config.go|completed|valid|done; 5|Search internal/ for existing embedding packages|completed|valid|done; 6|Summarize chromem-go EmbeddingFunc seams|completed|valid|done
 
-Todolist update (3 items).
+Todolist update (6 items).
 
-## 2026-09-23 20:14:02 · session session-20260919-235046 · turn 65 · importance 0.35
-- keywords: todolist, todo-write
-- todos: 1|Inspect WebUI Jev settings UI + persist API|completed|valid|done; 2|Update WebUI for api/local Jev fields|in_progress|valid|open; 3|Verify persist/load + tests|pending|valid|open
+## 2026-09-24 00:13:47 · session acp-1790177307741658300-1 · turn 0 · importance 0.40
+- keywords: todolist, todo-write, askuser, jev, subagent, timeout, answeraskuser, turn
+- files: internal/app/jev.go, internal/engine/tool_executor.go, internal/tool/ask_user.go
 
-Todolist update (3 items).
+Turn memory: 在子代理模式下askuser工具不会让用户判断了，而是交给Jev去选。然后askuser超时也交给Jev去选
 
-## 2026-09-23 20:17:13 · session session-20260919-235046 · turn 65 · importance 0.50
-- keywords: webui, jev, settings, local, ort
-- files: !ids.includes(n)), $null, README.md, cmd/solcode/main.go, examples/settings/README.md, examples/settings/settings.full.example.json, examples/settings/settings.jev.local.example.json, go.mod, internal/app/app.go, internal/app/jev.go, internal/app/jev_test.go, internal/app/session_files.go, internal/app/session_judge.go, internal/app/session_memory.go, internal/app/session_memory_test.go, internal/checkpoint/store.go, internal/checkpoint/store_test.go, internal/config/config.go, internal/engine/context_builder.go, internal/engine/engine.go, internal/engine/folded_tools.go, internal/engine/folded_tools_test.go, internal/engine/router.go, internal/engine/router_route_test.go, internal/engine/router_test.go, internal/jevlocal/artifact.go, internal/jevlocal/artifact_test.go, internal/jevlocal/builder.go, internal/jevlocal/engine.go, internal/jevlocal/evaluator.go, internal/jevlocal/evaluator_test.go, internal/jevlocal/family.go, internal/jevlocal/laya.go, internal/jevlocal/laya_test.go, internal/jevlocal/openjev.go, internal/jevlocal/openjev_family.go, internal/jevlocal/ort_engine.go, internal/jevlocal/ort_engine_test.go, internal/jevlocal/ort_install.go, internal/jevlocal/ort_install_test.go
-- todos: 1|Inspect WebUI Jev settings UI + persist API|completed|valid|done; 2|Update WebUI for api/local Jev fields|in_progress|valid|open; 3|Verify persist/load + tests|pending|valid|open
-
-Updated WebUI Jev settings for api vs local backends: type/model_dir/dtype/engine/ort_lib fields, local-only visibility, server GET/POST + cmd persistence, and TestPostSettingsAppliesLocalJev.
-
-## 2026-09-23 20:17:13 · session session-20260919-235046 · turn 65 · importance 0.35
-- keywords: todolist, todo-write
-- todos: 1|Inspect WebUI Jev settings UI + persist API|completed|valid|done; 2|Update WebUI for api/local Jev fields|completed|valid|done; 3|Verify persist/load + tests|completed|valid|done
-
-Todolist update (3 items).
-
-## 2026-09-23 20:17:40 · session session-20260919-235046 · turn 65 · importance 0.40
+## 2026-09-23 23:37:20 · session session-20260919-235046 · turn 75 · importance 0.40
 - keywords: turn, todolist
-- files: !ids.includes(n)), $null, README.md, cmd/solcode/main.go, examples/settings/README.md, examples/settings/settings.full.example.json, examples/settings/settings.jev.local.example.json, go.mod, internal/app/app.go, internal/app/jev.go, internal/app/jev_test.go, internal/app/session_files.go, internal/app/session_judge.go, internal/app/session_memory.go, internal/app/session_memory_test.go, internal/checkpoint/store.go, internal/checkpoint/store_test.go, internal/config/config.go, internal/engine/context_builder.go, internal/engine/engine.go, internal/engine/folded_tools.go, internal/engine/folded_tools_test.go, internal/engine/router.go, internal/engine/router_route_test.go, internal/engine/router_test.go, internal/jevlocal/artifact.go, internal/jevlocal/artifact_test.go, internal/jevlocal/builder.go, internal/jevlocal/engine.go, internal/jevlocal/evaluator.go, internal/jevlocal/evaluator_test.go, internal/jevlocal/family.go, internal/jevlocal/laya.go, internal/jevlocal/laya_test.go, internal/jevlocal/openjev.go, internal/jevlocal/openjev_family.go, internal/jevlocal/ort_engine.go, internal/jevlocal/ort_engine_test.go, internal/jevlocal/ort_install.go, internal/jevlocal/ort_install_test.go
+- files: README.md, cmd/solcode/main.go, examples/settings/README.md, examples/settings/settings.full.example.json, examples/settings/settings.jev.local.example.json, go.mod, internal/app/app.go, internal/app/jev.go, internal/app/jev_test.go, internal/config/config.go, internal/engine/context_builder.go, internal/engine/engine.go, internal/engine/folded_tools.go, internal/engine/folded_tools_test.go, internal/engine/tool_selector.go, internal/engine/tool_selector_test.go, internal/jevlocal/artifact.go, internal/jevlocal/artifact_test.go, internal/jevlocal/builder.go, internal/jevlocal/engine.go, internal/jevlocal/evaluator.go, internal/jevlocal/evaluator_test.go, internal/jevlocal/family.go, internal/jevlocal/laya.go, internal/jevlocal/laya_test.go, internal/jevlocal/lazy_ort.go, internal/jevlocal/openjev.go, internal/jevlocal/openjev_family.go, internal/jevlocal/ort_engine.go, internal/jevlocal/ort_engine_test.go, internal/jevlocal/ort_install.go, internal/jevlocal/ort_install_test.go, internal/jevlocal/tensors.go, internal/jevlocal/tokenizer.go, internal/memory/manager.go, internal/sessionmemory/store_test.go, internal/systemone/decider.go, internal/systemone/evaluator.go, internal/systemone/guardrail.go, internal/systemone/systemone.go
+- todos: 1|理清 AskUser 与子代理模式现状|in_progress|valid|open; 2|理清 Jev 决策/自动选择能力|pending|valid|open; 3|实现子代理模式 AskUser 交给 Jev|pending|valid|open; 4|实现 AskUser 超时交给 Jev|pending|valid|open; 5|补测并验证|pending|valid|open
 
-Turn memory: webui里面关于Jev模型的设置要更新
+Turn memory: 和knowledge.db同级
 
-## 2026-09-23 20:18:39 · session session-20260919-235046 · turn 66 · importance 0.35
-- keywords: todolist, todo-write
-- todos: 1|Find where 'unimplemented' / engine not ready is raised|in_progress|valid|open; 2|Trace local Jev engine init and readiness path|pending|valid|open; 3|Identify root cause and fix or explain what's missing|pending|valid|open
+## 2026-09-23 23:59:14 · session session-20260919-235046 · turn 76 · importance 0.40
+- keywords: todolist, todo-write, embedding, chromem, onnx, embeddinggemma, defaultembeddingdir, internal/embedding, turn
+- files: examples/settings/settings.embedding.local.example.json, internal/embedding/api.go, internal/embedding/embedding.go, internal/embedding/embedding_test.go, internal/embedding/local.go, internal/embedding/local_test.go, internal/embedding/store.go, internal/jevlocal/artifact_test.go, internal/jevlocal/builder.go, internal/jevlocal/engine.go, internal/jevlocal/evaluator.go, internal/jevlocal/evaluator_test.go, internal/jevlocal/family.go, internal/jevlocal/laya.go, internal/jevlocal/laya_test.go, internal/jevlocal/lazy_ort.go, internal/jevlocal/openjev.go, internal/jevlocal/openjev_family.go, internal/jevlocal/ort_engine.go, internal/jevlocal/ort_engine_test.go, internal/jevlocal/ort_install.go, internal/jevlocal/ort_install_test.go, internal/jevlocal/tensors.go, internal/jevlocal/tokenizer.go, internal/memory/manager.go, internal/sessionmemory/store_test.go, internal/systemone/decider.go, internal/systemone/evaluator.go, internal/systemone/guardrail.go, internal/systemone/systemone.go, internal/tool/tool_search.go, internal/workflowui/server.go, internal/workflowui/settings_features_persist_test.go, internal/workflowui/settings_features_test.go, internal/workflowui/static/app.js, internal/workflowui/static/index.html, scripts/install.ps1, scripts/install.sh, third_party/hfbpe/LICENSE, third_party/hfbpe/README.md
 
-Todolist update (3 items).
+Turn memory: 你来定义就行
 
-## 2026-09-23 20:19:17 · session session-20260919-235046 · turn 66 · importance 0.35
-- keywords: todolist, todo-write
-- todos: 1|Find where 'unimplemented' / engine not ready is raised|completed|valid|done; 2|Trace local Jev engine init and readiness path|in_progress|valid|open; 3|Identify root cause and fix so local Jev defaults to ORT|pending|valid|open
-
-Todolist update (3 items).
-
-## 2026-09-23 20:23:01 · session session-20260919-235046 · turn 66 · importance 0.35
-- keywords: todolist, todo-write
-- todos: 1|Find where 'unimplemented' / engine not ready is raised|completed|valid|done; 2|Trace local Jev engine init and readiness path|completed|valid|done; 3|Default empty local Jev engine to ORT + tests|in_progress|valid|open
-
-Todolist update (3 items).
-
-## 2026-09-23 20:31:51 · session session-20260919-235046 · turn 66 · importance 0.70
-- keywords: jev, local, ort, engine, unimplemented, defaultengine
-- files: !ids.includes(n)), $null, README.md, cmd/solcode/main.go, examples/settings/README.md, examples/settings/settings.full.example.json, examples/settings/settings.jev.local.example.json, go.mod, internal/app/app.go, internal/app/jev.go, internal/app/jev_test.go, internal/app/session_files.go, internal/app/session_judge.go, internal/app/session_memory.go, internal/app/session_memory_test.go, internal/checkpoint/store.go, internal/checkpoint/store_test.go, internal/config/config.go, internal/engine/context_builder.go, internal/engine/engine.go, internal/engine/folded_tools.go, internal/engine/folded_tools_test.go, internal/engine/router.go, internal/engine/router_route_test.go, internal/engine/router_test.go, internal/jevlocal/artifact.go, internal/jevlocal/artifact_test.go, internal/jevlocal/builder.go, internal/jevlocal/engine.go, internal/jevlocal/evaluator.go, internal/jevlocal/evaluator_test.go, internal/jevlocal/family.go, internal/jevlocal/laya.go, internal/jevlocal/laya_test.go, internal/jevlocal/openjev.go, internal/jevlocal/openjev_family.go, internal/jevlocal/ort_engine.go, internal/jevlocal/ort_engine_test.go, internal/jevlocal/ort_install.go, internal/jevlocal/ort_install_test.go
-- todos: 1|Find where 'unimplemented' / engine not ready is raised|completed|valid|done; 2|Trace local Jev engine init and readiness path|completed|valid|done; 3|Default empty local Jev engine to ORT + tests|in_progress|valid|open
-
-Diagnosed local Jev falling back with ErrEngineNotReady (unimplemented): empty jev.engine selected UnimplementedEngine. Changed type=local empty engine to default to ort in config.normalizeJev and jevlocal.defaultEngine; WebUI engine select/save now defaults to ort; explicit stub/unimplemented remains an opt-out. Updated docs/tests; TestBuildJevLocalUsesOpenJevArtifacts now asserts real ORT confidence.
-
-## 2026-09-23 20:31:51 · session session-20260919-235046 · turn 66 · importance 0.35
-- keywords: todolist, todo-write
-- todos: 1|Find where 'unimplemented' / engine not ready is raised|completed|valid|done; 2|Trace local Jev engine init and readiness path|completed|valid|done; 3|Default empty local Jev engine to ORT + tests|completed|valid|done
-
-Todolist update (3 items).
-
-## 2026-09-23 20:31:59 · session session-20260919-235046 · turn 66 · importance 0.40
+## 2026-09-24 00:11:48 · session session-20260919-235046 · turn 77 · importance 0.40
 - keywords: turn, todolist
-- files: !ids.includes(n)), $null, README.md, cmd/solcode/main.go, examples/settings/README.md, examples/settings/settings.full.example.json, examples/settings/settings.jev.local.example.json, go.mod, internal/app/app.go, internal/app/jev.go, internal/app/jev_test.go, internal/app/session_files.go, internal/app/session_judge.go, internal/app/session_memory.go, internal/app/session_memory_test.go, internal/checkpoint/store.go, internal/checkpoint/store_test.go, internal/config/config.go, internal/engine/context_builder.go, internal/engine/engine.go, internal/engine/folded_tools.go, internal/engine/folded_tools_test.go, internal/engine/router.go, internal/engine/router_route_test.go, internal/engine/router_test.go, internal/jevlocal/artifact.go, internal/jevlocal/artifact_test.go, internal/jevlocal/builder.go, internal/jevlocal/engine.go, internal/jevlocal/evaluator.go, internal/jevlocal/evaluator_test.go, internal/jevlocal/family.go, internal/jevlocal/laya.go, internal/jevlocal/laya_test.go, internal/jevlocal/openjev.go, internal/jevlocal/openjev_family.go, internal/jevlocal/ort_engine.go, internal/jevlocal/ort_engine_test.go, internal/jevlocal/ort_install.go, internal/jevlocal/ort_install_test.go
+- files: README.md, cmd/solcode/main.go, examples/settings/README.md, examples/settings/settings.embedding.local.example.json, examples/settings/settings.full.example.json, examples/settings/settings.jev.local.example.json, go.mod, internal/app/app.go, internal/app/jev.go, internal/app/jev_test.go, internal/config/config.go, internal/embedding/api.go, internal/embedding/embedding.go, internal/embedding/embedding_test.go, internal/embedding/local.go, internal/embedding/local_test.go, internal/embedding/store.go, internal/engine/context_builder.go, internal/engine/engine.go, internal/engine/folded_tools.go, internal/engine/folded_tools_test.go, internal/engine/tool_selector.go, internal/engine/tool_selector_test.go, internal/jevlocal/artifact.go, internal/jevlocal/artifact_test.go, internal/jevlocal/builder.go, internal/jevlocal/engine.go, internal/jevlocal/evaluator.go, internal/jevlocal/evaluator_test.go, internal/jevlocal/family.go, internal/jevlocal/laya.go, internal/jevlocal/laya_test.go, internal/jevlocal/lazy_ort.go, internal/jevlocal/openjev.go, internal/jevlocal/openjev_family.go, internal/jevlocal/ort_engine.go, internal/jevlocal/ort_engine_test.go, internal/jevlocal/ort_install.go, internal/jevlocal/ort_install_test.go, internal/jevlocal/tensors.go
+- todos: 1|Locate AskUser tool, callbacks, timeout, subagent wiring|completed|valid|done; 2|Locate Jev decision/judge APIs that can pick options|completed|valid|done; 3|Implement subagent+timeout Jev auto-select for AskUser|in_progress|valid|open; 4|Add/adjust tests and verify|pending|valid|open
 
-Turn memory: jev: jev decision fell back: jev local inference engine is not ready (unimplemented)
+Turn memory: 现在如果启用embbing在写入记忆的时候如何写入，先给个说明
 
-## 2026-09-23 20:47:45 · session session-20260919-235046 · turn 67 · importance 0.35
-- keywords: todolist, todo-write
-- todos: 1|Trace sync local Jev init path at startup|in_progress|valid|open; 2|Design async init: build immediately, load ORT in background|pending|valid|done; 3|Implement + update tests for async readiness/fallback|pending|invalid|open
-
-Todolist update (3 items).
-
-## 2026-09-23 20:48:49 · session session-20260919-235046 · turn 67 · importance 0.35
-- keywords: todolist, todo-write
-- todos: 1|Trace sync local Jev init path at startup|in_progress|valid|open; 2|Design async init plan (background ORT load)|pending|valid|done; 3|Deliver implementation plan in required format|pending|invalid|open
-
-Todolist update (3 items).
-
-## 2026-09-23 20:51:01 · session acp-1790167756954130200-1 · turn 0 · importance 0.35
-- keywords: todolist, todo-write
-- todos: 1|Locate todolist / TodoWrite session memory write path|in_progress|invalid|open; 2|Find intended merge logic for same-session todolist|pending|invalid|open; 3|Identify why same-session updates create separate entries|pending|valid|done; 4|Fix merge so same-session todolist updates consolidate|pending|invalid|open; 5|Verify with existing tests or add regression coverage|pending|invalid|open
-
-Todolist update (5 items).
-
-## 2026-09-23 20:51:59 · session acp-1790167756954130200-1 · turn 0 · importance 0.40
+## 2026-09-24 00:14:26 · session session-20260919-235046 · turn 78 · importance 0.40
 - keywords: turn, todolist
-- todos: 1|Locate todolist / TodoWrite session memory write path|in_progress|invalid|open; 2|Find intended merge logic for same-session todolist|pending|invalid|open; 3|Identify why same-session updates create separate entries|pending|valid|done; 4|Fix merge so same-session todolist updates consolidate|pending|invalid|open; 5|Verify with existing tests or add regression coverage|pending|invalid|open
+- files: README.md, cmd/solcode/main.go, examples/settings/README.md, examples/settings/settings.embedding.local.example.json, examples/settings/settings.full.example.json, examples/settings/settings.jev.local.example.json, go.mod, internal/app/app.go, internal/app/jev.go, internal/app/jev_test.go, internal/config/config.go, internal/embedding/api.go, internal/embedding/embedding.go, internal/embedding/embedding_test.go, internal/embedding/local.go, internal/embedding/local_test.go, internal/embedding/store.go, internal/engine/context_builder.go, internal/engine/engine.go, internal/engine/folded_tools.go, internal/engine/folded_tools_test.go, internal/engine/tool_selector.go, internal/engine/tool_selector_test.go, internal/jevlocal/artifact.go, internal/jevlocal/artifact_test.go, internal/jevlocal/builder.go, internal/jevlocal/engine.go, internal/jevlocal/evaluator.go, internal/jevlocal/evaluator_test.go, internal/jevlocal/family.go, internal/jevlocal/laya.go, internal/jevlocal/laya_test.go, internal/jevlocal/lazy_ort.go, internal/jevlocal/openjev.go, internal/jevlocal/openjev_family.go, internal/jevlocal/ort_engine.go, internal/jevlocal/ort_engine_test.go, internal/jevlocal/ort_install.go, internal/jevlocal/ort_install_test.go, internal/jevlocal/tensors.go
 
-Turn memory: 修复对于todolist再同一轮会话没有合并
-## 2026-09-23 20:47:45 · session session-20260919-235046 · turn 67 · importance 0.35
-- keywords: todolist, todo-write
-- todos: 1|Trace sync local Jev init path at startup|in_progress|valid|open; 2|Design async init: build immediately, load ORT in background|pending|valid|done; 3|Implement + update tests for async readiness/fallback|pending|invalid|open
- 
-Todolist update (3 i…
+Turn memory: 哪些元数据会embedding？
 
-## 2026-09-23 20:56:16 · session session-20260919-235046 · turn 67 · importance 0.35
-- keywords: todolist, todo-write
-- todos: 1|Trace sync local Jev init path at startup|completed|invalid|done; 2|Design async init plan (background ORT load)|in_progress|valid|done; 3|Deliver implementation plan in required format|pending|invalid|open
-
-Todolist update (3 items).
-
-## 2026-09-23 20:56:27 · session acp-1790167756954130200-1 · turn 1 · importance 0.35
-- keywords: todolist, todo-write
-- todos: 1|Locate todolist / TodoWrite session memory write path|completed|valid|done; 2|Find intended merge logic for same-session todolist|completed|valid|done; 3|Identify why same-session updates create separate entries|completed|valid|done; 4|Implement same-turn todolist merge into one entry|in_progress|valid|done; 5|Verify with existing tests or add regression coverage|pending|invalid|open
-
-Todolist update (5 items).
-
-## 2026-09-23 20:59:29 · session session-20260919-235046 · turn 67 · importance 0.35
-- keywords: todolist, todo-write
-- todos: 1|Trace sync local Jev init path at startup|completed|invalid|done; 2|Design async init plan (background ORT load)|completed|valid|done; 3|Deliver implementation plan in required format|completed|invalid|done
-
-Todolist update (3 items).
-
-## 2026-09-23 21:00:32 · session acp-1790167756954130200-1 · turn 1 · importance 0.35
-- keywords: todolist, todo-write
-- todos: 1|Locate todolist / TodoWrite session memory write path|completed|valid|done; 2|Find intended merge logic for same-session todolist|completed|valid|done; 3|Identify why same-session updates create separate entries|completed|valid|done; 4|Implement same-turn todolist merge into one entry|completed|valid|done; 5|Verify with existing tests or add regression coverage|completed|invalid|done
-
-Todolist update (5 items).
-
-## 2026-09-23 21:00:51 · session acp-1790167756954130200-1 · turn 1 · importance 0.70
-- keywords: todolist, todo-write, upsertbysessionturn, session-memory, merge
-- files: internal/app/session_memory.go, internal/app/session_memory_test.go, internal/sessionmemory/store.go, internal/sessionmemory/store_test.go
-
-Fixed same-session same-turn todolist duplication in solcode.md. Added sessionmemory.Store.UpsertBySessionTurn so one entry exists per SessionID+Turn: keywords/files are unioned, todos/summary/time/importance take the latest write (Jev-judged for TodoWrite). Wired WriteSessionMemory, recordTurnSessionMemory, and recordTodoSessionMemory through the upsert. Updated tests; ./internal/sessionmemory and ./internal/app pass.
-
-## 2026-09-23 21:00:53 · session session-20260919-235046 · turn 67 · importance 0.40
+## 2026-09-24 00:17:05 · session session-20260919-235046 · turn 79 · importance 0.40
 - keywords: turn, todolist
-- files: cmd/solcode/main.go, internal/app/app.go, internal/app/jev_test.go, internal/checkpoint/store_test.go, internal/config/config.go, internal/jevlocal/artifact_test.go, internal/jevlocal/family.go, internal/jevlocal/laya.go, internal/jevlocal/laya_test.go, internal/jevlocal/openjev.go, internal/jevlocal/openjev_family.go, internal/jevlocal/ort_engine.go, internal/jevlocal/ort_engine_test.go, internal/jevlocal/ort_install.go, internal/jevlocal/ort_install_test.go, internal/jevlocal/tensors.go, internal/jevlocal/tokenizer.go, internal/sessionmemory/store.go, internal/sessionmemory/store_test.go, internal/sessionmemory/todos.go, internal/systemone/decider.go, internal/systemone/evaluator.go, internal/systemone/guardrail.go, internal/systemone/systemone.go, internal/tool/parallel_search.go, internal/tool/parallel_search_test.go, internal/tool/read_session_memory.go, internal/tool/search_screen.go, internal/tool/search_screen_test.go, internal/tool/todo_write.go, internal/tool/tool.go, internal/tool/web_search.go, internal/tool/web_search_test.go, internal/workflowui/server.go, internal/workflowui/settings_features_persist_test.go, internal/workflowui/settings_features_test.go, internal/workflowui/static/app.js, internal/workflowui/static/index.html, scripts/install.ps1, scripts/install.sh
+- files: README.md, cmd/solcode/main.go, examples/settings/README.md, examples/settings/settings.embedding.local.example.json, examples/settings/settings.full.example.json, examples/settings/settings.jev.local.example.json, go.mod, internal/app/app.go, internal/app/jev.go, internal/app/jev_test.go, internal/config/config.go, internal/embedding/api.go, internal/embedding/embedding.go, internal/embedding/embedding_test.go, internal/embedding/local.go, internal/embedding/local_test.go, internal/embedding/store.go, internal/engine/context_builder.go, internal/engine/engine.go, internal/engine/folded_tools.go, internal/engine/folded_tools_test.go, internal/engine/tool_selector.go, internal/engine/tool_selector_test.go, internal/jevlocal/artifact.go, internal/jevlocal/artifact_test.go, internal/jevlocal/builder.go, internal/jevlocal/engine.go, internal/jevlocal/evaluator.go, internal/jevlocal/evaluator_test.go, internal/jevlocal/family.go, internal/jevlocal/laya.go, internal/jevlocal/laya_test.go, internal/jevlocal/lazy_ort.go, internal/jevlocal/openjev.go, internal/jevlocal/openjev_family.go, internal/jevlocal/ort_engine.go, internal/jevlocal/ort_engine_test.go, internal/jevlocal/ort_install.go, internal/jevlocal/ort_install_test.go, internal/jevlocal/tensors.go
 
-Turn memory: 现在由于本地的Jev模型初始化时间长，换成异步
+Turn memory: 现在这个是全局记忆吧？会话记忆呢？
 
-## 2026-09-23 21:01:00 · session acp-1790167756954130200-1 · turn 1 · importance 0.40
+## 2026-09-24 00:19:25 · session session-20260919-235046 · turn 80 · importance 0.40
 - keywords: turn, todolist
-- files: internal/app/session_memory_test.go, internal/sessionmemory/store.go, internal/sessionmemory/store_test.go
+- files: README.md, cmd/solcode/main.go, examples/settings/README.md, examples/settings/settings.embedding.local.example.json, examples/settings/settings.full.example.json, examples/settings/settings.jev.local.example.json, go.mod, internal/app/app.go, internal/app/jev.go, internal/app/jev_test.go, internal/config/config.go, internal/embedding/api.go, internal/embedding/embedding.go, internal/embedding/embedding_test.go, internal/embedding/local.go, internal/embedding/local_test.go, internal/embedding/store.go, internal/engine/context_builder.go, internal/engine/engine.go, internal/engine/folded_tools.go, internal/engine/folded_tools_test.go, internal/engine/tool_selector.go, internal/engine/tool_selector_test.go, internal/jevlocal/artifact.go, internal/jevlocal/artifact_test.go, internal/jevlocal/builder.go, internal/jevlocal/engine.go, internal/jevlocal/evaluator.go, internal/jevlocal/evaluator_test.go, internal/jevlocal/family.go, internal/jevlocal/laya.go, internal/jevlocal/laya_test.go, internal/jevlocal/lazy_ort.go, internal/jevlocal/openjev.go, internal/jevlocal/openjev_family.go, internal/jevlocal/ort_engine.go, internal/jevlocal/ort_engine_test.go, internal/jevlocal/ort_install.go, internal/jevlocal/ort_install_test.go, internal/jevlocal/tensors.go
 
-Turn memory: 要进行追加，利用 Jev合并，但是都在同一个turn下面，在同一个会话id下不能出现多个turn都一样的情况
+Turn memory: 全局记忆是向量优先还是目前搜素优先，还是说结合之后会Jev排序
 
-## 2026-09-23 21:03:13 · session session-20260919-235046 · turn 68 · importance 0.35
-- keywords: todolist, todo-write
-- todos: 1|Add async loadingORTEngine + wire defaultEngine|in_progress|valid|open; 2|Close/cancel on ReloadFeatures and App.Close|pending|valid|open; 3|Update tests + docs for async ready|pending|valid|open
+## 2026-09-24 00:56:35 · session session-20260919-235046 · turn 81 · importance 0.40
+- keywords: todolist, todo-write, embedding, memory, retrieve, jev, rank, chromem, merge, turn
+- files: README.md, cmd/solcode/main.go, examples/settings/README.md, examples/settings/settings.embedding.local.example.json, examples/settings/settings.full.example.json, examples/settings/settings.jev.local.example.json, go.mod, internal/app/app.go, internal/app/jev.go, internal/app/jev_test.go, internal/config/config.go, internal/embedding/api.go, internal/embedding/embedding.go, internal/embedding/embedding_test.go, internal/embedding/local.go, internal/embedding/local_test.go, internal/embedding/store.go, internal/engine/context_builder.go, internal/engine/engine.go, internal/engine/folded_tools.go, internal/engine/folded_tools_test.go, internal/engine/tool_selector.go, internal/engine/tool_selector_test.go, internal/jevlocal/artifact.go, internal/jevlocal/artifact_test.go, internal/jevlocal/builder.go, internal/jevlocal/engine.go, internal/jevlocal/evaluator.go, internal/jevlocal/evaluator_test.go, internal/jevlocal/family.go, internal/jevlocal/laya.go, internal/jevlocal/laya_test.go, internal/jevlocal/lazy_ort.go, internal/jevlocal/openjev.go, internal/jevlocal/openjev_family.go, internal/jevlocal/ort_engine.go, internal/jevlocal/ort_engine_test.go, internal/jevlocal/ort_install.go, internal/jevlocal/ort_install_test.go, internal/jevlocal/tensors.go
 
-Todolist update (3 items).
-
-## 2026-09-23 21:03:45 · session acp-1790167756954130200-1 · turn 2 · importance 0.35
-- keywords: todolist, todo-write
-- todos: 1|Inspect durable memory write/read path and Entry schema|in_progress|valid|done; 2|Attach turn on WriteMemory|pending|valid|done; 3|Support turn filter/query on ReadMemory|pending|valid|open; 4|Update tests and verify|pending|invalid|open
-
-Todolist update (4 items).
-
-## 2026-09-23 21:05:12 · session acp-1790167756954130200-1 · turn 2 · importance 0.40
-- keywords: turn, todolist
-- files: internal/jevlocal/lazy_ort.go, internal/sessionmemory/store.go
-- todos: 1|Inspect durable memory write/read path and Entry schema|in_progress|valid|done; 2|Attach turn on WriteMemory|pending|valid|done; 3|Support turn filter/query on ReadMemory|pending|valid|open; 4|Update tests and verify|pending|invalid|open
-
-Turn memory: 全局memory也加一下Write的时候也会写入turn 。然后查询全局记忆的时候也可以通过turn查询
-
-## 2026-09-23 21:06:32 · session acp-1790167756954130200-1 · turn 3 · importance 0.35
-- keywords: todolist, todo-write
-- todos: 1|Inspect durable memory write/read path and Entry schema|completed|invalid|done; 2|Attach turn on WriteMemory|in_progress|invalid|open; 3|Defer ReadMemory turn filter (redesign later)|pending|invalid|open; 4|Update write tests and verify|pending|valid|open
-
-Todolist update (4 items).
-
-## 2026-09-23 21:07:43 · session acp-1790167756954130200-1 · turn 3 · importance 0.40
-- keywords: turn, todolist
-- files: internal/app/session_memory.go, internal/app/session_memory_test.go, internal/jevlocal/evaluator.go, internal/jevlocal/lazy_ort.go, internal/sessionmemory/store.go, internal/sessionmemory/store_test.go
-- todos: 1|Inspect durable memory write/read path and Entry schema|completed|invalid|done; 2|Attach turn on WriteMemory|in_progress|invalid|open; 3|Defer ReadMemory turn filter (redesign later)|pending|invalid|open; 4|Update write tests and verify|pending|valid|open
-
-Turn memory: 先写write吧，ReadMemory可能要重新设计，现在不太准
-
-## 2026-09-23 21:10:13 · session session-20260919-235046 · turn 68 · importance 0.75
-- keywords: jev, local, ort, async, loadingortengine, startup
-- files: cmd/solcode/main.go, internal/app/app.go, internal/app/jev.go, internal/app/jev_test.go, internal/engine/engine.go, internal/jevlocal/builder.go, internal/jevlocal/engine.go, internal/jevlocal/evaluator.go, internal/jevlocal/evaluator_test.go, internal/jevlocal/family.go, internal/jevlocal/laya.go, internal/jevlocal/laya_test.go, internal/jevlocal/lazy_ort.go, internal/jevlocal/openjev.go, internal/jevlocal/openjev_family.go, internal/jevlocal/ort_engine.go, internal/jevlocal/ort_engine_test.go, internal/jevlocal/ort_install.go, internal/jevlocal/ort_install_test.go, internal/jevlocal/tensors.go, internal/jevlocal/tokenizer.go, internal/sessionmemory/store.go, internal/sessionmemory/store_test.go, internal/sessionmemory/todos.go, internal/systemone/decider.go, internal/systemone/evaluator.go, internal/systemone/guardrail.go, internal/systemone/systemone.go, internal/tool/parallel_search.go, internal/tool/parallel_search_test.go, internal/tool/read_session_memory.go, internal/tool/search_screen.go, internal/tool/search_screen_test.go, internal/tool/todo_write.go, internal/tool/tool.go, internal/tool/web_search.go, internal/tool/web_search_test.go, internal/workflowui/server.go, internal/workflowui/settings_features_persist_test.go, internal/workflowui/settings_features_test.go
-- todos: 1|Inspect durable memory write/read path and Entry schema|completed|invalid|done; 2|Attach turn on WriteMemory|in_progress|invalid|open; 3|Defer ReadMemory turn filter (redesign later)|pending|invalid|open; 4|Update write tests and verify|pending|valid|done
-
-Made local Jev ORT initialization asynchronous. Added loadingORTEngine so New/defaultEngine return immediately while EnsureORTLibrary + NewORTEngine run in a goroutine; Ask falls back until Ready. Wired LocalEvaluator.Close through jevRuntime into ReloadFeatures and App.Close. Suppressed per-turn fallback logs while \"ort loading\". Updated ORT/Laya/app tests to WaitEngine or poll Ready. Verified: new_ms ~60–300ms, then load_wait, Ask works; TestBuildJevLocalUsesOpenJevArtifacts PASS with loading/ready logs only.
-
-## 2026-09-23 21:10:23 · session session-20260919-235046 · turn 68 · importance 0.35
-- keywords: todolist, todo-write
-- todos: 1|Add async loadingORTEngine + wire defaultEngine|completed|valid|done; 2|Close/cancel on ReloadFeatures and App.Close|completed|valid|done; 3|Update tests + docs for async ready|completed|valid|done
-
-Todolist update (3 items).
-
-## 2026-09-23 21:10:56 · session session-20260919-235046 · turn 68 · importance 0.40
-- keywords: turn, todolist
-- files: internal/checkpoint/store_test.go, internal/jevlocal/artifact_test.go, internal/jevlocal/family.go, internal/jevlocal/laya.go, internal/jevlocal/laya_test.go, internal/jevlocal/lazy_ort.go, internal/jevlocal/openjev.go, internal/jevlocal/openjev_family.go, internal/jevlocal/ort_engine.go, internal/jevlocal/ort_engine_test.go, internal/jevlocal/ort_install.go, internal/jevlocal/ort_install_test.go, internal/jevlocal/tensors.go, internal/jevlocal/tokenizer.go, internal/sessionmemory/store.go, internal/sessionmemory/store_test.go, internal/sessionmemory/todos.go, internal/systemone/decider.go, internal/systemone/evaluator.go, internal/systemone/guardrail.go, internal/systemone/systemone.go, internal/tool/parallel_search.go, internal/tool/parallel_search_test.go, internal/tool/read_session_memory.go, internal/tool/search_screen.go, internal/tool/search_screen_test.go, internal/tool/todo_write.go, internal/tool/tool.go, internal/tool/web_search.go, internal/tool/web_search_test.go, internal/workflowui/server.go, internal/workflowui/settings_features_persist_test.go, internal/workflowui/settings_features_test.go, internal/workflowui/static/app.js, internal/workflowui/static/index.html, scripts/install.ps1, scripts/install.sh, third_party/hfbpe/LICENSE, third_party/hfbpe/README.md, third_party/hfbpe/bpe.go
-
-Turn memory: 开始写代码
-
-## 2026-09-23 21:13:50 · session session-20260919-235046 · turn 69 · importance 0.35
-- keywords: todolist, todo-write
-- todos: 1|Trace Jev tool screening + ToolSearch wiring|in_progress|valid|open; 2|Design/implement better ToolSearch screening under Jev|pending|valid|done; 3|Update tests and verify|pending|invalid|open
-
-Todolist update (3 items).
-
-## 2026-09-23 21:14:32 · session acp-1790167756954130200-1 · turn 4 · importance 0.35
-- keywords: todolist, todo-write
-- todos: 1|Inspect durable memory write/read path and Entry schema|completed|valid|done; 2|Attach turn on WriteMemory|completed|valid|done; 3|Defer ReadMemory turn filter (redesign later)|completed|valid|done; 4|Update write tests and verify|completed|valid|done
-
-Todolist update (4 items).
-
-## 2026-09-23 21:15:07 · session acp-1790167756954130200-1 · turn 4 · importance 0.65
-- keywords: writememory, sourceturn, allowduplicate, durable-memory
-- files: internal/app/session_memory.go, internal/memory/manager.go, internal/memory/memory.go, internal/sessionmemory/store.go, internal/tool/write_memory.go, unit_tests/memory_manager_test.go
-
-Added SourceTurn to durable memory Item and wired WriteMemory through RememberDirect with AllowDuplicate=true so each write keeps its own entry tagged with the current checkpoint turn. ReadMemory turn filtering was deferred for a later redesign. Updated tool description, system prompt, and tests; app/unit_tests pass.
-
-## 2026-09-23 21:16:28 · session acp-1790167756954130200-1 · turn 4 · importance 0.40
-- keywords: turn, todolist
-- files: internal/app/jev.go, internal/app/memory_writer.go, internal/app/memory_writer_test.go, internal/app/session_memory.go, internal/app/session_memory_test.go, internal/engine/context_builder.go, internal/jevlocal/evaluator.go, internal/jevlocal/lazy_ort.go, internal/memory/manager.go, internal/memory/memory.go, internal/sessionmemory/store.go, internal/sessionmemory/store_test.go, internal/tool/write_memory.go, unit_tests/memory_manager_test.go, unit_tests/memory_prompt_test.go
-
-Turn memory: 全局记忆可以重复
-
-## 2026-09-23 21:23:09 · session session-20260919-235046 · turn 69 · importance 0.35
-- keywords: todolist, todo-write
-- todos: 1|Trace Jev tool screening + ToolSearch wiring|completed|valid|done; 2|Auto SearchCapabilities sticky-enable on Jev tool miss|in_progress|valid|open; 3|Add/update tests for auto ToolSearch on miss|pending|invalid|open
-
-Todolist update (3 items).
-
-## 2026-09-23 21:29:06 · session acp-1790167756954130200-1 · turn 5 · importance 0.40
-- keywords: turn, todolist
-- files: internal/app/jev.go, internal/app/memory_writer.go, internal/app/memory_writer_test.go, internal/app/session_memory.go, internal/app/session_memory_test.go, internal/engine/context_builder.go, internal/jevlocal/evaluator.go, internal/jevlocal/lazy_ort.go, internal/memory/manager.go, internal/memory/memory.go, internal/sessionmemory/store.go, internal/sessionmemory/store_test.go, internal/tool/write_memory.go, unit_tests/memory_manager_test.go, unit_tests/memory_prompt_test.go
-- todos: 1|Trace Jev tool screening + ToolSearch wiring|completed|valid|done; 2|Auto SearchCapabilities sticky-enable on Jev tool miss|in_progress|valid|open; 3|Add/update tests for auto ToolSearch on miss|pending|valid|open
-
-Turn memory: 现在readMemory是使用的什么算法？？
-
-## 2026-09-23 21:31:17 · session session-20260919-235046 · turn 69 · importance 0.40
-- keywords: turn, todolist
-- files: cmd/solcode/main.go, examples/settings/README.md, examples/settings/settings.full.example.json, examples/settings/settings.jev.local.example.json, internal/app/app.go, internal/app/jev.go, internal/app/jev_test.go, internal/app/session_files.go, internal/app/session_judge.go, internal/checkpoint/store.go, internal/checkpoint/store_test.go, internal/config/config.go, internal/engine/context_builder.go, internal/engine/engine.go, internal/engine/folded_tools.go, internal/engine/folded_tools_test.go, internal/engine/tool_selector.go, internal/engine/tool_selector_test.go, internal/jevlocal/artifact.go, internal/jevlocal/artifact_test.go, internal/jevlocal/builder.go, internal/jevlocal/engine.go, internal/jevlocal/evaluator.go, internal/jevlocal/evaluator_test.go, internal/jevlocal/family.go, internal/jevlocal/laya.go, internal/jevlocal/laya_test.go, internal/jevlocal/lazy_ort.go, internal/jevlocal/openjev.go, internal/jevlocal/openjev_family.go, internal/jevlocal/ort_engine.go, internal/jevlocal/ort_engine_test.go, internal/jevlocal/ort_install.go, internal/jevlocal/ort_install_test.go, internal/jevlocal/tensors.go, internal/jevlocal/tokenizer.go, internal/sessionmemory/store.go, internal/sessionmemory/store_test.go, internal/sessionmemory/todos.go, internal/systemone/decider.go
-- todos: 1|Trace Jev tool screening + ToolSearch wiring|completed|valid|done; 2|Auto SearchCapabilities sticky-enable on Jev tool miss|in_progress|valid|open; 3|Add/update tests for auto ToolSearch on miss|pending|invalid|open
-
-Turn memory: 在Jev模式下给toolsearch加上，让他更好进行工具筛选
-
-## 2026-09-23 21:35:04 · session session-20260919-235046 · turn 70 · importance 0.35
-- keywords: todolist, todo-write
-- todos: 1|Jev miss → ToolSearch sticky\; empty → classic FoldedTools|in_progress|valid|done; 2|CJK prompt: alias retry from MCP/builtin names|pending|valid|open; 3|Tests + verify|pending|invalid|done
-
-Todolist update (3 items).
-
-## 2026-09-23 21:35:25 · session acp-1790167756954130200-1 · turn 6 · importance 0.35
-- keywords: todolist, todo-write
-- todos: 1|Wire turn+session into retrieval scoring (50%)|in_progress|valid|open; 2|Add topk to ReadMemory path|pending|valid|open; 3|Improve query tokenization for retrieval|pending|invalid|open; 4|Add/update tests and verify|pending|invalid|open
-
-Todolist update (4 items).
-
-## 2026-09-23 21:36:22 · session acp-1790167756954130200-1 · turn 6 · importance 0.40
-- keywords: turn, todolist
-- files: internal/app/jev.go, internal/jevlocal/evaluator.go, internal/memory/manager.go
-- todos: 1|Wire turn+session into retrieval scoring (50%)|in_progress|valid|open; 2|Add topk to ReadMemory path|pending|valid|open; 3|Improve query tokenization for retrieval|pending|invalid|open; 4|Add/update tests and verify|pending|invalid|open
-
-Turn memory: 现在内部加上turn和session-id。同session下turn越大越靠前（这部分评分占50%)。接着读取记忆时加上topk.然后对query进行分词
-
-## 2026-09-23 21:37:30 · session acp-1790167756954130200-1 · turn 7 · importance 0.35
-- keywords: todolist, todo-write
-- todos: 1|Add turn/session scoring (50%) in LayeredRetriever|in_progress|valid|done; 2|Add topk to ReadMemory tool/API|pending|valid|done; 3|Update tests for scoring and topk|pending|valid|done
-
-Todolist update (3 items).
-
-## 2026-09-23 21:37:56 · session acp-1790167756954130200-1 · turn 7 · importance 0.40
-- keywords: turn, todolist
-- files: internal/app/jev.go, internal/app/memory_writer.go, internal/app/memory_writer_test.go, internal/app/session_memory.go, internal/app/session_memory_test.go, internal/engine/context_builder.go, internal/jevlocal/evaluator.go, internal/jevlocal/lazy_ort.go, internal/memory/manager.go, internal/memory/memory.go, internal/sessionmemory/store.go, internal/sessionmemory/store_test.go, internal/tool/write_memory.go, unit_tests/memory_manager_test.go, unit_tests/memory_prompt_test.go
-- todos: 1|Add turn/session scoring (50%) in LayeredRetriever|in_progress|valid|done; 2|Add topk to ReadMemory tool/API|pending|valid|done; 3|Update tests for scoring and topk|pending|valid|done
-
-Turn memory: 有了就不用了
-
-## 2026-09-23 21:40:08 · session acp-1790167756954130200-1 · turn 8 · importance 0.35
-- keywords: todolist, todo-write
-- todos: 1|Compare session vs global memory query tokenization|in_progress|valid|done; 2|Add same-session turn recency as 50% of retrieval score|pending|valid|done; 3|Update tests and verify|pending|valid|done
-
-Todolist update (3 items).
-
-## 2026-09-23 21:42:04 · session acp-1790167756954130200-1 · turn 8 · importance 0.35
-- keywords: todolist, todo-write
-- todos: 1|Compare session vs global memory query tokenization|completed|valid|done; 2|Add same-session turn recency as 50% of retrieval score (global + session)|in_progress|valid|done; 3|Update tests and verify|pending|valid|done
-
-Todolist update (3 items).
-
-## 2026-09-23 21:42:57 · session session-20260919-235046 · turn 70 · importance 0.40
-- keywords: turn, todolist
-- files: cmd/solcode/main.go, examples/settings/settings.jev.local.example.json, internal/app/jev.go, internal/app/jev_test.go, internal/checkpoint/store.go, internal/checkpoint/store_test.go, internal/engine/folded_tools.go, internal/engine/folded_tools_test.go, internal/jevlocal/artifact.go, internal/jevlocal/artifact_test.go, internal/jevlocal/builder.go, internal/jevlocal/engine.go, internal/jevlocal/evaluator.go, internal/jevlocal/evaluator_test.go, internal/jevlocal/family.go, internal/jevlocal/laya.go, internal/jevlocal/laya_test.go, internal/jevlocal/lazy_ort.go, internal/jevlocal/openjev.go, internal/jevlocal/openjev_family.go, internal/jevlocal/ort_engine.go, internal/jevlocal/ort_engine_test.go, internal/jevlocal/ort_install.go, internal/jevlocal/ort_install_test.go, internal/jevlocal/tensors.go, internal/jevlocal/tokenizer.go, internal/sessionmemory/store.go, internal/sessionmemory/store_test.go, internal/sessionmemory/todos.go, internal/systemone/decider.go, internal/systemone/evaluator.go, internal/systemone/guardrail.go, internal/systemone/systemone.go, internal/tool/read_session_memory.go, internal/tool/todo_write.go, internal/tool/tool.go, internal/tool/tool_search.go, internal/workflowui/server.go, internal/workflowui/settings_features_persist_test.go, internal/workflowui/settings_features_test.go
-- todos: 1|Compare session vs global memory query tokenization|completed|valid|done; 2|Add same-session turn recency as 50% of retrieval score (global + session)|in_progress|valid|open; 3|Update tests and verify|pending|valid|done
-
-Turn memory: 如果Jev搜不到，那么就回退到目前的ToolSearch
-
-## 2026-09-23 21:44:49 · session session-20260919-235046 · turn 71 · importance 0.35
-- keywords: todolist, todo-write
-- todos: 1|Remove auto-enable of unloaded MCP on Jev miss|in_progress|valid|done; 2|Keep query-only ToolSearch sticky\; miss = no enable|pending|valid|done; 3|Fix tests to match no-MCP-force policy|pending|valid|done
-
-Todolist update (3 items).
-
-## 2026-09-23 21:44:58 · session acp-1790167756954130200-1 · turn 8 · importance 0.60
-- keywords: tokenization, turn-recency, readmemory, readsessionmemory, layeredretriever
-- files: internal/app/jev.go, internal/app/session_memory.go, internal/app/session_memory_test.go, internal/jevlocal/evaluator.go, internal/jevlocal/lazy_ort.go, internal/memory/manager.go, internal/memory/memory.go, internal/memory/retriever.go, internal/sessionmemory/store.go, internal/tool/write_memory.go, unit_tests/memory_manager_test.go, unit_tests/memory_prompt_test.go
-- todos: 1|Remove auto-enable of unloaded MCP on Jev miss|in_progress|valid|open; 2|Keep query-only ToolSearch sticky\; miss = no enable|pending|valid|open; 3|Fix tests to match no-MCP-force policy|pending|valid|open
-
-Documented tokenization: session memory uses simple queryTerms (ASCII split + whole Chinese query fallback); durable memory uses queryTerms plus lexicalTokens/cjkBigrams/path/command vectors in LayeredRetriever. Implemented 50/50 ranking of content relevance and same-session turn recency for both ReadMemory and ReadSessionMemory. Skipped topk because limit already exists.
-
-## 2026-09-23 21:45:10 · session acp-1790167756954130200-1 · turn 8 · importance 0.35
-- keywords: todolist, todo-write
-- todos: 1|Compare session vs global memory query tokenization|completed|valid|done; 2|Add same-session turn recency as 50% of retrieval score (global + session)|completed|valid|done; 3|Update tests and verify|completed|valid|done
-
-Todolist update (3 items).
-
-## 2026-09-23 21:45:36 · session acp-1790167756954130200-1 · turn 8 · importance 0.40
-- keywords: turn, todolist
-- files: internal/app/session_memory_test.go, internal/engine/context_builder.go, internal/engine/tool_selector_test.go, internal/memory/manager.go, internal/memory/memory.go, internal/sessionmemory/store.go, internal/sessionmemory/store_test.go
-
-Turn memory: 我说的时limit已存在就不用topk了。查看分词有没有（会话记忆和全局记忆都查看一下)
-
-## 2026-09-23 21:45:45 · session session-20260919-235046 · turn 71 · importance 0.35
-- keywords: todolist, todo-write
-- todos: 1|Remove auto-enable of unloaded MCP on Jev miss|completed|valid|done; 2|Keep query-only ToolSearch sticky\; miss = no enable|completed|valid|done; 3|Fix tests to match no-MCP-force policy|completed|valid|done
-
-Todolist update (3 items).
-
-## 2026-09-23 21:46:58 · session session-20260919-235046 · turn 71 · importance 0.70
-- keywords: jev, toolsearch, mcp, folded, routing
-- files: internal/engine/engine.go, internal/jevlocal/builder.go, internal/jevlocal/engine.go, internal/jevlocal/evaluator.go, internal/jevlocal/evaluator_test.go, internal/jevlocal/family.go, internal/jevlocal/laya.go, internal/jevlocal/laya_test.go, internal/jevlocal/lazy_ort.go, internal/jevlocal/openjev.go, internal/jevlocal/openjev_family.go, internal/jevlocal/ort_engine.go, internal/jevlocal/ort_engine_test.go, internal/jevlocal/ort_install.go, internal/jevlocal/ort_install_test.go, internal/jevlocal/tensors.go, internal/jevlocal/tokenizer.go, internal/memory/manager.go, internal/sessionmemory/store.go, internal/sessionmemory/store_test.go, internal/sessionmemory/todos.go, internal/systemone/decider.go, internal/systemone/evaluator.go, internal/systemone/guardrail.go, internal/systemone/systemone.go, internal/tool/read_session_memory.go, internal/tool/todo_write.go, internal/tool/tool.go, internal/tool/tool_search.go, internal/workflowui/server.go, internal/workflowui/settings_features_persist_test.go, internal/workflowui/settings_features_test.go, internal/workflowui/static/app.js, internal/workflowui/static/index.html, scripts/install.ps1, scripts/install.sh, third_party/hfbpe/LICENSE, third_party/hfbpe/README.md, third_party/hfbpe/bpe.go, third_party/hfbpe/bytelevel.go
-
-Jev tool routing miss now falls back to query-only ToolSearch sticky enablement. Removed force-enabling registered MCP servers on miss; if neither Jev nor ToolSearch matches, nothing extra is enabled and classic FoldedTools remains for model-driven discovery.
-
-## 2026-09-23 21:47:48 · session session-20260919-235046 · turn 71 · importance 0.40
-- keywords: turn, todolist
-- files: cmd/solcode/main.go, examples/settings/settings.full.example.json, examples/settings/settings.jev.local.example.json, internal/app/session_judge.go, internal/app/session_memory.go, internal/app/session_memory_test.go, internal/checkpoint/store.go, internal/checkpoint/store_test.go, internal/engine/context_builder.go, internal/engine/engine.go, internal/engine/folded_tools.go, internal/engine/folded_tools_test.go, internal/engine/tool_selector_test.go, internal/jevlocal/artifact_test.go, internal/jevlocal/builder.go, internal/jevlocal/engine.go, internal/jevlocal/evaluator.go, internal/jevlocal/evaluator_test.go, internal/jevlocal/family.go, internal/jevlocal/laya.go, internal/jevlocal/laya_test.go, internal/jevlocal/lazy_ort.go, internal/jevlocal/openjev.go, internal/jevlocal/openjev_family.go, internal/jevlocal/ort_engine.go, internal/jevlocal/ort_engine_test.go, internal/jevlocal/ort_install.go, internal/jevlocal/ort_install_test.go, internal/jevlocal/tensors.go, internal/jevlocal/tokenizer.go, internal/memory/manager.go, internal/sessionmemory/store.go, internal/sessionmemory/store_test.go, internal/sessionmemory/todos.go, internal/systemone/decider.go, internal/systemone/evaluator.go, internal/systemone/guardrail.go, internal/systemone/systemone.go, internal/tool/read_session_memory.go, internal/tool/todo_write.go
-
-Turn memory: 禁止开启未启用的mcp。如果都没有查到那就是没有
+Turn memory: 那么开始写代码，启用后二者结果合并，如果Jev可用那么就Jev排序
