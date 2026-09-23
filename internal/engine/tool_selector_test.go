@@ -196,6 +196,44 @@ func TestEnableToolsFromSearch(t *testing.T) {
 	}
 }
 
+func TestEnableToolsFromQuerySticky(t *testing.T) {
+	enabled := map[string]bool{}
+	enableToolsFromQuery(sampleTools(), "office documents with officecli", enabled)
+	if !enabled["mcp__office__cli"] {
+		t.Fatalf("expected office tool sticky from query, got %#v", enabled)
+	}
+	if enabled[tool.BashToolName] {
+		t.Fatalf("core tools should not be sticky-marked: %#v", enabled)
+	}
+}
+
+func TestEnableToolsFromQueryDoesNotForceMCPOnMiss(t *testing.T) {
+	// A CJK prompt that does not lexically match English MCP metadata must not
+	// auto-enable registered MCP servers. Miss means miss; FoldedTools remains.
+	all := []tool.Tool{
+		&stubTool{name: tool.BashToolName, desc: "run shell"},
+		&stubTool{name: tool.ToolSearchToolName, desc: "search tools"},
+		&stubTool{name: "mcp__godot-mcp__create-scene", desc: "Create a Godot scene"},
+		&stubTool{name: "mcp__deepwiki__ask-wiki-question", desc: "Ask a wiki question"},
+		&stubTool{name: "mcp__officecli__officecli", desc: "Office CLI"},
+		&stubTool{name: "WebSearch", desc: "Search the web"},
+	}
+	enabled := map[string]bool{}
+	enableToolsFromQuery(all, "帮我改一下场景并查资料", enabled)
+	if hasNonCoreEnabled(enabled) {
+		t.Fatalf("miss must not force-enable MCP/builtins, got %#v", enabled)
+	}
+}
+
+func TestHasNonCoreEnabled(t *testing.T) {
+	if hasNonCoreEnabled(nil) || hasNonCoreEnabled(map[string]bool{tool.BashToolName: true}) {
+		t.Fatal("core-only map must report false")
+	}
+	if !hasNonCoreEnabled(map[string]bool{"mcp__office__cli": true}) {
+		t.Fatal("non-core sticky must report true")
+	}
+}
+
 func TestToolSearchQueryJSON(t *testing.T) {
 	if q := toolSearchQuery([]byte(`{"query":"godot scene","limit":2}`)); q != "godot scene" {
 		t.Fatalf("query = %q", q)

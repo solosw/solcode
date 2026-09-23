@@ -193,6 +193,41 @@ func enableToolsFromSearch(all []tool.Tool, input []byte, enabled map[string]boo
 	}
 }
 
+// enableToolsFromQuery is the engine-side equivalent of the model calling
+// ToolSearch with kind=tool. Used when Jev routing runs on a lexical miss but
+// enables nothing: only tools that actually match the query become sticky.
+// No MCP server is force-enabled just because it is registered. A total miss
+// leaves FoldedTools / the model's own ToolSearch as the discovery path.
+func enableToolsFromQuery(all []tool.Tool, query string, enabled map[string]bool) {
+	query = strings.TrimSpace(query)
+	if query == "" || enabled == nil {
+		return
+	}
+	input, err := json.Marshal(map[string]any{
+		"query": query,
+		"kind":  "tool",
+		"limit": 5,
+	})
+	if err != nil {
+		return
+	}
+	enableToolsFromSearch(all, input, enabled)
+}
+
+// hasNonCoreEnabled reports whether sticky enablement already includes a
+// non-core, model-visible tool. Used to decide whether a ToolSearch fallback
+// is still needed after Jev routing.
+func hasNonCoreEnabled(enabled map[string]bool) bool {
+	for name := range enabled {
+		name = strings.TrimSpace(name)
+		if name == "" || coreToolNames[name] || hiddenFromModel[name] {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
 // selectionQuery combines the user prompt with recent message text so later
 // turns can still surface relevant MCP tools without re-sending the full catalog.
 func selectionQuery(prompt string, messagesText string) string {

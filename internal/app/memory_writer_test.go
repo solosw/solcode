@@ -59,6 +59,58 @@ func TestAppWriteMemoryPersistsEntry(t *testing.T) {
 	}
 }
 
+func TestAppWriteMemoryRecordsCheckpointTurnAndAllowsDuplicates(t *testing.T) {
+	application := newMemoryWriterApp(t)
+	application.Config.WorkDir = t.TempDir()
+	application.Config.Session.Dir = t.TempDir()
+	application.Config.Session.DefaultSession = "main"
+	application.beginCheckpointTurn("main", application.Config.WorkDir, "remember turn")
+
+	req := tool.MemoryWriteRequest{
+		Text:      "Build the CLI with go build ./cmd/solcode before manual checks.",
+		Kind:      "workflow",
+		SessionID: "main",
+		WorkDir:   application.Config.WorkDir,
+	}
+	first, err := application.WriteMemory(context.Background(), req)
+	if err != nil {
+		t.Fatalf("first WriteMemory() = %v", err)
+	}
+	if !first.Stored || first.Merged {
+		t.Fatalf("first = %#v, want a newly stored entry", first)
+	}
+	if first.Turn < 0 {
+		t.Fatalf("turn = %d, want a real checkpoint turn", first.Turn)
+	}
+
+	second, err := application.WriteMemory(context.Background(), req)
+	if err != nil {
+		t.Fatalf("second WriteMemory() = %v", err)
+	}
+	if !second.Stored || second.Merged {
+		t.Fatalf("second = %#v, want a duplicate stored entry", second)
+	}
+	if second.Turn != first.Turn {
+		t.Fatalf("second turn = %d, want %d", second.Turn, first.Turn)
+	}
+	if second.ID == first.ID {
+		t.Fatalf("duplicate write reused id %q", second.ID)
+	}
+
+	items, err := application.MemoryStore.List(context.Background())
+	if err != nil {
+		t.Fatalf("List() = %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("stored items = %d, want 2 duplicates", len(items))
+	}
+	for _, item := range items {
+		if item.SourceTurn != first.Turn {
+			t.Fatalf("item turn = %d, want %d", item.SourceTurn, first.Turn)
+		}
+	}
+}
+
 func TestAppWriteMemoryTierFollowsKind(t *testing.T) {
 	cases := []struct {
 		kind string
@@ -100,7 +152,7 @@ func TestAppWriteMemoryRejectsSensitiveContent(t *testing.T) {
 	}
 }
 
-func TestAppWriteMemoryMergesNearDuplicate(t *testing.T) {
+func TestAppWriteMemoryAllowsNearDuplicate(t *testing.T) {
 	application := newMemoryWriterApp(t)
 	req := tool.MemoryWriteRequest{
 		Text:      "Build the CLI with go build ./cmd/solcode before manual checks.",
@@ -116,16 +168,16 @@ func TestAppWriteMemoryMergesNearDuplicate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second WriteMemory() = %v", err)
 	}
-	if !result.Merged {
-		t.Fatalf("result = %#v, want the near-duplicate to merge", result)
+	if result.Merged || !result.Stored {
+		t.Fatalf("result = %#v, want a second stored entry without merging", result)
 	}
 
 	items, err := application.MemoryStore.List(context.Background())
 	if err != nil {
 		t.Fatalf("List() = %v", err)
 	}
-	if len(items) != 1 {
-		t.Fatalf("stored items = %d, want the entries merged into 1", len(items))
+	if len(items) != 2 {
+		t.Fatalf("stored items = %d, want both writes kept", len(items))
 	}
 }
 

@@ -61,6 +61,9 @@ type Item struct {
 	LastAccessedAt     time.Time `json:"last_accessed_at"`
 	LastReinforcedAt   time.Time `json:"last_reinforced_at,omitempty"`
 	SourceSessionID    string    `json:"source_session_id,omitempty"`
+	// SourceTurn is the checkpoint turn that authored this entry when known.
+	// Zero means unset; negative values (e.g. -1) mean no active turn.
+	SourceTurn         int       `json:"source_turn,omitempty"`
 	DerivedFromSummary bool      `json:"derived_from_summary,omitempty"`
 	JudgeReason        string    `json:"judge_reason,omitempty"`
 	JudgeModel         string    `json:"judge_model,omitempty"`

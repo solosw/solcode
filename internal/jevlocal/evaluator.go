@@ -15,13 +15,15 @@ type Options struct {
 	Model    string
 	DType    string
 	// EngineName selects a built-in InferenceEngine when Engine is nil.
-	// Empty and "ort" load ONNX Runtime. "stub"/"unimplemented" keep the
-	// unimplemented backend so Ask fails into Decider fallbacks.
+	// Empty and "ort" start ONNX Runtime asynchronously (New returns before
+	// the session is Ready). "stub"/"unimplemented" keep the unimplemented
+	// backend so Ask fails into Decider fallbacks.
 	EngineName string
 	// ORTLib is an optional path to onnxruntime.dll / .so for engine=ort.
 	ORTLib string
 	// Engine overrides the inference backend. Nil selects from EngineName
-	// (or UnimplementedEngine when stub/unavailable).
+	// (or UnimplementedEngine when stub/unavailable). Injected engines are
+	// used as-is and are not wrapped in the async ORT loader.
 	Engine InferenceEngine
 }
 
@@ -66,14 +68,9 @@ func defaultEngine(arts Artifacts, opts Options) (InferenceEngine, error) {
 	case "stub", "unimplemented":
 		return UnimplementedEngine{}, nil
 	case "", EngineORT:
-		lib, err := EnsureORTLibrary(opts.ORTLib)
-		if err != nil {
-			return nil, fmt.Errorf("%w: %v", ErrEngineNotReady, err)
-		}
-		return NewORTEngine(ORTOptions{
-			ModelPath:     arts.ONNXPath,
-			SharedLibrary: lib,
-		})
+		// Async: return immediately so app.New / ReloadFeatures are not blocked
+		// by ORT shared-lib install + session create. Ask falls back until Ready.
+		return startLoadingORTEngine(arts.ONNXPath, opts.ORTLib), nil
 	case "onnx-go":
 		// Reserved: pure-Go backend not wired yet (onnx-go/gorgonnx cannot load
 		// OpenJev INT4 or reliably run Laya). Prefer engine=ort with auto-install.
@@ -115,6 +112,38 @@ func (e *LocalEvaluator) EngineName() string {
 	return e.engine.Name()
 }
 
+// EngineReady reports whether the underlying InferenceEngine can RunNamed.
+func (e *LocalEvaluator) EngineReady() bool {
+	if e == nil || e.engine == nil {
+		return false
+	}
+	return e.engine.Ready()
+}
+
+// WaitEngine blocks until an async ORT load settles (or returns immediately for
+// sync engines). Intended for tests and optional readiness logging.
+func (e *LocalEvaluator) WaitEngine() {
+	if e == nil {
+		return
+	}
+	if loader, ok := e.engine.(*loadingORTEngine); ok {
+		loader.Wait()
+	}
+}
+
+// OnEngineReady invokes fn once after an async ORT load settles. Sync engines
+// call fn immediately on a new goroutine.
+func (e *LocalEvaluator) OnEngineReady(fn func(ready bool, err error)) {
+	if e == nil || fn == nil {
+		return
+	}
+	if loader, ok := e.engine.(*loadingORTEngine); ok {
+		loader.notifyLoadOnce(fn)
+		return
+	}
+	go fn(e.EngineReady(), nil)
+}
+
 // Close releases the underlying engine.
 func (e *LocalEvaluator) Close() error {
 	if e == nil || e.engine == nil {
@@ -133,6 +162,12 @@ func (e *LocalEvaluator) Ask(ctx context.Context, state any, questions map[strin
 		return systemone.Answers{}, systemone.Usage{}, nil
 	}
 	if e.engine == nil || !e.engine.Ready() {
+		if loader, ok := e.engine.(*loadingORTEngine); ok {
+			if err := loader.LoadError(); err != nil {
+				return nil, systemone.Usage{}, err
+			}
+			return nil, systemone.Usage{}, fmt.Errorf("%w (ort loading)", ErrEngineNotReady)
+		}
 		return nil, systemone.Usage{}, fmt.Errorf("%w (%s)", ErrEngineNotReady, e.EngineName())
 	}
 	if e.family == nil {

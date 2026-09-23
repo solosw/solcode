@@ -79,7 +79,7 @@ func (r LayeredRetriever) Retrieve(items []Item, plan RetrievalPlan) []Item {
 		grouped[item.Tier] = append(grouped[item.Tier], item)
 	}
 	for tier := range grouped {
-		grouped[tier] = sortByTierRelevance(grouped[tier], profile)
+		grouped[tier] = sortByTierRelevance(grouped[tier], profile, plan.SessionID)
 	}
 	capacity := plan.TotalLimit
 	if capacity <= 0 {
@@ -116,7 +116,7 @@ func (r LayeredRetriever) Retrieve(items []Item, plan RetrievalPlan) []Item {
 			}
 			rest = append(rest, item)
 		}
-		rest = sortByTierRelevance(rest, profile)
+		rest = sortByTierRelevance(rest, profile, plan.SessionID)
 		for _, item := range rest {
 			if len(result) >= plan.TotalLimit {
 				break
@@ -127,17 +127,104 @@ func (r LayeredRetriever) Retrieve(items []Item, plan RetrievalPlan) []Item {
 	return result
 }
 
-func sortByTierRelevance(items []Item, profile retrievalProfile) []Item {
+func sortByTierRelevance(items []Item, profile retrievalProfile, sessionID string) []Item {
 	out := append([]Item(nil), items...)
+	if len(out) == 0 {
+		return out
+	}
 	now := time.Now()
+	content := make([]float64, len(out))
+	for i, item := range out {
+		content[i] = layeredScore(item, profile, now)
+	}
+	contentNorm := minMaxNormalize(content)
+	turnNorm := sameSessionTurnScores(out, sessionID)
 	sort.SliceStable(out, func(i, j int) bool {
-		si := layeredScore(out[i], profile, now)
-		sj := layeredScore(out[j], profile, now)
+		si := 0.5*contentNorm[i] + 0.5*turnNorm[i]
+		sj := 0.5*contentNorm[j] + 0.5*turnNorm[j]
 		if si == sj {
+			if turnNorm[i] != turnNorm[j] {
+				return turnNorm[i] > turnNorm[j]
+			}
 			return out[i].UpdatedAt.After(out[j].UpdatedAt)
 		}
 		return si > sj
 	})
+	return out
+}
+
+// sameSessionTurnScores maps each item to [0,1] turn recency within the
+// current session. Other-session / unset turns score 0. When all same-session
+// turns are equal, they score 0.5 so content still decides ties.
+func sameSessionTurnScores(items []Item, sessionID string) []float64 {
+	out := make([]float64, len(items))
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" || len(items) == 0 {
+		return out
+	}
+	minTurn, maxTurn := 0, 0
+	saw := false
+	for _, item := range items {
+		if strings.TrimSpace(item.SourceSessionID) != sessionID {
+			continue
+		}
+		if !saw {
+			minTurn, maxTurn = item.SourceTurn, item.SourceTurn
+			saw = true
+			continue
+		}
+		if item.SourceTurn < minTurn {
+			minTurn = item.SourceTurn
+		}
+		if item.SourceTurn > maxTurn {
+			maxTurn = item.SourceTurn
+		}
+	}
+	if !saw {
+		return out
+	}
+	if minTurn == maxTurn {
+		for i, item := range items {
+			if strings.TrimSpace(item.SourceSessionID) == sessionID {
+				out[i] = 0.5
+			}
+		}
+		return out
+	}
+	span := float64(maxTurn - minTurn)
+	for i, item := range items {
+		if strings.TrimSpace(item.SourceSessionID) != sessionID {
+			continue
+		}
+		out[i] = float64(item.SourceTurn-minTurn) / span
+	}
+	return out
+}
+
+func minMaxNormalize(values []float64) []float64 {
+	out := make([]float64, len(values))
+	if len(values) == 0 {
+		return out
+	}
+	minV, maxV := values[0], values[0]
+	for _, v := range values[1:] {
+		if v < minV {
+			minV = v
+		}
+		if v > maxV {
+			maxV = v
+		}
+	}
+	if minV == maxV {
+		for i := range out {
+			out[i] = 0.5
+		}
+		return out
+	}
+	span := maxV - minV
+	for i, v := range values {
+		out[i] = (v - minV) / span
+	}
 	return out
 }
 

@@ -52,7 +52,7 @@ func (a *App) WriteSessionMemory(ctx context.Context, req tool.SessionMemoryWrit
 	todos := a.judgeCurrentTodos(ctx, workDir, task)
 	now := time.Now()
 
-	entry, err := store.Append(ctx, sessionmemory.Entry{
+	entry, _, err := store.UpsertBySessionTurn(ctx, sessionmemory.Entry{
 		Keywords:   req.Keywords,
 		Summary:    req.Summary,
 		Importance: req.Importance,
@@ -153,7 +153,7 @@ func (a *App) recordTurnSessionMemory(ctx context.Context, sessionID, workDir, p
 		summaryText = string([]rune(summaryText)[:400]) + "…"
 	}
 	summaryText = "Turn memory: " + summaryText
-	_, err := store.Append(ctx, sessionmemory.Entry{
+	_, _, err := store.UpsertBySessionTurn(ctx, sessionmemory.Entry{
 		Keywords:   []string{"turn", "todolist"},
 		Summary:    summaryText,
 		Importance: 0.4,
@@ -169,8 +169,9 @@ func (a *App) recordTurnSessionMemory(ctx context.Context, sessionID, workDir, p
 }
 
 // recordTodoSessionMemory writes a todolist snapshot after each successful
-// TodoWrite. Mid-turn updates are recorded separately from the turn-end entry
-// so a conversation with many TodoWrite calls keeps every intermediate state.
+// TodoWrite. Multiple writes in the same session turn upsert into one entry:
+// keywords/files are unioned and todos are replaced by the latest Jev-judged
+// snapshot so solcode.md never repeats the same session+turn.
 // Failures are logged and ignored.
 func (a *App) recordTodoSessionMemory(ctx context.Context, sessionID, workDir string, todos []tool.TodoItem) {
 	if a == nil {
@@ -199,7 +200,7 @@ func (a *App) recordTodoSessionMemory(ctx context.Context, sessionID, workDir st
 		judged = nil
 	}
 	summaryText := fmt.Sprintf("Todolist update (%d items).", len(todos))
-	_, err := store.Append(ctx, sessionmemory.Entry{
+	_, _, err := store.UpsertBySessionTurn(ctx, sessionmemory.Entry{
 		Keywords:   []string{"todolist", "todo-write"},
 		Summary:    summaryText,
 		Importance: 0.35,

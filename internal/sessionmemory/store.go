@@ -91,6 +91,68 @@ func (s *Store) Append(ctx context.Context, entry Entry) (Entry, error) {
 		return Entry{}, err
 	}
 
+	entry, err := normalizeEntry(entry)
+	if err != nil {
+		return Entry{}, err
+	}
+	if err := s.ensureFile(); err != nil {
+		return Entry{}, err
+	}
+
+	f, err := os.OpenFile(s.path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return Entry{}, fmt.Errorf("open session memory: %w", err)
+	}
+	defer f.Close()
+	if _, err := f.WriteString(formatEntry(entry)); err != nil {
+		return Entry{}, fmt.Errorf("append session memory: %w", err)
+	}
+	return entry, nil
+}
+
+// UpsertBySessionTurn keeps one entry per (SessionID, Turn). When an entry for
+// that pair already exists, keywords/files are unioned, todos are replaced by
+// the incoming (latest) snapshot, and summary/time/importance take the new
+// values. Otherwise the entry is appended.
+func (s *Store) UpsertBySessionTurn(ctx context.Context, entry Entry) (Entry, bool, error) {
+	if s == nil || s.path == "" {
+		return Entry{}, false, fmt.Errorf("session memory path is empty")
+	}
+	if err := ctx.Err(); err != nil {
+		return Entry{}, false, err
+	}
+
+	entry, err := normalizeEntry(entry)
+	if err != nil {
+		return Entry{}, false, err
+	}
+
+	existing, err := s.List(ctx)
+	if err != nil {
+		return Entry{}, false, err
+	}
+
+	idx := -1
+	for i := len(existing) - 1; i >= 0; i-- {
+		if existing[i].SessionID == entry.SessionID && existing[i].Turn == entry.Turn {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		stored, err := s.Append(ctx, entry)
+		return stored, false, err
+	}
+
+	merged := mergeSessionTurnEntry(existing[idx], entry)
+	existing[idx] = merged
+	if err := s.rewrite(existing); err != nil {
+		return Entry{}, false, err
+	}
+	return merged, true, nil
+}
+
+func normalizeEntry(entry Entry) (Entry, error) {
 	entry.Summary = strings.TrimSpace(entry.Summary)
 	if entry.Summary == "" {
 		return Entry{}, fmt.Errorf("summary is required")
@@ -110,29 +172,53 @@ func (s *Store) Append(ctx context.Context, entry Entry) (Entry, error) {
 	}
 	entry.Files = normalizeFiles(entry.Files)
 	entry.SessionID = strings.TrimSpace(entry.SessionID)
+	return entry, nil
+}
 
+func mergeSessionTurnEntry(prev, next Entry) Entry {
+	out := next
+	out.Keywords = normalizeKeywords(append(append([]string{}, prev.Keywords...), next.Keywords...))
+	out.Files = normalizeFiles(append(append([]string{}, prev.Files...), next.Files...))
+	// Todos come from the newest write: TodoWrite is a full-list replacement,
+	// and turn-end / model-authored memories already carry the latest snapshot.
+	out.Todos = next.Todos
+	out.Summary = next.Summary
+	out.Importance = next.Importance
+	out.Time = next.Time
+	out.SessionID = next.SessionID
+	out.Turn = next.Turn
+	return out
+}
+
+func (s *Store) ensureFile() error {
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
-		return Entry{}, fmt.Errorf("create session memory dir: %w", err)
+		return fmt.Errorf("create session memory dir: %w", err)
 	}
 	existing, err := os.ReadFile(s.path)
 	if err != nil && !os.IsNotExist(err) {
-		return Entry{}, fmt.Errorf("read session memory: %w", err)
+		return fmt.Errorf("read session memory: %w", err)
 	}
 	if len(strings.TrimSpace(string(existing))) == 0 {
 		if err := os.WriteFile(s.path, []byte(Header), 0o644); err != nil {
-			return Entry{}, fmt.Errorf("write session memory header: %w", err)
+			return fmt.Errorf("write session memory header: %w", err)
 		}
 	}
+	return nil
+}
 
-	f, err := os.OpenFile(s.path, os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		return Entry{}, fmt.Errorf("open session memory: %w", err)
+func (s *Store) rewrite(entries []Entry) error {
+	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
+		return fmt.Errorf("create session memory dir: %w", err)
 	}
-	defer f.Close()
-	if _, err := f.WriteString(formatEntry(entry)); err != nil {
-		return Entry{}, fmt.Errorf("append session memory: %w", err)
+	var b strings.Builder
+	b.WriteString(Header)
+	for _, entry := range entries {
+		b.WriteString(formatEntry(entry))
 	}
-	return entry, nil
+	if err := os.WriteFile(s.path, []byte(b.String()), 0o644); err != nil {
+		return fmt.Errorf("rewrite session memory: %w", err)
+	}
+	return nil
 }
 
 // Read returns entries newest-first. When sessionID is non-empty, only entries
@@ -172,12 +258,12 @@ func (s *Store) ReadForSession(ctx context.Context, sessionID, query string, lim
 	terms := queryTerms(query)
 	lower := strings.ToLower(query)
 	type scored struct {
-		entry Entry
-		score int
+		entry   Entry
+		content float64
 	}
 	var hits []scored
 	for _, entry := range entries {
-		score := 0
+		content := 0.0
 		haystack := strings.ToLower(entry.Summary)
 		keywords := make([]string, 0, len(entry.Keywords))
 		for _, kw := range entry.Keywords {
@@ -185,32 +271,97 @@ func (s *Store) ReadForSession(ctx context.Context, sessionID, query string, lim
 		}
 		for _, term := range terms {
 			if keywordContains(keywords, term) {
-				score += 5
+				content += 5
 			}
 			if strings.Contains(haystack, term) {
-				score += 2
+				content += 2
 			}
 		}
 		// Whole-query substring is a strong signal (e.g. "checkpoint rewind").
 		if lower != "" && strings.Contains(haystack, lower) {
-			score += 4
+			content += 4
 		}
-		if score == 0 {
+		if content == 0 {
 			continue
 		}
-		hits = append(hits, scored{entry: entry, score: score})
+		hits = append(hits, scored{entry: entry, content: content})
 	}
+
+	contentVals := make([]float64, len(hits))
+	turnVals := make([]float64, len(hits))
+	minTurn, maxTurn := 0, 0
+	sawTurn := false
+	for i, hit := range hits {
+		contentVals[i] = hit.content
+		turnVals[i] = float64(hit.entry.Turn)
+		if !sawTurn {
+			minTurn, maxTurn = hit.entry.Turn, hit.entry.Turn
+			sawTurn = true
+			continue
+		}
+		if hit.entry.Turn < minTurn {
+			minTurn = hit.entry.Turn
+		}
+		if hit.entry.Turn > maxTurn {
+			maxTurn = hit.entry.Turn
+		}
+	}
+	contentNorm := minMaxNormalizeFloats(contentVals)
+	turnNorm := make([]float64, len(hits))
+	if sawTurn && minTurn == maxTurn {
+		for i := range turnNorm {
+			turnNorm[i] = 0.5
+		}
+	} else if sawTurn {
+		span := float64(maxTurn - minTurn)
+		for i, hit := range hits {
+			turnNorm[i] = float64(hit.entry.Turn-minTurn) / span
+		}
+	}
+
 	sort.SliceStable(hits, func(i, j int) bool {
-		if hits[i].score == hits[j].score {
+		si := 0.5*contentNorm[i] + 0.5*turnNorm[i]
+		sj := 0.5*contentNorm[j] + 0.5*turnNorm[j]
+		if si == sj {
+			if hits[i].entry.Turn != hits[j].entry.Turn {
+				return hits[i].entry.Turn > hits[j].entry.Turn
+			}
 			return hits[i].entry.Time.After(hits[j].entry.Time)
 		}
-		return hits[i].score > hits[j].score
+		return si > sj
 	})
 	out := make([]Entry, 0, min(limit, len(hits)))
 	for i := 0; i < len(hits) && i < limit; i++ {
 		out = append(out, hits[i].entry)
 	}
 	return out, nil
+}
+
+func minMaxNormalizeFloats(values []float64) []float64 {
+	out := make([]float64, len(values))
+	if len(values) == 0 {
+		return out
+	}
+	minV, maxV := values[0], values[0]
+	for _, v := range values[1:] {
+		if v < minV {
+			minV = v
+		}
+		if v > maxV {
+			maxV = v
+		}
+	}
+	if minV == maxV {
+		for i := range out {
+			out[i] = 0.5
+		}
+		return out
+	}
+	span := maxV - minV
+	for i, v := range values {
+		out[i] = (v - minV) / span
+	}
+	return out
 }
 
 func filterEntriesBySession(entries []Entry, sessionID string) []Entry {

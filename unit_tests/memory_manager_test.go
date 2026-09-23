@@ -40,6 +40,55 @@ func (s *stubExtractor) ExtractMemories(ctx context.Context, input memory.Extrac
 	return s.judgements, nil
 }
 
+func TestMemoryManagerRememberDirectAllowsDuplicatesWithTurn(t *testing.T) {
+	ctx := context.Background()
+	store := memory.NewFileStore(t.TempDir())
+	manager := memory.NewManager(store, memory.DefaultGate{}, nil)
+
+	first, err := manager.RememberDirect(ctx, memory.DirectInput{
+		Text:            "CLI build uses go build ./cmd/solcode.",
+		Kind:            memory.KindWorkflow,
+		Scope:           memory.ScopeProject,
+		Tier:            memory.TierProcedural,
+		SourceSessionID: "main",
+		SourceTurn:      7,
+		AllowDuplicate:  true,
+	})
+	if err != nil {
+		t.Fatalf("first RememberDirect: %v", err)
+	}
+	if !first.Stored || first.Merged || first.Item.SourceTurn != 7 {
+		t.Fatalf("first = %#v", first)
+	}
+
+	second, err := manager.RememberDirect(ctx, memory.DirectInput{
+		Text:            "CLI build uses go build ./cmd/solcode.",
+		Kind:            memory.KindWorkflow,
+		Scope:           memory.ScopeProject,
+		Tier:            memory.TierProcedural,
+		SourceSessionID: "main",
+		SourceTurn:      7,
+		AllowDuplicate:  true,
+	})
+	if err != nil {
+		t.Fatalf("second RememberDirect: %v", err)
+	}
+	if !second.Stored || second.Merged {
+		t.Fatalf("second = %#v, want a duplicate stored entry", second)
+	}
+	if second.Item.ID == first.Item.ID {
+		t.Fatalf("duplicate reused id %q", second.Item.ID)
+	}
+
+	items, err := store.List(ctx)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("stored items = %d, want 2", len(items))
+	}
+}
+
 func TestMemoryManagerRememberExplicitUsesJudgeResult(t *testing.T) {
 	ctx := context.Background()
 	store := memory.NewFileStore(t.TempDir())
@@ -261,6 +310,19 @@ func TestLayeredRetrieverUsesSegmentedVectorSimilarity(t *testing.T) {
 	got := (memory.LayeredRetriever{}).Retrieve(items, memory.RetrievalPlan{Query: "上下文构建器 context builder memory injection 怎么改的", SessionID: "s1", AllowCrossSession: true, TotalLimit: 2, M2Limit: 1, M3Limit: 2, M4Limit: 1, M5Limit: 1})
 	if len(got) == 0 || got[0].ID != "vector" {
 		t.Fatalf("expected segmented vector-similar memory first, got %#v", got)
+	}
+}
+
+func TestLayeredRetrieverPrefersHigherSameSessionTurn(t *testing.T) {
+	now := time.Now()
+	items := []memory.Item{
+		{ID: "old-turn", Tier: memory.TierLongTerm, Kind: memory.KindFact, Text: "CLI build uses go build ./cmd/solcode.", Importance: 0.9, Confidence: 0.9, AccessCount: 3, UpdatedAt: now, LastAccessedAt: now, SourceSessionID: "s1", SourceTurn: 3},
+		{ID: "new-turn", Tier: memory.TierLongTerm, Kind: memory.KindFact, Text: "CLI build uses go build ./cmd/solcode.", Importance: 0.7, Confidence: 0.8, AccessCount: 1, UpdatedAt: now.Add(-time.Hour), LastAccessedAt: now.Add(-time.Hour), SourceSessionID: "s1", SourceTurn: 12},
+		{ID: "other-session", Tier: memory.TierLongTerm, Kind: memory.KindFact, Text: "CLI build uses go build ./cmd/solcode.", Importance: 0.95, Confidence: 0.95, AccessCount: 5, UpdatedAt: now, LastAccessedAt: now, SourceSessionID: "other", SourceTurn: 99},
+	}
+	got := (memory.LayeredRetriever{}).Retrieve(items, memory.RetrievalPlan{Query: "go build ./cmd/solcode", SessionID: "s1", AllowCrossSession: true, TotalLimit: 3, M2Limit: 1, M3Limit: 1, M4Limit: 3, M5Limit: 1})
+	if len(got) == 0 || got[0].ID != "new-turn" {
+		t.Fatalf("expected higher same-session turn first, got %#v", got)
 	}
 }
 

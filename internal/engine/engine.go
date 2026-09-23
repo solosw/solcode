@@ -297,6 +297,13 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 					}
 					enabledTools[name] = true
 				}
+				// Jev declined or fell back: same discovery as ToolSearch —
+				// sticky-enable only query hits this turn. A total miss means
+				// nothing extra is enabled; FoldedTools keeps the model-driven
+				// ToolSearch path without auto-opening MCP servers.
+				if !hasNonCoreEnabled(enabledTools) {
+					enableToolsFromQuery(allTools, prompt, enabledTools)
+				}
 				tools = SelectToolsForTurn(allTools, cfg.AllowedTools, selectionQuery(prompt, ""), enabledTools)
 			}
 		}

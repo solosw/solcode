@@ -229,6 +229,12 @@ type DirectInput struct {
 	Importance      float64
 	Reason          string
 	SourceSessionID string
+	// SourceTurn is the checkpoint turn that authored this write when known.
+	// Zero means unset.
+	SourceTurn int
+	// AllowDuplicate skips near-duplicate merging so callers that want one
+	// entry per write (e.g. WriteMemory) can keep repeats.
+	AllowDuplicate bool
 }
 
 // DirectOutcome reports how a direct write was resolved.
@@ -281,28 +287,37 @@ func (m *Manager) RememberDirect(ctx context.Context, input DirectInput) (Direct
 	candidate.JudgeReason = strings.TrimSpace(input.Reason)
 	candidate.JudgeModel = "tool-write-memory"
 	candidate.JudgeVersion = "v1"
+	candidate.SourceTurn = input.SourceTurn
 	if input.Importance > 0 {
 		importance := clampUnit(input.Importance)
 		candidate.Importance = importance
 		candidate.RetentionScore = importance
 	}
 
-	for _, existing := range workingItems {
-		if !shouldMergeCandidate(existing, candidate) {
-			continue
+	if !input.AllowDuplicate {
+		for _, existing := range workingItems {
+			if !shouldMergeCandidate(existing, candidate) {
+				continue
+			}
+			merged := m.lifecycle().Apply(mergeItems(existing, candidate, now), now)
+			saved, err := m.Store.Save(ctx, merged)
+			if err != nil {
+				return DirectOutcome{}, err
+			}
+			return DirectOutcome{
+				Item:     saved,
+				Stored:   true,
+				Merged:   true,
+				MergedID: saved.ID,
+				Reason:   "merged into an existing related memory",
+			}, nil
 		}
-		merged := m.lifecycle().Apply(mergeItems(existing, candidate, now), now)
-		saved, err := m.Store.Save(ctx, merged)
-		if err != nil {
-			return DirectOutcome{}, err
-		}
-		return DirectOutcome{
-			Item:     saved,
-			Stored:   true,
-			Merged:   true,
-			MergedID: saved.ID,
-			Reason:   "merged into an existing related memory",
-		}, nil
+	} else if candidate.SourceTurn != 0 {
+		// Duplicate-allowed writes still need distinct file IDs when the
+		// text (and therefore stableID) matches an earlier entry.
+		candidate.ID = fmt.Sprintf("%s-t%d-%d", candidate.ID, candidate.SourceTurn, now.UnixNano())
+	} else {
+		candidate.ID = fmt.Sprintf("%s-%d", candidate.ID, now.UnixNano())
 	}
 
 	candidate = m.lifecycle().Apply(candidate, now)
@@ -422,7 +437,7 @@ func (m *Manager) limitWorkingSet(ctx context.Context, query, sourceSessionID st
 	if len(items) <= memoryWorkingSetLimit {
 		return items, nil
 	}
-	sorted := sortByTierRelevance(items, analyzeRetrievalQuery(query))
+	sorted := sortByTierRelevance(items, analyzeRetrievalQuery(query), sourceSessionID)
 	selected := append([]Item(nil), sorted[:memoryWorkingSetLimit]...)
 	selectedIDs := itemIDSet(selected)
 	for _, item := range items {
@@ -627,6 +642,9 @@ func mergeItems(existing Item, candidate Item, now time.Time) Item {
 	existing.DerivedFromSummary = existing.DerivedFromSummary || candidate.DerivedFromSummary
 	if existing.SourceSessionID == "" {
 		existing.SourceSessionID = candidate.SourceSessionID
+	}
+	if candidate.SourceTurn != 0 {
+		existing.SourceTurn = candidate.SourceTurn
 	}
 	if strings.TrimSpace(candidate.JudgeReason) != "" {
 		existing.JudgeReason = candidate.JudgeReason

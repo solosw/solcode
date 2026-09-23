@@ -11,7 +11,9 @@ import (
 )
 
 // WriteMemory implements tool.MemoryWriter so the model can decide, mid-task,
-// that something is worth remembering across sessions.
+// that something is worth remembering across sessions. Each WriteMemory call
+// is stored as its own entry (duplicates allowed) and tagged with the current
+// checkpoint turn when one is open.
 func (a *App) WriteMemory(ctx context.Context, req tool.MemoryWriteRequest) (tool.MemoryWriteResult, error) {
 	if a == nil || a.MemoryManager == nil || !a.Config.Memory.Enabled {
 		return tool.MemoryWriteResult{}, fmt.Errorf("memory is not enabled")
@@ -21,6 +23,11 @@ func (a *App) WriteMemory(ctx context.Context, req tool.MemoryWriteRequest) (too
 	if sessionID == "" {
 		sessionID = a.Config.Session.DefaultSession
 	}
+	workDir := strings.TrimSpace(req.WorkDir)
+	if workDir == "" {
+		workDir = a.Config.WorkDir
+	}
+	turn, _ := a.checkpointTurnAndFiles(sessionID, workDir)
 
 	outcome, err := a.MemoryManager.RememberDirect(ctx, memory.DirectInput{
 		Text:            req.Text,
@@ -31,6 +38,8 @@ func (a *App) WriteMemory(ctx context.Context, req tool.MemoryWriteRequest) (too
 		Importance:      req.Importance,
 		Reason:          req.Reason,
 		SourceSessionID: sessionID,
+		SourceTurn:      turn,
+		AllowDuplicate:  true,
 	})
 	if err != nil {
 		return tool.MemoryWriteResult{}, err
@@ -47,6 +56,7 @@ func (a *App) WriteMemory(ctx context.Context, req tool.MemoryWriteRequest) (too
 		result.Tier = string(outcome.Item.Tier)
 		result.Kind = string(outcome.Item.Kind)
 		result.Scope = string(outcome.Item.Scope)
+		result.Turn = outcome.Item.SourceTurn
 	}
 	return result, nil
 }

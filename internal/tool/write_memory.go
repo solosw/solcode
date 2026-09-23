@@ -33,6 +33,8 @@ type MemoryWriteResult struct {
 	Tier   string
 	Kind   string
 	Scope  string
+	// Turn is the checkpoint turn recorded with the entry when known.
+	Turn   int
 	Stored bool
 	Merged bool
 	// Reason explains a rejection (e.g. sensitive content) or the merge target.
@@ -102,9 +104,10 @@ How to write the entry:
 - state the fact, not the story of how you found it
 - to fix something remembered wrong, just save the corrected statement
 
-Saving twice is safe: a near-duplicate merges into the existing entry instead of
-piling up. Entries are read back with ReadMemory, and sessions that enabled
-cross-session memory also get the relevant ones injected automatically at start.`
+Saving twice is safe: each WriteMemory call stores its own entry (duplicates are
+kept), tagged with the current checkpoint turn when one is open. Entries are read
+back with ReadMemory, and sessions that enabled cross-session memory also get the
+relevant ones injected automatically at start.`
 }
 
 func (t *writeMemoryTool) InputSchema() map[string]any {
@@ -215,6 +218,9 @@ func formatMemoryWriteResult(result MemoryWriteResult, req MemoryWriteRequest) s
 		return "Memory not stored: " + reason
 	default:
 		msg := fmt.Sprintf("Memory stored (%s/%s, tier %s): %s", result.Kind, result.Scope, result.Tier, stored)
+		if result.Turn != 0 {
+			msg += fmt.Sprintf("\nTurn: %d", result.Turn)
+		}
 		if len(req.Tags) > 0 {
 			msg += "\nTags: " + strings.Join(req.Tags, ", ")
 		}

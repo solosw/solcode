@@ -199,6 +199,127 @@ func TestTodosRoundTripAndMerge(t *testing.T) {
 	}
 }
 
+func TestReadForSessionPrefersHigherTurnOnEqualContent(t *testing.T) {
+	store := NewStore(t.TempDir())
+	ctx := context.Background()
+	base := time.Date(2026, 6, 1, 12, 0, 0, 0, time.Local)
+	for _, entry := range []Entry{
+		{Keywords: []string{"build", "cli"}, Summary: "Build the CLI with go build ./cmd/solcode.", Turn: 2, Time: base.Add(time.Hour), SessionID: "main"},
+		{Keywords: []string{"build", "cli"}, Summary: "Build the CLI with go build ./cmd/solcode.", Turn: 9, Time: base, SessionID: "main"},
+		{Keywords: []string{"unrelated"}, Summary: "Something else entirely.", Turn: 20, Time: base.Add(2 * time.Hour), SessionID: "main"},
+	} {
+		if _, err := store.Append(ctx, entry); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	hits, err := store.ReadForSession(ctx, "main", "build cli", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) < 2 {
+		t.Fatalf("hits = %#v", hits)
+	}
+	if hits[0].Turn != 9 {
+		t.Fatalf("first hit turn = %d, want 9 (higher turn wins with 50%% weight)", hits[0].Turn)
+	}
+}
+
+func TestUpsertBySessionTurnMergesSameTurn(t *testing.T) {
+	store := NewStore(t.TempDir())
+	ctx := context.Background()
+	base := time.Date(2026, 5, 1, 12, 0, 0, 0, time.Local)
+
+	first, replaced, err := store.UpsertBySessionTurn(ctx, Entry{
+		Keywords:   []string{"todolist"},
+		Summary:    "Todolist update (2 items).",
+		Importance: 0.35,
+		Turn:       7,
+		Time:       base,
+		SessionID:  "main",
+		Files:      []string{"internal/a.go"},
+		Todos: []TodoJudgment{
+			{ID: "1", Content: "First", Status: TodoInProgress, Valid: true},
+			{ID: "2", Content: "Second", Status: TodoPending, Valid: true},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replaced {
+		t.Fatal("first upsert should append")
+	}
+	if first.Turn != 7 || first.SessionID != "main" {
+		t.Fatalf("first = %#v", first)
+	}
+
+	second, replaced, err := store.UpsertBySessionTurn(ctx, Entry{
+		Keywords:   []string{"todo-write"},
+		Summary:    "Todolist update (2 items).",
+		Importance: 0.4,
+		Turn:       7,
+		Time:       base.Add(time.Minute),
+		SessionID:  "main",
+		Files:      []string{"internal/b.go"},
+		Todos: []TodoJudgment{
+			{ID: "1", Content: "First", Status: TodoCompleted, Valid: true, Done: true},
+			{ID: "2", Content: "Second", Status: TodoInProgress, Valid: false},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !replaced {
+		t.Fatal("second upsert should replace same session+turn")
+	}
+	if len(second.Keywords) != 2 {
+		t.Fatalf("keywords = %#v", second.Keywords)
+	}
+	if len(second.Files) != 2 {
+		t.Fatalf("files = %#v", second.Files)
+	}
+	if len(second.Todos) != 2 || !second.Todos[0].Done || second.Todos[1].Valid {
+		t.Fatalf("todos = %#v", second.Todos)
+	}
+	if second.Importance != 0.4 || !second.Time.Equal(base.Add(time.Minute)) {
+		t.Fatalf("metadata = %#v", second)
+	}
+
+	other, replaced, err := store.UpsertBySessionTurn(ctx, Entry{
+		Keywords:  []string{"turn"},
+		Summary:   "Next turn memory.",
+		Turn:      8,
+		Time:      base.Add(2 * time.Minute),
+		SessionID: "main",
+		Todos: []TodoJudgment{
+			{ID: "1", Content: "First", Status: TodoCompleted, Valid: true, Done: true},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replaced {
+		t.Fatal("different turn should append")
+	}
+	if other.Turn != 8 {
+		t.Fatalf("other = %#v", other)
+	}
+
+	list, err := store.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 2 {
+		t.Fatalf("list = %#v, want one entry per turn", list)
+	}
+	if list[0].Turn != 7 || list[1].Turn != 8 {
+		t.Fatalf("turns = %#v", list)
+	}
+	if len(list[0].Todos) != 2 || list[0].Todos[0].Status != TodoCompleted {
+		t.Fatalf("turn 7 todos = %#v", list[0].Todos)
+	}
+}
+
 func TestReadForSessionFiltersBySessionID(t *testing.T) {
 	store := NewStore(t.TempDir())
 	ctx := context.Background()

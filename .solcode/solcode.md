@@ -237,3 +237,263 @@ Todolist update (3 items).
 - files: !ids.includes(n)), $null, README.md, cmd/solcode/main.go, examples/settings/README.md, examples/settings/settings.full.example.json, examples/settings/settings.jev.local.example.json, go.mod, internal/app/app.go, internal/app/jev.go, internal/app/jev_test.go, internal/app/session_files.go, internal/app/session_judge.go, internal/app/session_memory.go, internal/app/session_memory_test.go, internal/checkpoint/store.go, internal/checkpoint/store_test.go, internal/config/config.go, internal/engine/context_builder.go, internal/engine/engine.go, internal/engine/folded_tools.go, internal/engine/folded_tools_test.go, internal/engine/router.go, internal/engine/router_route_test.go, internal/engine/router_test.go, internal/jevlocal/artifact.go, internal/jevlocal/artifact_test.go, internal/jevlocal/builder.go, internal/jevlocal/engine.go, internal/jevlocal/evaluator.go, internal/jevlocal/evaluator_test.go, internal/jevlocal/family.go, internal/jevlocal/laya.go, internal/jevlocal/laya_test.go, internal/jevlocal/openjev.go, internal/jevlocal/openjev_family.go, internal/jevlocal/ort_engine.go, internal/jevlocal/ort_engine_test.go, internal/jevlocal/ort_install.go, internal/jevlocal/ort_install_test.go
 
 Turn memory: jev: jev decision fell back: jev local inference engine is not ready (unimplemented)
+
+## 2026-09-23 20:47:45 · session session-20260919-235046 · turn 67 · importance 0.35
+- keywords: todolist, todo-write
+- todos: 1|Trace sync local Jev init path at startup|in_progress|valid|open; 2|Design async init: build immediately, load ORT in background|pending|valid|done; 3|Implement + update tests for async readiness/fallback|pending|invalid|open
+
+Todolist update (3 items).
+
+## 2026-09-23 20:48:49 · session session-20260919-235046 · turn 67 · importance 0.35
+- keywords: todolist, todo-write
+- todos: 1|Trace sync local Jev init path at startup|in_progress|valid|open; 2|Design async init plan (background ORT load)|pending|valid|done; 3|Deliver implementation plan in required format|pending|invalid|open
+
+Todolist update (3 items).
+
+## 2026-09-23 20:51:01 · session acp-1790167756954130200-1 · turn 0 · importance 0.35
+- keywords: todolist, todo-write
+- todos: 1|Locate todolist / TodoWrite session memory write path|in_progress|invalid|open; 2|Find intended merge logic for same-session todolist|pending|invalid|open; 3|Identify why same-session updates create separate entries|pending|valid|done; 4|Fix merge so same-session todolist updates consolidate|pending|invalid|open; 5|Verify with existing tests or add regression coverage|pending|invalid|open
+
+Todolist update (5 items).
+
+## 2026-09-23 20:51:59 · session acp-1790167756954130200-1 · turn 0 · importance 0.40
+- keywords: turn, todolist
+- todos: 1|Locate todolist / TodoWrite session memory write path|in_progress|invalid|open; 2|Find intended merge logic for same-session todolist|pending|invalid|open; 3|Identify why same-session updates create separate entries|pending|valid|done; 4|Fix merge so same-session todolist updates consolidate|pending|invalid|open; 5|Verify with existing tests or add regression coverage|pending|invalid|open
+
+Turn memory: 修复对于todolist再同一轮会话没有合并
+## 2026-09-23 20:47:45 · session session-20260919-235046 · turn 67 · importance 0.35
+- keywords: todolist, todo-write
+- todos: 1|Trace sync local Jev init path at startup|in_progress|valid|open; 2|Design async init: build immediately, load ORT in background|pending|valid|done; 3|Implement + update tests for async readiness/fallback|pending|invalid|open
+ 
+Todolist update (3 i…
+
+## 2026-09-23 20:56:16 · session session-20260919-235046 · turn 67 · importance 0.35
+- keywords: todolist, todo-write
+- todos: 1|Trace sync local Jev init path at startup|completed|invalid|done; 2|Design async init plan (background ORT load)|in_progress|valid|done; 3|Deliver implementation plan in required format|pending|invalid|open
+
+Todolist update (3 items).
+
+## 2026-09-23 20:56:27 · session acp-1790167756954130200-1 · turn 1 · importance 0.35
+- keywords: todolist, todo-write
+- todos: 1|Locate todolist / TodoWrite session memory write path|completed|valid|done; 2|Find intended merge logic for same-session todolist|completed|valid|done; 3|Identify why same-session updates create separate entries|completed|valid|done; 4|Implement same-turn todolist merge into one entry|in_progress|valid|done; 5|Verify with existing tests or add regression coverage|pending|invalid|open
+
+Todolist update (5 items).
+
+## 2026-09-23 20:59:29 · session session-20260919-235046 · turn 67 · importance 0.35
+- keywords: todolist, todo-write
+- todos: 1|Trace sync local Jev init path at startup|completed|invalid|done; 2|Design async init plan (background ORT load)|completed|valid|done; 3|Deliver implementation plan in required format|completed|invalid|done
+
+Todolist update (3 items).
+
+## 2026-09-23 21:00:32 · session acp-1790167756954130200-1 · turn 1 · importance 0.35
+- keywords: todolist, todo-write
+- todos: 1|Locate todolist / TodoWrite session memory write path|completed|valid|done; 2|Find intended merge logic for same-session todolist|completed|valid|done; 3|Identify why same-session updates create separate entries|completed|valid|done; 4|Implement same-turn todolist merge into one entry|completed|valid|done; 5|Verify with existing tests or add regression coverage|completed|invalid|done
+
+Todolist update (5 items).
+
+## 2026-09-23 21:00:51 · session acp-1790167756954130200-1 · turn 1 · importance 0.70
+- keywords: todolist, todo-write, upsertbysessionturn, session-memory, merge
+- files: internal/app/session_memory.go, internal/app/session_memory_test.go, internal/sessionmemory/store.go, internal/sessionmemory/store_test.go
+
+Fixed same-session same-turn todolist duplication in solcode.md. Added sessionmemory.Store.UpsertBySessionTurn so one entry exists per SessionID+Turn: keywords/files are unioned, todos/summary/time/importance take the latest write (Jev-judged for TodoWrite). Wired WriteSessionMemory, recordTurnSessionMemory, and recordTodoSessionMemory through the upsert. Updated tests; ./internal/sessionmemory and ./internal/app pass.
+
+## 2026-09-23 21:00:53 · session session-20260919-235046 · turn 67 · importance 0.40
+- keywords: turn, todolist
+- files: cmd/solcode/main.go, internal/app/app.go, internal/app/jev_test.go, internal/checkpoint/store_test.go, internal/config/config.go, internal/jevlocal/artifact_test.go, internal/jevlocal/family.go, internal/jevlocal/laya.go, internal/jevlocal/laya_test.go, internal/jevlocal/openjev.go, internal/jevlocal/openjev_family.go, internal/jevlocal/ort_engine.go, internal/jevlocal/ort_engine_test.go, internal/jevlocal/ort_install.go, internal/jevlocal/ort_install_test.go, internal/jevlocal/tensors.go, internal/jevlocal/tokenizer.go, internal/sessionmemory/store.go, internal/sessionmemory/store_test.go, internal/sessionmemory/todos.go, internal/systemone/decider.go, internal/systemone/evaluator.go, internal/systemone/guardrail.go, internal/systemone/systemone.go, internal/tool/parallel_search.go, internal/tool/parallel_search_test.go, internal/tool/read_session_memory.go, internal/tool/search_screen.go, internal/tool/search_screen_test.go, internal/tool/todo_write.go, internal/tool/tool.go, internal/tool/web_search.go, internal/tool/web_search_test.go, internal/workflowui/server.go, internal/workflowui/settings_features_persist_test.go, internal/workflowui/settings_features_test.go, internal/workflowui/static/app.js, internal/workflowui/static/index.html, scripts/install.ps1, scripts/install.sh
+
+Turn memory: 现在由于本地的Jev模型初始化时间长，换成异步
+
+## 2026-09-23 21:01:00 · session acp-1790167756954130200-1 · turn 1 · importance 0.40
+- keywords: turn, todolist
+- files: internal/app/session_memory_test.go, internal/sessionmemory/store.go, internal/sessionmemory/store_test.go
+
+Turn memory: 要进行追加，利用 Jev合并，但是都在同一个turn下面，在同一个会话id下不能出现多个turn都一样的情况
+
+## 2026-09-23 21:03:13 · session session-20260919-235046 · turn 68 · importance 0.35
+- keywords: todolist, todo-write
+- todos: 1|Add async loadingORTEngine + wire defaultEngine|in_progress|valid|open; 2|Close/cancel on ReloadFeatures and App.Close|pending|valid|open; 3|Update tests + docs for async ready|pending|valid|open
+
+Todolist update (3 items).
+
+## 2026-09-23 21:03:45 · session acp-1790167756954130200-1 · turn 2 · importance 0.35
+- keywords: todolist, todo-write
+- todos: 1|Inspect durable memory write/read path and Entry schema|in_progress|valid|done; 2|Attach turn on WriteMemory|pending|valid|done; 3|Support turn filter/query on ReadMemory|pending|valid|open; 4|Update tests and verify|pending|invalid|open
+
+Todolist update (4 items).
+
+## 2026-09-23 21:05:12 · session acp-1790167756954130200-1 · turn 2 · importance 0.40
+- keywords: turn, todolist
+- files: internal/jevlocal/lazy_ort.go, internal/sessionmemory/store.go
+- todos: 1|Inspect durable memory write/read path and Entry schema|in_progress|valid|done; 2|Attach turn on WriteMemory|pending|valid|done; 3|Support turn filter/query on ReadMemory|pending|valid|open; 4|Update tests and verify|pending|invalid|open
+
+Turn memory: 全局memory也加一下Write的时候也会写入turn 。然后查询全局记忆的时候也可以通过turn查询
+
+## 2026-09-23 21:06:32 · session acp-1790167756954130200-1 · turn 3 · importance 0.35
+- keywords: todolist, todo-write
+- todos: 1|Inspect durable memory write/read path and Entry schema|completed|invalid|done; 2|Attach turn on WriteMemory|in_progress|invalid|open; 3|Defer ReadMemory turn filter (redesign later)|pending|invalid|open; 4|Update write tests and verify|pending|valid|open
+
+Todolist update (4 items).
+
+## 2026-09-23 21:07:43 · session acp-1790167756954130200-1 · turn 3 · importance 0.40
+- keywords: turn, todolist
+- files: internal/app/session_memory.go, internal/app/session_memory_test.go, internal/jevlocal/evaluator.go, internal/jevlocal/lazy_ort.go, internal/sessionmemory/store.go, internal/sessionmemory/store_test.go
+- todos: 1|Inspect durable memory write/read path and Entry schema|completed|invalid|done; 2|Attach turn on WriteMemory|in_progress|invalid|open; 3|Defer ReadMemory turn filter (redesign later)|pending|invalid|open; 4|Update write tests and verify|pending|valid|open
+
+Turn memory: 先写write吧，ReadMemory可能要重新设计，现在不太准
+
+## 2026-09-23 21:10:13 · session session-20260919-235046 · turn 68 · importance 0.75
+- keywords: jev, local, ort, async, loadingortengine, startup
+- files: cmd/solcode/main.go, internal/app/app.go, internal/app/jev.go, internal/app/jev_test.go, internal/engine/engine.go, internal/jevlocal/builder.go, internal/jevlocal/engine.go, internal/jevlocal/evaluator.go, internal/jevlocal/evaluator_test.go, internal/jevlocal/family.go, internal/jevlocal/laya.go, internal/jevlocal/laya_test.go, internal/jevlocal/lazy_ort.go, internal/jevlocal/openjev.go, internal/jevlocal/openjev_family.go, internal/jevlocal/ort_engine.go, internal/jevlocal/ort_engine_test.go, internal/jevlocal/ort_install.go, internal/jevlocal/ort_install_test.go, internal/jevlocal/tensors.go, internal/jevlocal/tokenizer.go, internal/sessionmemory/store.go, internal/sessionmemory/store_test.go, internal/sessionmemory/todos.go, internal/systemone/decider.go, internal/systemone/evaluator.go, internal/systemone/guardrail.go, internal/systemone/systemone.go, internal/tool/parallel_search.go, internal/tool/parallel_search_test.go, internal/tool/read_session_memory.go, internal/tool/search_screen.go, internal/tool/search_screen_test.go, internal/tool/todo_write.go, internal/tool/tool.go, internal/tool/web_search.go, internal/tool/web_search_test.go, internal/workflowui/server.go, internal/workflowui/settings_features_persist_test.go, internal/workflowui/settings_features_test.go
+- todos: 1|Inspect durable memory write/read path and Entry schema|completed|invalid|done; 2|Attach turn on WriteMemory|in_progress|invalid|open; 3|Defer ReadMemory turn filter (redesign later)|pending|invalid|open; 4|Update write tests and verify|pending|valid|done
+
+Made local Jev ORT initialization asynchronous. Added loadingORTEngine so New/defaultEngine return immediately while EnsureORTLibrary + NewORTEngine run in a goroutine; Ask falls back until Ready. Wired LocalEvaluator.Close through jevRuntime into ReloadFeatures and App.Close. Suppressed per-turn fallback logs while \"ort loading\". Updated ORT/Laya/app tests to WaitEngine or poll Ready. Verified: new_ms ~60–300ms, then load_wait, Ask works; TestBuildJevLocalUsesOpenJevArtifacts PASS with loading/ready logs only.
+
+## 2026-09-23 21:10:23 · session session-20260919-235046 · turn 68 · importance 0.35
+- keywords: todolist, todo-write
+- todos: 1|Add async loadingORTEngine + wire defaultEngine|completed|valid|done; 2|Close/cancel on ReloadFeatures and App.Close|completed|valid|done; 3|Update tests + docs for async ready|completed|valid|done
+
+Todolist update (3 items).
+
+## 2026-09-23 21:10:56 · session session-20260919-235046 · turn 68 · importance 0.40
+- keywords: turn, todolist
+- files: internal/checkpoint/store_test.go, internal/jevlocal/artifact_test.go, internal/jevlocal/family.go, internal/jevlocal/laya.go, internal/jevlocal/laya_test.go, internal/jevlocal/lazy_ort.go, internal/jevlocal/openjev.go, internal/jevlocal/openjev_family.go, internal/jevlocal/ort_engine.go, internal/jevlocal/ort_engine_test.go, internal/jevlocal/ort_install.go, internal/jevlocal/ort_install_test.go, internal/jevlocal/tensors.go, internal/jevlocal/tokenizer.go, internal/sessionmemory/store.go, internal/sessionmemory/store_test.go, internal/sessionmemory/todos.go, internal/systemone/decider.go, internal/systemone/evaluator.go, internal/systemone/guardrail.go, internal/systemone/systemone.go, internal/tool/parallel_search.go, internal/tool/parallel_search_test.go, internal/tool/read_session_memory.go, internal/tool/search_screen.go, internal/tool/search_screen_test.go, internal/tool/todo_write.go, internal/tool/tool.go, internal/tool/web_search.go, internal/tool/web_search_test.go, internal/workflowui/server.go, internal/workflowui/settings_features_persist_test.go, internal/workflowui/settings_features_test.go, internal/workflowui/static/app.js, internal/workflowui/static/index.html, scripts/install.ps1, scripts/install.sh, third_party/hfbpe/LICENSE, third_party/hfbpe/README.md, third_party/hfbpe/bpe.go
+
+Turn memory: 开始写代码
+
+## 2026-09-23 21:13:50 · session session-20260919-235046 · turn 69 · importance 0.35
+- keywords: todolist, todo-write
+- todos: 1|Trace Jev tool screening + ToolSearch wiring|in_progress|valid|open; 2|Design/implement better ToolSearch screening under Jev|pending|valid|done; 3|Update tests and verify|pending|invalid|open
+
+Todolist update (3 items).
+
+## 2026-09-23 21:14:32 · session acp-1790167756954130200-1 · turn 4 · importance 0.35
+- keywords: todolist, todo-write
+- todos: 1|Inspect durable memory write/read path and Entry schema|completed|valid|done; 2|Attach turn on WriteMemory|completed|valid|done; 3|Defer ReadMemory turn filter (redesign later)|completed|valid|done; 4|Update write tests and verify|completed|valid|done
+
+Todolist update (4 items).
+
+## 2026-09-23 21:15:07 · session acp-1790167756954130200-1 · turn 4 · importance 0.65
+- keywords: writememory, sourceturn, allowduplicate, durable-memory
+- files: internal/app/session_memory.go, internal/memory/manager.go, internal/memory/memory.go, internal/sessionmemory/store.go, internal/tool/write_memory.go, unit_tests/memory_manager_test.go
+
+Added SourceTurn to durable memory Item and wired WriteMemory through RememberDirect with AllowDuplicate=true so each write keeps its own entry tagged with the current checkpoint turn. ReadMemory turn filtering was deferred for a later redesign. Updated tool description, system prompt, and tests; app/unit_tests pass.
+
+## 2026-09-23 21:16:28 · session acp-1790167756954130200-1 · turn 4 · importance 0.40
+- keywords: turn, todolist
+- files: internal/app/jev.go, internal/app/memory_writer.go, internal/app/memory_writer_test.go, internal/app/session_memory.go, internal/app/session_memory_test.go, internal/engine/context_builder.go, internal/jevlocal/evaluator.go, internal/jevlocal/lazy_ort.go, internal/memory/manager.go, internal/memory/memory.go, internal/sessionmemory/store.go, internal/sessionmemory/store_test.go, internal/tool/write_memory.go, unit_tests/memory_manager_test.go, unit_tests/memory_prompt_test.go
+
+Turn memory: 全局记忆可以重复
+
+## 2026-09-23 21:23:09 · session session-20260919-235046 · turn 69 · importance 0.35
+- keywords: todolist, todo-write
+- todos: 1|Trace Jev tool screening + ToolSearch wiring|completed|valid|done; 2|Auto SearchCapabilities sticky-enable on Jev tool miss|in_progress|valid|open; 3|Add/update tests for auto ToolSearch on miss|pending|invalid|open
+
+Todolist update (3 items).
+
+## 2026-09-23 21:29:06 · session acp-1790167756954130200-1 · turn 5 · importance 0.40
+- keywords: turn, todolist
+- files: internal/app/jev.go, internal/app/memory_writer.go, internal/app/memory_writer_test.go, internal/app/session_memory.go, internal/app/session_memory_test.go, internal/engine/context_builder.go, internal/jevlocal/evaluator.go, internal/jevlocal/lazy_ort.go, internal/memory/manager.go, internal/memory/memory.go, internal/sessionmemory/store.go, internal/sessionmemory/store_test.go, internal/tool/write_memory.go, unit_tests/memory_manager_test.go, unit_tests/memory_prompt_test.go
+- todos: 1|Trace Jev tool screening + ToolSearch wiring|completed|valid|done; 2|Auto SearchCapabilities sticky-enable on Jev tool miss|in_progress|valid|open; 3|Add/update tests for auto ToolSearch on miss|pending|valid|open
+
+Turn memory: 现在readMemory是使用的什么算法？？
+
+## 2026-09-23 21:31:17 · session session-20260919-235046 · turn 69 · importance 0.40
+- keywords: turn, todolist
+- files: cmd/solcode/main.go, examples/settings/README.md, examples/settings/settings.full.example.json, examples/settings/settings.jev.local.example.json, internal/app/app.go, internal/app/jev.go, internal/app/jev_test.go, internal/app/session_files.go, internal/app/session_judge.go, internal/checkpoint/store.go, internal/checkpoint/store_test.go, internal/config/config.go, internal/engine/context_builder.go, internal/engine/engine.go, internal/engine/folded_tools.go, internal/engine/folded_tools_test.go, internal/engine/tool_selector.go, internal/engine/tool_selector_test.go, internal/jevlocal/artifact.go, internal/jevlocal/artifact_test.go, internal/jevlocal/builder.go, internal/jevlocal/engine.go, internal/jevlocal/evaluator.go, internal/jevlocal/evaluator_test.go, internal/jevlocal/family.go, internal/jevlocal/laya.go, internal/jevlocal/laya_test.go, internal/jevlocal/lazy_ort.go, internal/jevlocal/openjev.go, internal/jevlocal/openjev_family.go, internal/jevlocal/ort_engine.go, internal/jevlocal/ort_engine_test.go, internal/jevlocal/ort_install.go, internal/jevlocal/ort_install_test.go, internal/jevlocal/tensors.go, internal/jevlocal/tokenizer.go, internal/sessionmemory/store.go, internal/sessionmemory/store_test.go, internal/sessionmemory/todos.go, internal/systemone/decider.go
+- todos: 1|Trace Jev tool screening + ToolSearch wiring|completed|valid|done; 2|Auto SearchCapabilities sticky-enable on Jev tool miss|in_progress|valid|open; 3|Add/update tests for auto ToolSearch on miss|pending|invalid|open
+
+Turn memory: 在Jev模式下给toolsearch加上，让他更好进行工具筛选
+
+## 2026-09-23 21:35:04 · session session-20260919-235046 · turn 70 · importance 0.35
+- keywords: todolist, todo-write
+- todos: 1|Jev miss → ToolSearch sticky\; empty → classic FoldedTools|in_progress|valid|done; 2|CJK prompt: alias retry from MCP/builtin names|pending|valid|open; 3|Tests + verify|pending|invalid|done
+
+Todolist update (3 items).
+
+## 2026-09-23 21:35:25 · session acp-1790167756954130200-1 · turn 6 · importance 0.35
+- keywords: todolist, todo-write
+- todos: 1|Wire turn+session into retrieval scoring (50%)|in_progress|valid|open; 2|Add topk to ReadMemory path|pending|valid|open; 3|Improve query tokenization for retrieval|pending|invalid|open; 4|Add/update tests and verify|pending|invalid|open
+
+Todolist update (4 items).
+
+## 2026-09-23 21:36:22 · session acp-1790167756954130200-1 · turn 6 · importance 0.40
+- keywords: turn, todolist
+- files: internal/app/jev.go, internal/jevlocal/evaluator.go, internal/memory/manager.go
+- todos: 1|Wire turn+session into retrieval scoring (50%)|in_progress|valid|open; 2|Add topk to ReadMemory path|pending|valid|open; 3|Improve query tokenization for retrieval|pending|invalid|open; 4|Add/update tests and verify|pending|invalid|open
+
+Turn memory: 现在内部加上turn和session-id。同session下turn越大越靠前（这部分评分占50%)。接着读取记忆时加上topk.然后对query进行分词
+
+## 2026-09-23 21:37:30 · session acp-1790167756954130200-1 · turn 7 · importance 0.35
+- keywords: todolist, todo-write
+- todos: 1|Add turn/session scoring (50%) in LayeredRetriever|in_progress|valid|done; 2|Add topk to ReadMemory tool/API|pending|valid|done; 3|Update tests for scoring and topk|pending|valid|done
+
+Todolist update (3 items).
+
+## 2026-09-23 21:37:56 · session acp-1790167756954130200-1 · turn 7 · importance 0.40
+- keywords: turn, todolist
+- files: internal/app/jev.go, internal/app/memory_writer.go, internal/app/memory_writer_test.go, internal/app/session_memory.go, internal/app/session_memory_test.go, internal/engine/context_builder.go, internal/jevlocal/evaluator.go, internal/jevlocal/lazy_ort.go, internal/memory/manager.go, internal/memory/memory.go, internal/sessionmemory/store.go, internal/sessionmemory/store_test.go, internal/tool/write_memory.go, unit_tests/memory_manager_test.go, unit_tests/memory_prompt_test.go
+- todos: 1|Add turn/session scoring (50%) in LayeredRetriever|in_progress|valid|done; 2|Add topk to ReadMemory tool/API|pending|valid|done; 3|Update tests for scoring and topk|pending|valid|done
+
+Turn memory: 有了就不用了
+
+## 2026-09-23 21:40:08 · session acp-1790167756954130200-1 · turn 8 · importance 0.35
+- keywords: todolist, todo-write
+- todos: 1|Compare session vs global memory query tokenization|in_progress|valid|done; 2|Add same-session turn recency as 50% of retrieval score|pending|valid|done; 3|Update tests and verify|pending|valid|done
+
+Todolist update (3 items).
+
+## 2026-09-23 21:42:04 · session acp-1790167756954130200-1 · turn 8 · importance 0.35
+- keywords: todolist, todo-write
+- todos: 1|Compare session vs global memory query tokenization|completed|valid|done; 2|Add same-session turn recency as 50% of retrieval score (global + session)|in_progress|valid|done; 3|Update tests and verify|pending|valid|done
+
+Todolist update (3 items).
+
+## 2026-09-23 21:42:57 · session session-20260919-235046 · turn 70 · importance 0.40
+- keywords: turn, todolist
+- files: cmd/solcode/main.go, examples/settings/settings.jev.local.example.json, internal/app/jev.go, internal/app/jev_test.go, internal/checkpoint/store.go, internal/checkpoint/store_test.go, internal/engine/folded_tools.go, internal/engine/folded_tools_test.go, internal/jevlocal/artifact.go, internal/jevlocal/artifact_test.go, internal/jevlocal/builder.go, internal/jevlocal/engine.go, internal/jevlocal/evaluator.go, internal/jevlocal/evaluator_test.go, internal/jevlocal/family.go, internal/jevlocal/laya.go, internal/jevlocal/laya_test.go, internal/jevlocal/lazy_ort.go, internal/jevlocal/openjev.go, internal/jevlocal/openjev_family.go, internal/jevlocal/ort_engine.go, internal/jevlocal/ort_engine_test.go, internal/jevlocal/ort_install.go, internal/jevlocal/ort_install_test.go, internal/jevlocal/tensors.go, internal/jevlocal/tokenizer.go, internal/sessionmemory/store.go, internal/sessionmemory/store_test.go, internal/sessionmemory/todos.go, internal/systemone/decider.go, internal/systemone/evaluator.go, internal/systemone/guardrail.go, internal/systemone/systemone.go, internal/tool/read_session_memory.go, internal/tool/todo_write.go, internal/tool/tool.go, internal/tool/tool_search.go, internal/workflowui/server.go, internal/workflowui/settings_features_persist_test.go, internal/workflowui/settings_features_test.go
+- todos: 1|Compare session vs global memory query tokenization|completed|valid|done; 2|Add same-session turn recency as 50% of retrieval score (global + session)|in_progress|valid|open; 3|Update tests and verify|pending|valid|done
+
+Turn memory: 如果Jev搜不到，那么就回退到目前的ToolSearch
+
+## 2026-09-23 21:44:49 · session session-20260919-235046 · turn 71 · importance 0.35
+- keywords: todolist, todo-write
+- todos: 1|Remove auto-enable of unloaded MCP on Jev miss|in_progress|valid|done; 2|Keep query-only ToolSearch sticky\; miss = no enable|pending|valid|done; 3|Fix tests to match no-MCP-force policy|pending|valid|done
+
+Todolist update (3 items).
+
+## 2026-09-23 21:44:58 · session acp-1790167756954130200-1 · turn 8 · importance 0.60
+- keywords: tokenization, turn-recency, readmemory, readsessionmemory, layeredretriever
+- files: internal/app/jev.go, internal/app/session_memory.go, internal/app/session_memory_test.go, internal/jevlocal/evaluator.go, internal/jevlocal/lazy_ort.go, internal/memory/manager.go, internal/memory/memory.go, internal/memory/retriever.go, internal/sessionmemory/store.go, internal/tool/write_memory.go, unit_tests/memory_manager_test.go, unit_tests/memory_prompt_test.go
+- todos: 1|Remove auto-enable of unloaded MCP on Jev miss|in_progress|valid|open; 2|Keep query-only ToolSearch sticky\; miss = no enable|pending|valid|open; 3|Fix tests to match no-MCP-force policy|pending|valid|open
+
+Documented tokenization: session memory uses simple queryTerms (ASCII split + whole Chinese query fallback); durable memory uses queryTerms plus lexicalTokens/cjkBigrams/path/command vectors in LayeredRetriever. Implemented 50/50 ranking of content relevance and same-session turn recency for both ReadMemory and ReadSessionMemory. Skipped topk because limit already exists.
+
+## 2026-09-23 21:45:10 · session acp-1790167756954130200-1 · turn 8 · importance 0.35
+- keywords: todolist, todo-write
+- todos: 1|Compare session vs global memory query tokenization|completed|valid|done; 2|Add same-session turn recency as 50% of retrieval score (global + session)|completed|valid|done; 3|Update tests and verify|completed|valid|done
+
+Todolist update (3 items).
+
+## 2026-09-23 21:45:36 · session acp-1790167756954130200-1 · turn 8 · importance 0.40
+- keywords: turn, todolist
+- files: internal/app/session_memory_test.go, internal/engine/context_builder.go, internal/engine/tool_selector_test.go, internal/memory/manager.go, internal/memory/memory.go, internal/sessionmemory/store.go, internal/sessionmemory/store_test.go
+
+Turn memory: 我说的时limit已存在就不用topk了。查看分词有没有（会话记忆和全局记忆都查看一下)
+
+## 2026-09-23 21:45:45 · session session-20260919-235046 · turn 71 · importance 0.35
+- keywords: todolist, todo-write
+- todos: 1|Remove auto-enable of unloaded MCP on Jev miss|completed|valid|done; 2|Keep query-only ToolSearch sticky\; miss = no enable|completed|valid|done; 3|Fix tests to match no-MCP-force policy|completed|valid|done
+
+Todolist update (3 items).
+
+## 2026-09-23 21:46:58 · session session-20260919-235046 · turn 71 · importance 0.70
+- keywords: jev, toolsearch, mcp, folded, routing
+- files: internal/engine/engine.go, internal/jevlocal/builder.go, internal/jevlocal/engine.go, internal/jevlocal/evaluator.go, internal/jevlocal/evaluator_test.go, internal/jevlocal/family.go, internal/jevlocal/laya.go, internal/jevlocal/laya_test.go, internal/jevlocal/lazy_ort.go, internal/jevlocal/openjev.go, internal/jevlocal/openjev_family.go, internal/jevlocal/ort_engine.go, internal/jevlocal/ort_engine_test.go, internal/jevlocal/ort_install.go, internal/jevlocal/ort_install_test.go, internal/jevlocal/tensors.go, internal/jevlocal/tokenizer.go, internal/memory/manager.go, internal/sessionmemory/store.go, internal/sessionmemory/store_test.go, internal/sessionmemory/todos.go, internal/systemone/decider.go, internal/systemone/evaluator.go, internal/systemone/guardrail.go, internal/systemone/systemone.go, internal/tool/read_session_memory.go, internal/tool/todo_write.go, internal/tool/tool.go, internal/tool/tool_search.go, internal/workflowui/server.go, internal/workflowui/settings_features_persist_test.go, internal/workflowui/settings_features_test.go, internal/workflowui/static/app.js, internal/workflowui/static/index.html, scripts/install.ps1, scripts/install.sh, third_party/hfbpe/LICENSE, third_party/hfbpe/README.md, third_party/hfbpe/bpe.go, third_party/hfbpe/bytelevel.go
+
+Jev tool routing miss now falls back to query-only ToolSearch sticky enablement. Removed force-enabling registered MCP servers on miss; if neither Jev nor ToolSearch matches, nothing extra is enabled and classic FoldedTools remains for model-driven discovery.
+
+## 2026-09-23 21:47:48 · session session-20260919-235046 · turn 71 · importance 0.40
+- keywords: turn, todolist
+- files: cmd/solcode/main.go, examples/settings/settings.full.example.json, examples/settings/settings.jev.local.example.json, internal/app/session_judge.go, internal/app/session_memory.go, internal/app/session_memory_test.go, internal/checkpoint/store.go, internal/checkpoint/store_test.go, internal/engine/context_builder.go, internal/engine/engine.go, internal/engine/folded_tools.go, internal/engine/folded_tools_test.go, internal/engine/tool_selector_test.go, internal/jevlocal/artifact_test.go, internal/jevlocal/builder.go, internal/jevlocal/engine.go, internal/jevlocal/evaluator.go, internal/jevlocal/evaluator_test.go, internal/jevlocal/family.go, internal/jevlocal/laya.go, internal/jevlocal/laya_test.go, internal/jevlocal/lazy_ort.go, internal/jevlocal/openjev.go, internal/jevlocal/openjev_family.go, internal/jevlocal/ort_engine.go, internal/jevlocal/ort_engine_test.go, internal/jevlocal/ort_install.go, internal/jevlocal/ort_install_test.go, internal/jevlocal/tensors.go, internal/jevlocal/tokenizer.go, internal/memory/manager.go, internal/sessionmemory/store.go, internal/sessionmemory/store_test.go, internal/sessionmemory/todos.go, internal/systemone/decider.go, internal/systemone/evaluator.go, internal/systemone/guardrail.go, internal/systemone/systemone.go, internal/tool/read_session_memory.go, internal/tool/todo_write.go
+
+Turn memory: 禁止开启未启用的mcp。如果都没有查到那就是没有

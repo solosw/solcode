@@ -440,6 +440,12 @@ func (a *App) Close() error {
 			firstErr = err
 		}
 	}
+	if a.jev != nil {
+		if err := a.jev.Close(); firstErr == nil {
+			firstErr = err
+		}
+		a.jev = nil
+	}
 	return firstErr
 }
 
@@ -556,11 +562,15 @@ func (a *App) ReloadFeatures(cfg config.Config, mcpFactory mcp.ClientFactory) er
 	// settings save would leave the router, guardrail, and memory judge wired to
 	// the previous config — or, when Jev was just enabled in the UI, wired to
 	// nothing at all.
+	prevJev := a.jev
 	jev, err := buildJev(cfg)
 	if err != nil {
 		return fmt.Errorf("configure jev: %w", err)
 	}
 	a.jev = jev
+	if prevJev != nil {
+		_ = prevJev.Close()
+	}
 	if jev != nil && jev.decider != nil {
 		tool.ConfigureWebSearchScreening(registry, jev.decider, jev.routeConfidence())
 	}

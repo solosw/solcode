@@ -53,6 +53,6 @@ Switch at runtime: `/model`, `/provider`, `/effort`.
 - **hooks.events** — `UserPromptSubmit` / `PreToolUse` / `PostToolUse` / … (see [`../hooks/`](../hooks/))
 - **mcp_servers** — stdio or HTTP MCP tools (`/mcp` to toggle)
 - **lsp** — language servers for the `LSP` tool (`enabled`, `include_defaults`, `servers[]` with `language` / `extensions` / `command`). Defaults auto-detect `gopls`, `pyright-langserver`, etc. when on `PATH`. See root [README LSP section](../../README.md#lsp-language-server-protocol) and [`settings.full.example.json`](settings.full.example.json).
-- **jev** — TypeSafe System One decision layer (`type=api` hosted, or `type=local` OpenJev/Laya ONNX; local defaults to `engine=ort`). See root [README Jev section](../../README.md#jev-decision-layer-optional) and [`settings.jev.local.example.json`](settings.jev.local.example.json).
+- **jev** — TypeSafe System One decision layer (`type=api` hosted, or `type=local` OpenJev/Laya ONNX; local defaults to `engine=ort`, loaded asynchronously). See root [README Jev section](../../README.md#jev-decision-layer-optional) and [`settings.jev.local.example.json`](settings.jev.local.example.json).
 
 Hook `command` strings run via the host shell (`bash -c` / `cmd /c`) with **cwd = agent workdir**, so relative paths like `node examples/hooks/...` work when you start solcode from the repo root. For installed binaries, use absolute paths or copy scripts into `~/.solcode/hooks/`.

@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/solosw/solcode/internal/config"
 	"github.com/solosw/solcode/internal/engine"
@@ -94,15 +95,20 @@ func TestBuildJevLocalUsesOpenJevArtifacts(t *testing.T) {
 	if jev.router() == nil {
 		t.Fatal("routing toggle should enable the router")
 	}
-	// Default engine is ORT: Choose should return a real answer, not the
-	// deterministic fallback (confidence 0).
-	got, conf := jev.decider.Choose(context.Background(), "state", "which?",
-		map[string]string{"a": "A", "b": "B"}, 0.6, "a")
-	if got == "" {
-		t.Fatal("Choose returned empty with local ORT")
-	}
-	if conf == 0 {
-		t.Fatalf("Choose = %q/%v, want a non-zero confidence from ORT", got, conf)
+	// ORT loads asynchronously; wait briefly for Ready before asserting inference.
+	deadline := time.Now().Add(2 * time.Minute)
+	var got string
+	var conf float64
+	for {
+		got, conf = jev.decider.Choose(context.Background(), "state", "which?",
+			map[string]string{"a": "A", "b": "B"}, 0.6, "a")
+		if conf != 0 && got != "" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("Choose = %q/%v after waiting for async ORT", got, conf)
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 

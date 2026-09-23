@@ -139,7 +139,7 @@ func TestFilterUnimportantSessionFiles(t *testing.T) {
 	}
 }
 
-func TestRecordTodoSessionMemorySnapshotsEachUpdate(t *testing.T) {
+func TestRecordTodoSessionMemoryMergesSameTurn(t *testing.T) {
 	work := t.TempDir()
 	sessionDir := t.TempDir()
 	a := &App{Config: config.Config{
@@ -161,36 +161,50 @@ func TestRecordTodoSessionMemorySnapshotsEachUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 2 {
-		t.Fatalf("entries = %#v, want one snapshot per TodoWrite", entries)
+	if len(entries) != 1 {
+		t.Fatalf("entries = %#v, want one entry for the same session turn", entries)
 	}
-	// Newest first.
-	if entries[0].Todos[0].Status != sessionmemory.TodoCompleted || !entries[0].Todos[0].Done {
-		t.Fatalf("latest todo0 = %#v", entries[0].Todos[0])
+	entry := entries[0]
+	if len(entry.Todos) != 2 {
+		t.Fatalf("todos = %#v", entry.Todos)
 	}
-	if entries[1].Todos[0].Status != sessionmemory.TodoInProgress {
-		t.Fatalf("earlier todo0 = %#v", entries[1].Todos[0])
+	if entry.Todos[0].Status != sessionmemory.TodoCompleted || !entry.Todos[0].Done {
+		t.Fatalf("todo0 = %#v", entry.Todos[0])
 	}
-	merged := sessionmemory.MergeTodos([]sessionmemory.Entry{entries[1], entries[0]})
-	if len(merged) != 2 || !merged[0].Done || merged[1].Status != sessionmemory.TodoInProgress {
-		t.Fatalf("merged = %#v", merged)
+	if entry.Todos[1].Status != sessionmemory.TodoInProgress {
+		t.Fatalf("todo1 = %#v", entry.Todos[1])
+	}
+	if !strings.Contains(entry.Summary, "Todolist update (2 items)") {
+		t.Fatalf("summary = %q", entry.Summary)
 	}
 }
 
 func TestReadSessionMemoryFuzzy(t *testing.T) {
 	work := t.TempDir()
+	sessionDir := t.TempDir()
 	a := &App{Config: config.Config{
 		WorkDir: work,
-		Session: config.SessionConfig{Dir: t.TempDir(), DefaultSession: "main"},
+		Session: config.SessionConfig{Dir: sessionDir, DefaultSession: "main"},
 	}}
 
-	for _, entry := range []tool.SessionMemoryWriteRequest{
-		{Keywords: []string{"checkpoint"}, Summary: "Checkpoints restore code only.", WorkDir: work, SessionID: "main"},
-		{Keywords: []string{"mcp"}, Summary: "MCP uses STREAMABLE_HTTP.", WorkDir: work, SessionID: "main"},
-	} {
-		if _, err := a.WriteSessionMemory(context.Background(), entry); err != nil {
-			t.Fatal(err)
-		}
+	a.beginCheckpointTurn("main", work, "checkpoint work")
+	if _, err := a.WriteSessionMemory(context.Background(), tool.SessionMemoryWriteRequest{
+		Keywords:  []string{"checkpoint"},
+		Summary:   "Checkpoints restore code only.",
+		WorkDir:   work,
+		SessionID: "main",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	a.beginCheckpointTurn("main", work, "mcp work")
+	if _, err := a.WriteSessionMemory(context.Background(), tool.SessionMemoryWriteRequest{
+		Keywords:  []string{"mcp"},
+		Summary:   "MCP uses STREAMABLE_HTTP.",
+		WorkDir:   work,
+		SessionID: "main",
+	}); err != nil {
+		t.Fatal(err)
 	}
 
 	hits, err := a.ReadSessionMemory(context.Background(), tool.SessionMemoryReadRequest{Query: "checkpoint", Limit: 5, WorkDir: work, SessionID: "main"})

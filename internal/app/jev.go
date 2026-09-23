@@ -24,10 +24,9 @@ import (
 // and the callers keep their deterministic behavior.
 //
 // type=api builds the hosted HTTP evaluator. type=local builds a LocalEvaluator
-// over OpenJev/Laya artifacts. Local defaults to engine=ort (ONNX Runtime; auto-
-// installs the CPU shared library into ~/.solcode/lib when missing). Explicit
-// jev.engine=stub keeps the unimplemented backend so Ask fails into Decider
-// fallbacks.
+// over OpenJev/Laya artifacts. Local defaults to engine=ort, which loads ONNX
+// Runtime in the background so startup is not blocked; Ask falls back until the
+// session is Ready. Explicit jev.engine=stub keeps the unimplemented backend.
 //
 // Each subsystem is opt-in independently so a deployment can adopt routing
 // without adopting the guardrail, or vice versa.
@@ -36,6 +35,7 @@ func buildJev(cfg config.Config) (*jevRuntime, error) {
 		return nil, nil
 	}
 	var eval systemone.Evaluator
+	var closer func() error
 	switch cfg.JevType() {
 	case config.JevBackendLocal:
 		local, err := jevlocal.New(jevlocal.Options{
@@ -51,6 +51,21 @@ func buildJev(cfg config.Config) (*jevRuntime, error) {
 			return nil, nil
 		}
 		eval = local
+		closer = local.Close
+		if !local.EngineReady() {
+			jevLog("jev local ort loading in background")
+			local.OnEngineReady(func(ready bool, err error) {
+				if ready {
+					jevLog("jev local ort ready")
+					return
+				}
+				if err != nil {
+					jevLog("jev local ort failed: " + err.Error())
+					return
+				}
+				jevLog("jev local ort not ready")
+			})
+		}
 	default:
 		eval = systemone.NewClient(systemone.Options{
 			BaseURL:    cfg.Jev.BaseURL,
@@ -60,12 +75,19 @@ func buildJev(cfg config.Config) (*jevRuntime, error) {
 		})
 	}
 	decider := systemone.NewDecider(eval).WithErrorHandler(func(err error) {
-		if err != nil {
-			jevLog("jev decision fell back: " + err.Error())
+		if err == nil {
+			return
 		}
+		// While ORT is still loading, Decider falls back on every call; one
+		// startup log is enough — avoid spamming stderr each turn.
+		if strings.Contains(err.Error(), "ort loading") {
+			return
+		}
+		jevLog("jev decision fell back: " + err.Error())
 	})
 	return &jevRuntime{
 		decider:        decider,
+		closer:         closer,
 		routeMin:       cfg.Jev.RouteMinConfidence,
 		routingEnabled: cfg.Jev.Routing,
 		memoryEnabled:  cfg.Jev.MemoryJudge,
@@ -89,10 +111,18 @@ func jevLog(message string) {
 // *jevRuntime is valid and means "Jev is off".
 type jevRuntime struct {
 	decider        *systemone.Decider
+	closer         func() error
 	routeMin       float64
 	routingEnabled bool
 	memoryEnabled  bool
 	guardEnabled   bool
+}
+
+func (j *jevRuntime) Close() error {
+	if j == nil || j.closer == nil {
+		return nil
+	}
+	return j.closer()
 }
 
 // router builds the engine-facing semantic selector, or nil when routing is off.

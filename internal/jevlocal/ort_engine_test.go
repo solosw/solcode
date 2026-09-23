@@ -2,6 +2,7 @@ package jevlocal
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -79,9 +80,49 @@ func TestDefaultEngineORTRequiresLibrary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = defaultEngine(arts, Options{EngineName: EngineORT, ORTLib: filepath.Join(dir, "missing.dll")})
-	if err == nil {
-		t.Fatal("expected missing library error")
+	eng, err := defaultEngine(arts, Options{EngineName: EngineORT, ORTLib: filepath.Join(dir, "missing.dll")})
+	if err != nil {
+		t.Fatalf("async defaultEngine should return immediately: %v", err)
+	}
+	loader, ok := eng.(*loadingORTEngine)
+	if !ok {
+		t.Fatalf("engine type = %T, want *loadingORTEngine", eng)
+	}
+	defer eng.Close()
+	loader.Wait()
+	if loader.Ready() {
+		t.Fatal("missing library should leave engine not Ready")
+	}
+	if loader.LoadError() == nil {
+		t.Fatal("expected missing library load error")
+	}
+}
+
+func TestDefaultEngineORTStartsAsync(t *testing.T) {
+	dir := t.TempDir()
+	writeMinimalOpenJev(t, dir, "q4")
+	arts, err := ResolveArtifacts(dir, "q4", "t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	eng, err := defaultEngine(arts, Options{EngineName: EngineORT, ORTLib: filepath.Join(dir, "missing.dll")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+	if time.Since(start) > 500*time.Millisecond {
+		t.Fatalf("defaultEngine blocked for %s, want async return", time.Since(start))
+	}
+	if eng.Name() != EngineORT {
+		t.Fatalf("Name = %q", eng.Name())
+	}
+	if eng.Ready() {
+		t.Fatal("async engine should not be Ready immediately with a missing lib")
+	}
+	_, runErr := eng.RunNamed(context.Background(), NamedTensors{})
+	if !errors.Is(runErr, ErrEngineNotReady) {
+		t.Fatalf("RunNamed = %v, want ErrEngineNotReady", runErr)
 	}
 }
 
@@ -113,7 +154,13 @@ func TestLocalEvaluatorAskORTEndToEnd(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	defer eval.Close()
-	t.Logf("load_ms=%d engine=%s", time.Since(start).Milliseconds(), eval.EngineName())
+	t.Logf("new_ms=%d engine=%s ready=%v", time.Since(start).Milliseconds(), eval.EngineName(), eval.EngineReady())
+	waitStart := time.Now()
+	eval.WaitEngine()
+	t.Logf("load_wait_ms=%d ready=%v", time.Since(waitStart).Milliseconds(), eval.EngineReady())
+	if !eval.EngineReady() {
+		t.Fatal("ORT engine not ready after WaitEngine")
+	}
 
 	state := "I was charged twice for the same order. I want my money back now."
 	questions := map[string]systemone.Question{

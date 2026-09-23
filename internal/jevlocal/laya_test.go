@@ -102,7 +102,12 @@ func TestLocalEvaluatorAskLayaORTEndToEnd(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	defer eval.Close()
-	t.Logf("load_ms=%d engine=%s family=%s", time.Since(start).Milliseconds(), eval.EngineName(), eval.Family())
+	t.Logf("new_ms=%d engine=%s family=%s ready=%v", time.Since(start).Milliseconds(), eval.EngineName(), eval.Family(), eval.EngineReady())
+	eval.WaitEngine()
+	t.Logf("load_wait_ms=%d ready=%v", time.Since(start).Milliseconds(), eval.EngineReady())
+	if !eval.EngineReady() {
+		t.Fatal("ORT engine not ready after WaitEngine")
+	}
 	if eval.Family() != FamilyLaya {
 		t.Fatalf("family = %q", eval.Family())
 	}

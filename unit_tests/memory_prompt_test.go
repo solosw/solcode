@@ -71,7 +71,7 @@ func TestWriteMemoryDescriptionCoversWhenAndWhatToSave(t *testing.T) {
 		"one to three focused entries",
 		"TodoWrite",      // where transient state belongs instead
 		"secrets",        // rejected content
-		"near-duplicate", // merge behavior
+		"checkpoint turn", // write tags the current turn
 		"ReadMemory",     // how entries come back
 	} {
 		if !strings.Contains(desc, want) {
