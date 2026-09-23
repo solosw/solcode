@@ -29,8 +29,9 @@ A terminal-based coding agent powered by Claude (Anthropic API) that can read, w
 
 ### Installation
 
-**One-line install (no Go required)** — downloads the rolling **master** build
-(published by CI on every push to `master`/`main`; there is no `latest` channel):
+**One-line install (no Go required)** — downloads the rolling **master**
+`*_computeruse` build (CGO + robotgo; published by CI on every push to
+`master`/`main`; there is no `latest` channel and no separate pure-Go release):
 
 ```bash
 # Linux / macOS
@@ -42,22 +43,10 @@ curl -fsSL https://raw.githubusercontent.com/solosw/solcode/master/scripts/insta
 irm https://raw.githubusercontent.com/solosw/solcode/master/scripts/install.ps1 | iex
 ```
 
-**Computer Use build (CGO + robotgo)** — same one-liner, plus the
-`--computeruse` flag. Use this if you want the `ComputerUse` desktop-automation
-tool without a local toolchain:
-
-```bash
-# Linux / macOS
-curl -fsSL https://raw.githubusercontent.com/solosw/solcode/master/scripts/install.sh | bash -s -- --computeruse
-```
-
-```powershell
-# Windows (PowerShell)
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/solosw/solcode/master/scripts/install.ps1))) -ComputerUse
-```
-
-After installing, enable it in settings (`"computer_use": {"enabled": true}`) —
+Desktop automation still needs `"computer_use": {"enabled": true}` in settings —
 see [Computer Use](#computer-use-optional). Then use the `/computer-use` skill.
+`--computeruse` / `-ComputerUse` remain accepted for compatibility but are no
+longer required (every published asset is that flavor).
 
 Options:
 
@@ -65,9 +54,6 @@ Options:
 # custom install dir / fork (still tracks master by default)
 curl -fsSL .../install.sh | bash -s -- --dir ~/bin
 SOLCODE_REPO=myorg/solcode curl -fsSL .../install.sh | bash
-
-# install the CGO + robotgo build (desktop automation; see Computer Use below)
-curl -fsSL .../install.sh | bash -s -- --computeruse
 
 # skip automatic PATH update
 curl -fsSL .../install.sh | bash -s -- --no-path
@@ -78,7 +64,6 @@ curl -fsSL .../install.sh | bash -s -- --version v0.1.0
 
 ```powershell
 & .\scripts\install.ps1 -InstallDir "$env:USERPROFILE\bin"
-# & .\scripts\install.ps1 -ComputerUse   # CGO + robotgo build
 # & .\scripts\install.ps1 -NoPath
 # & .\scripts\install.ps1 -Version v0.1.0
 ```
@@ -88,34 +73,36 @@ Install scripts **add the binary directory to PATH automatically**:
 - **Linux/macOS**: current session + shell rc (`.bashrc` / `.zshrc` / fish `config.fish`), idempotent managed block
 - **Windows**: user `Path` env var + current PowerShell session (+ `WM_SETTINGCHANGE` broadcast)
 
-**From source** (requires Go 1.25+):
+**From source** (requires Go 1.26.2+; see `go.mod`):
 
 ```bash
 go install github.com/solosw/solcode/cmd/solcode@master
 # or
 git clone https://github.com/solosw/solcode.git && cd solcode
-go build -o solcode ./cmd/solcode
+# rolling release flavor (robotgo):
+CGO_ENABLED=1 go build -tags computeruse -o solcode ./cmd/solcode
 ```
 
 **How binaries are published**
 
 | Trigger | Release tag | Asset names | Install default |
 |---------|-------------|-------------|-----------------|
-| Push to `master`/`main` | `master` (rolling, overwritten) | `solcode_master_<os>_<arch>.*` | yes |
-| Push tag `v*` (optional) | `vX.Y.Z` | `solcode_vX.Y.Z_<os>_<arch>.*` | via `--version` |
+| Push to `master`/`main` | `master` (rolling, overwritten) | `solcode_master_<os>_<arch>_computeruse.*` | yes |
+| Push tag `v*` (optional) | `vX.Y.Z` | `solcode_vX.Y.Z_<os>_<arch>_computeruse.*` | via `--version` |
 
-Local build:
+Local computer-use build (matches CI):
 
 ```bash
-./scripts/build-release.sh master          # Linux/macOS
-# .\scripts\build-release.ps1 -Version master   # Windows
+./scripts/build-computeruse.sh master linux amd64 tar.gz
+# Windows: ./scripts/build-computeruse.sh master windows amd64 zip
 ```
 
 ### Prerequisites
 
 - An Anthropic API key (set `ANTHROPIC_API_KEY` environment variable)
-- For source builds only: Go 1.25+
+- For source builds only: Go 1.26.2+ (toolchain pin in `go.mod`)
 - Optional: language servers on `PATH` for the [LSP](#lsp-language-server-protocol) tool (e.g. `gopls`, `pyright-langserver`)
+- Optional local Jev: OpenJev/Laya model directory; with `jev.engine=ort`, CPU ONNX Runtime is auto-installed under `~/.solcode/lib` on Windows/Linux when missing
 
 ### First run
 
@@ -192,36 +179,35 @@ Then rebuild with CGO and the build tag (Windows needs MinGW/gcc):
 CGO_ENABLED=1 go build -tags computeruse -o solcode ./cmd/solcode
 ```
 
-**Prebuilt asset:** CI publishes a CGO variant alongside the default binaries:
+**Prebuilt asset:** the rolling install channel only publishes the CGO +
+`-tags computeruse` binaries:
 
 ```
 solcode_<version>_<os>_<arch>_computeruse.tar.gz   # .zip on Windows
 ```
 
-Install that asset without a local toolchain:
-
 ```bash
-# Linux / macOS
-curl -fsSL https://raw.githubusercontent.com/solosw/solcode/master/scripts/install.sh | bash -s -- --computeruse
+# Linux / macOS (no flag needed — this is the only published flavor)
+curl -fsSL https://raw.githubusercontent.com/solosw/solcode/master/scripts/install.sh | bash
 ```
 
 ```powershell
 # Windows (PowerShell)
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/solosw/solcode/master/scripts/install.ps1))) -ComputerUse
+irm https://raw.githubusercontent.com/solosw/solcode/master/scripts/install.ps1 | iex
 ```
 
-CI currently builds this variant for **linux/windows/darwin amd64+arm64**; the
-ARM and Intel-macOS legs are best-effort. Other platforms need a local build with
-a native toolchain (MinGW-w64 on Windows, X11 dev libs on Linux, Xcode CLT on
+CI currently builds this for **linux/windows/darwin amd64+arm64**; the ARM and
+Intel-macOS legs are best-effort. Other platforms need a local build with a
+native toolchain (MinGW-w64 on Windows, X11 dev libs on Linux, Xcode CLT on
 macOS).
 
 On macOS the first screenshot/input call triggers the system prompts for
 **Screen Recording** and **Accessibility**; grant them in System Settings →
 Privacy & Security, then restart the terminal.
 
-Without the tag (or the `_computeruse` asset), enabling the flag still registers
-the tool, but invocations return a rebuild error. When enabled, solcode also
-loads the bundled **`computer-use`** skill (`/computer-use` or Skill tool).
+A binary built without `-tags computeruse` still registers the tool when the
+setting is on, but invocations return a rebuild error. When enabled, solcode
+also loads the bundled **`computer-use`** skill (`/computer-use` or Skill tool).
 `ComputerUse` is **not** a core tool; after the skill runs it becomes sticky for
 the session (or discover it with ToolSearch).
 

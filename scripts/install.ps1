@@ -6,11 +6,11 @@
 # Usage (PowerShell):
 #   irm https://raw.githubusercontent.com/solosw/solcode/master/scripts/install.ps1 | iex
 #   & .\scripts\install.ps1 -InstallDir "$env:USERPROFILE\bin"
-#   & .\scripts\install.ps1 -ComputerUse              # CGO + robotgo build
+#   & .\scripts\install.ps1 -ComputerUse              # accepted; all assets are this flavor
 #   & .\scripts\install.ps1 -Version v0.1.0           # optional pinned tag
 #
 # Env:
-#   SOLCODE_REPO, SOLCODE_VERSION, SOLCODE_INSTALL_DIR, SOLCODE_COMPUTER_USE, GITHUB_TOKEN
+#   SOLCODE_REPO, SOLCODE_VERSION, SOLCODE_INSTALL_DIR, GITHUB_TOKEN
 
 [CmdletBinding()]
 param(
@@ -24,7 +24,9 @@ param(
 $ErrorActionPreference = "Stop"
 $BinaryName = "solcode.exe"
 $GitHubBase = if ($env:GITHUB_BASE) { $env:GITHUB_BASE } else { "https://github.com" }
-$WantComputerUse = $ComputerUse -or ($env:SOLCODE_COMPUTER_USE -eq "1")
+# Rolling releases only publish the CGO + robotgo (*_computeruse) assets.
+# -ComputerUse / SOLCODE_COMPUTER_USE kept for compatibility with older docs.
+$WantComputerUse = $true
 
 # No "latest" channel — map to master.
 if (-not $Version -or $Version -eq "latest") {
@@ -59,22 +61,14 @@ $arch = Resolve-Arch
 $tag = $Version
 
 $candidates = @(
-    "solcode_${tag}_${os}_${arch}.zip",
-    "solcode_$($tag.TrimStart('v'))_${os}_${arch}.zip"
+    "solcode_${tag}_${os}_${arch}_computeruse.zip",
+    "solcode_$($tag.TrimStart('v'))_${os}_${arch}_computeruse.zip"
 ) | Select-Object -Unique
-if ($WantComputerUse) {
-    $candidates = @(
-        "solcode_${tag}_${os}_${arch}_computeruse.zip",
-        "solcode_$($tag.TrimStart('v'))_${os}_${arch}_computeruse.zip"
-    ) | Select-Object -Unique
-}
 
 Write-Host "Channel/tag: $tag"
 Write-Host "Repo:        $Repo"
 Write-Host "Target:      $os/$arch"
-if ($WantComputerUse) {
-    Write-Host "Flavor:      computer-use (CGO + robotgo)"
-}
+Write-Host "Flavor:      computer-use (CGO + robotgo)"
 
 $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("solcode-install-" + [guid]::NewGuid().ToString("n"))
 New-Item -ItemType Directory -Path $tmp | Out-Null
@@ -93,24 +87,15 @@ try {
         }
     }
     if (-not $zipPath) {
-        $extra = if ($WantComputerUse) {
-@"
-
-The *_computeruse asset is only published for platforms CI can build with CGO
-(currently linux/windows/darwin amd64+arm64). Try again without -ComputerUse, or
-build locally with: CGO_ENABLED=1 go build -tags computeruse -o solcode.exe ./cmd/solcode
-"@
-        } else {
-@"
-
-Hint: push to master so CI publishes the rolling "master" release,
-      or pass -Version <tag> for a versioned release.
-"@
-        }
         throw @"
 Failed to download release asset for $os/$arch (tag $tag, repo $Repo).
 Tried: $($candidates -join ', ')
-$extra
+
+Only *_computeruse assets are published (platforms CI can build with CGO:
+linux/windows/darwin amd64+arm64; ARM/Intel-macOS legs are best-effort).
+Hint: push to master so CI publishes the rolling "master" release,
+      or pass -Version <tag> for a versioned release.
+Local build: CGO_ENABLED=1 go build -tags computeruse -o solcode.exe ./cmd/solcode
 "@
     }
 

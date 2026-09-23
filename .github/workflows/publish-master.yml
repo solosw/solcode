@@ -4,8 +4,7 @@ name: Publish master
 # GitHub Release tag "master". Install scripts download from that tag.
 # There is no "latest" release channel.
 #
-# Two build flavors ship side by side:
-#   solcode_<ver>_<os>_<arch>.<pack>              default (CGO disabled, stub driver)
+# Only the computer-use flavor is published:
 #   solcode_<ver>_<os>_<arch>_computeruse.<pack>  CGO + robotgo desktop automation
 
 on:
@@ -19,38 +18,6 @@ permissions:
   contents: write
 
 jobs:
-  build-default:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-
-      - name: Build release assets
-        env:
-          # Asset names stay solcode_master_* so install URLs stay stable.
-          # Binary -version embeds master+shortsha.
-          VERSION_LABEL: master
-        run: |
-          chmod +x scripts/build-release.sh
-          SHORT_SHA="$(echo "${GITHUB_SHA}" | cut -c1-7)"
-          # build-release uses first arg for asset version AND ldflags by default;
-          # inject a more informative binary version via VERSION_LDFLAGS override if present.
-          # We pass "master" as asset version, and set ldflags version separately.
-          export LDFLAGS_VERSION="master+${SHORT_SHA}"
-          ./scripts/build-release.sh master
-
-      - name: Upload default assets
-        uses: actions/upload-artifact@v4
-        with:
-          name: dist-default
-          path: dist/*
-          if-no-files-found: error
-
   build-computeruse:
     # robotgo needs CGO and a *native* toolchain for each target, so these legs
     # run on matching runners instead of cross-compiling. ARM runners are newer
@@ -158,8 +125,10 @@ jobs:
           if-no-files-found: error
 
   publish:
-    needs: [build-default, build-computeruse]
-    if: needs.build-default.result == 'success'
+    needs: [build-computeruse]
+    # Required matrix legs (non-experimental) must succeed. Experimental legs
+    # use continue-on-error and do not fail the job.
+    if: needs.build-computeruse.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - name: Download all assets
@@ -172,6 +141,14 @@ jobs:
         run: |
           cd dist
           rm -f checksums.txt
+          # Require at least one computer-use archive before publishing.
+          shopt -s nullglob
+          assets=(solcode_*_computeruse.*)
+          if ((${#assets[@]} == 0)); then
+            echo "no computer-use assets downloaded; refusing to publish" >&2
+            ls -la
+            exit 1
+          fi
           sha256sum solcode_* > checksums.txt
           ls -la
 
@@ -190,8 +167,8 @@ jobs:
             - Install (Linux/macOS): `curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/master/scripts/install.sh | bash`
             - Install (Windows): `irm https://raw.githubusercontent.com/${{ github.repository }}/master/scripts/install.ps1 | iex`
 
-            Assets ending in `_computeruse` are built with CGO and `-tags computeruse`
-            (robotgo desktop automation). The default assets stay CGO-free.
+            Published assets are the CGO + `-tags computeruse` (robotgo) builds
+            (`*_computeruse`). There is no separate pure-Go release channel.
 
             Assets are overwritten on each push to master/main.
           files: |
