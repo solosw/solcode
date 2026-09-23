@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -51,6 +52,75 @@ func TestBuildJevWithoutAPIKeyReturnsNil(t *testing.T) {
 	}
 	if jev != nil {
 		t.Fatalf("jev = %+v, want nil without an api key", jev)
+	}
+}
+
+// type=local with a real OpenJev model_dir enables the runtime. The inference
+// engine is still a stub, so Ask fails and Decider falls back — but routing
+// toggles and the evaluator seam are live.
+func TestBuildJevLocalUsesOpenJevArtifacts(t *testing.T) {
+	modelDir := os.ExpandEnv(`C:\Users\solosw\.solcode\models\open-jev-deberta-v3-large`)
+	if _, err := os.Stat(modelDir); err != nil {
+		t.Skip("open-jev artifacts not downloaded:", err)
+	}
+	cfg := config.Default()
+	cfg.Jev = config.JevConfig{
+		Enabled:  true,
+		Type:     config.JevBackendLocal,
+		Model:    "open-jev-deberta-v3-large",
+		ModelDir: modelDir,
+		DType:    "q4",
+		Routing:  true,
+	}
+	if err := cfg.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.JevType() != config.JevBackendLocal {
+		t.Fatalf("JevType = %q", cfg.JevType())
+	}
+	if !cfg.JevEnabled() {
+		t.Fatal("local with artifacts should enable Jev")
+	}
+	jev, err := buildJev(cfg)
+	if err != nil {
+		t.Fatalf("buildJev() = %v", err)
+	}
+	if jev == nil {
+		t.Fatal("expected a local jev runtime")
+	}
+	if jev.router() == nil {
+		t.Fatal("routing toggle should enable the router")
+	}
+	// Stub engine: Choose must fall back, not panic or hang.
+	got, conf := jev.decider.Choose(context.Background(), "state", "which?",
+		map[string]string{"a": "A", "b": "B"}, 0.6, "a")
+	if got != "a" || conf != 0 {
+		t.Fatalf("Choose = %q/%v, want fallback a/0", got, conf)
+	}
+}
+
+func TestBuildJevLocalMissingArtifactsReturnsNil(t *testing.T) {
+	cfg := config.Default()
+	cfg.Jev = config.JevConfig{
+		Enabled:  true,
+		Type:     config.JevBackendLocal,
+		Model:    "missing-model",
+		ModelDir: t.TempDir(),
+		DType:    "q4",
+		Routing:  true,
+	}
+	if err := cfg.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.JevEnabled() {
+		t.Fatal("empty model_dir without artifacts must stay disabled")
+	}
+	jev, err := buildJev(cfg)
+	if err != nil {
+		t.Fatalf("buildJev() = %v", err)
+	}
+	if jev != nil {
+		t.Fatalf("jev = %+v, want nil without artifacts", jev)
 	}
 }
 

@@ -92,7 +92,7 @@ func (t *askUserTool) InputSchema() map[string]any {
 						},
 						"header": map[string]any{
 							"type":        "string",
-							"description": "Short label/tag for the question (max 12 chars)",
+							"description": "Short label/tag for the question (max 120 chars)",
 						},
 						"options": map[string]any{
 							"type":        "array",
@@ -149,8 +149,8 @@ func (t *askUserTool) Invoke(ctx context.Context, uctx *UseContext, input json.R
 				return ErrorResult(fmt.Sprintf("question %d option %d has empty label", i+1, j+1)), nil
 			}
 		}
-		if len(q.Header) > 12 {
-			return ErrorResult(fmt.Sprintf("question %d header exceeds 12 characters: %q", i+1, q.Header)), nil
+		if len(q.Header) > 120 {
+			return ErrorResult(fmt.Sprintf("question %d header exceeds 120 characters: %q", i+1, q.Header)), nil
 		}
 	}
 

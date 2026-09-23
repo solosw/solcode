@@ -123,6 +123,11 @@ func (t *todoWriteTool) Invoke(ctx context.Context, uctx *UseContext, input json
 	if err := WriteTextFileContent(ctx, nil, path, string(b)); err != nil {
 		return ErrorResult("failed to write todos: " + err.Error()), nil
 	}
+	// Notify after a successful persist so session memory can snapshot each
+	// mid-turn todolist change, not only the turn-end state.
+	if uctx != nil && uctx.OnTodosUpdated != nil {
+		uctx.OnTodosUpdated(ctx, params.Todos)
+	}
 
 	resultText := "Todos updated successfully. Continue tracking your progress."
 	if verificationNudge {

@@ -125,13 +125,13 @@ func (g *Guardrail) CheckToolInput(ctx context.Context, toolName, payload string
 	return verdict
 }
 
-// rawAsk exposes the client's Ask through the decider so guardrail and other
+// rawAsk exposes the evaluator's Ask through the decider so guardrail and other
 // multi-question callers share one cache and one error path.
 func (d *Decider) rawAsk(ctx context.Context, state any, questions map[string]Question) (Answers, Usage, error) {
-	if d == nil || d.client == nil {
+	if d == nil || d.eval == nil {
 		return nil, Usage{}, errDisabled
 	}
-	return d.client.Ask(ctx, state, questions)
+	return d.eval.Ask(ctx, state, questions)
 }
 
 func truncateRunes(text string, max int) string {

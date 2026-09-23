@@ -12,6 +12,10 @@ import (
 	"time"
 )
 
+// IsUnimportantPath, when set, skips Capture for paths that should not be
+ // retained in checkpoints (session bookkeeping, locks, caches). Optional.
+var IsUnimportantPath func(relSlashPath string) bool
+
 // Store persists per-session file snapshots beside the session JSON.
 type Store struct {
 	root        string
@@ -122,6 +126,9 @@ func (s *Store) Capture(relOrAbsPath string, content *string) error {
 	}
 	key := filepath.ToSlash(rel)
 	if s.captured[key] {
+		return nil
+	}
+	if IsUnimportantPath != nil && IsUnimportantPath(key) {
 		return nil
 	}
 	meta, err := s.readTurnMetaLocked(s.activeTurn)

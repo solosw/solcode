@@ -9,6 +9,7 @@ import (
 
 	"github.com/solosw/solcode/internal/config"
 	"github.com/solosw/solcode/internal/engine"
+	"github.com/solosw/solcode/internal/jevlocal"
 	"github.com/solosw/solcode/internal/memory"
 	"github.com/solosw/solcode/internal/systemone"
 	"github.com/solosw/solcode/internal/tool"
@@ -19,8 +20,13 @@ import (
 // Jev answers typed questions with calibrated probabilities instead of
 // generating text, so it can only ever advise an existing decision — it never
 // becomes the thing that writes code or runs tools. Everything here is
-// optional: when Jev is disabled or its key is missing this returns nil and the
-// callers keep their deterministic behavior.
+// optional: when Jev is disabled or its backend is not ready this returns nil
+// and the callers keep their deterministic behavior.
+//
+// type=api builds the hosted HTTP evaluator. type=local builds a LocalEvaluator
+// over OpenJev/Laya artifacts. Set jev.engine=ort to load ONNX Runtime (auto-
+// installs the CPU shared library into ~/.solcode/lib when missing); otherwise
+// the InferenceEngine stays a stub and Ask fails into Decider fallbacks.
 //
 // Each subsystem is opt-in independently so a deployment can adopt routing
 // without adopting the guardrail, or vice versa.
@@ -28,13 +34,31 @@ func buildJev(cfg config.Config) (*jevRuntime, error) {
 	if !cfg.JevEnabled() {
 		return nil, nil
 	}
-	client := systemone.NewClient(systemone.Options{
-		BaseURL:    cfg.Jev.BaseURL,
-		APIKey:     cfg.Jev.APIKey,
-		Model:      cfg.Jev.Model,
-		TimeoutSec: cfg.Jev.TimeoutSec,
-	})
-	decider := systemone.NewDecider(client).WithErrorHandler(func(err error) {
+	var eval systemone.Evaluator
+	switch cfg.JevType() {
+	case config.JevBackendLocal:
+		local, err := jevlocal.New(jevlocal.Options{
+			ModelDir:   cfg.Jev.ModelDir,
+			Model:      cfg.Jev.Model,
+			DType:      cfg.Jev.DType,
+			EngineName: cfg.Jev.Engine,
+			ORTLib:     cfg.Jev.ORTLib,
+		})
+		if err != nil {
+			// Artifacts disappeared between JevEnabled and here — stay silent.
+			jevLog("jev local disabled: " + err.Error())
+			return nil, nil
+		}
+		eval = local
+	default:
+		eval = systemone.NewClient(systemone.Options{
+			BaseURL:    cfg.Jev.BaseURL,
+			APIKey:     cfg.Jev.APIKey,
+			Model:      cfg.Jev.Model,
+			TimeoutSec: cfg.Jev.TimeoutSec,
+		})
+	}
+	decider := systemone.NewDecider(eval).WithErrorHandler(func(err error) {
 		if err != nil {
 			jevLog("jev decision fell back: " + err.Error())
 		}

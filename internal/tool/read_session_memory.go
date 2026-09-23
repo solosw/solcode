@@ -30,8 +30,11 @@ type SessionMemoryEntry struct {
 	Importance float64
 	Turn       int
 	Files      []string
-	Time       string
-	SessionID  string
+	// Todos is the session-merged todolist view (newest item per id), already
+	// formatted for display. Empty when no turn recorded a snapshot.
+	Todos     []string
+	Time      string
+	SessionID string
 }
 
 // SessionMemoryReadResult reports retrieved entries.
@@ -174,6 +177,12 @@ func formatSessionMemoryReadResult(result SessionMemoryReadResult, req SessionMe
 		}
 		if len(entry.Files) > 0 {
 			b.WriteString("   files: " + strings.Join(entry.Files, ", ") + "\n")
+		}
+		if len(entry.Todos) > 0 {
+			b.WriteString("   todos:\n")
+			for _, todo := range entry.Todos {
+				b.WriteString("     " + todo + "\n")
+			}
 		}
 	}
 	return strings.TrimSpace(b.String())

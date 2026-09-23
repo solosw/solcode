@@ -51,6 +51,10 @@ type UseContext struct {
 	AskUser             func(ctx context.Context, params AskUserParams) (map[string]string, error)
 	// OnAgentProgress reports nested sub-agent lifecycle / tool activity to the UI.
 	OnAgentProgress func(AgentProgressEvent)
+	// OnTodosUpdated is invoked after TodoWrite successfully persists a list.
+	// todos is the model-authored list (including completed items) even when the
+	// on-disk file was cleared because every item was completed.
+	OnTodosUpdated func(ctx context.Context, todos []TodoItem)
 }
 
 // AgentProgressEvent describes a Task/Subagent progress update for interactive UIs.

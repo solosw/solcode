@@ -247,6 +247,9 @@ func New(cfg config.Config, opts ...Option) (*App, error) {
 	engineCfg := engineConfig(cfg, client, runtime, registry, permissions, options.onTextDelta, options.onThinkingDelta, options.onToolStart, options.onToolDone, application.emitUsage, options.onStatus, options.onAgentProgress, options.onAskUser, options.textFileSystem, options.queuedPrompts, recordFileChange, application.captureCheckpoint, application.uncaptureCheckpoint, application.listCheckpointPaths, application.fingerprintBaseline, application.compactMessagesMidRun)
 	engineCfg.Router = jev.router()
 	engineCfg.Guardrail = jev.guardrail()
+	// Snapshot todolist on every TodoWrite so mid-turn updates are not lost;
+	// turn-end recording still captures the final state plus pruned files.
+	engineCfg.OnTodosUpdated = application.recordTodoSessionMemory
 	eng := engine.NewEngine(engineCfg)
 	coordinator := agent.NewCoordinator(eng)
 	subagent := tool.NewSubagentTool(coordinator)
@@ -509,7 +512,9 @@ func (a *App) SwitchModel(cfg config.Config) error {
 			PromotionConfidence:      cfg.Memory.PromotionConfidence,
 		}}).WithRetrievalBudget(cfg.Memory.RetrievalM2Limit, cfg.Memory.RetrievalM3Limit, cfg.Memory.RetrievalM4Limit, cfg.Memory.RetrievalM5Limit)
 	}
-	a.Engine.UpdateConfig(engineConfig(cfg, client, a.Hooks, a.Tools, a.Permissions, a.onTextDelta, a.onThinkingDelta, a.onToolStart, a.onToolDone, a.emitUsage, a.onStatus, a.onAgentProgress, a.onAskUser, a.textFileSystem, a.queuedPrompts, newFileChangeRecorder(a.ChangeGraph), a.captureCheckpoint, a.uncaptureCheckpoint, a.listCheckpointPaths, a.fingerprintBaseline, a.compactMessagesMidRun))
+	ec := engineConfig(cfg, client, a.Hooks, a.Tools, a.Permissions, a.onTextDelta, a.onThinkingDelta, a.onToolStart, a.onToolDone, a.emitUsage, a.onStatus, a.onAgentProgress, a.onAskUser, a.textFileSystem, a.queuedPrompts, newFileChangeRecorder(a.ChangeGraph), a.captureCheckpoint, a.uncaptureCheckpoint, a.listCheckpointPaths, a.fingerprintBaseline, a.compactMessagesMidRun)
+	ec.OnTodosUpdated = a.recordTodoSessionMemory
+	a.Engine.UpdateConfig(ec)
 	return nil
 }
 
@@ -590,6 +595,7 @@ func (a *App) ReloadFeatures(cfg config.Config, mcpFactory mcp.ClientFactory) er
 	engineCfg := engineConfig(cfg, a.Client, a.Hooks, a.Tools, a.Permissions, a.onTextDelta, a.onThinkingDelta, a.onToolStart, a.onToolDone, a.emitUsage, a.onStatus, a.onAgentProgress, a.onAskUser, a.textFileSystem, a.queuedPrompts, newFileChangeRecorder(a.ChangeGraph), a.captureCheckpoint, a.uncaptureCheckpoint, a.listCheckpointPaths, a.fingerprintBaseline, a.compactMessagesMidRun)
 	engineCfg.Router = jev.router()
 	engineCfg.Guardrail = jev.guardrail()
+	engineCfg.OnTodosUpdated = a.recordTodoSessionMemory
 	a.Engine.UpdateConfig(engineCfg)
 	return nil
 }
@@ -821,6 +827,9 @@ func (a *App) RunPromptWithSession(ctx context.Context, sessionID, prompt, workD
 	if result.AgentResult.Error == "" && a.Config.Memory.Enabled {
 		a.rememberExplicitMemory(ctx, prompt, sessionID)
 	}
+	// Persist a per-turn session-memory snapshot (todolist + pruned files) after
+	// the main agent finishes. Failures inside are logged and ignored.
+	a.recordTurnSessionMemory(context.WithoutCancel(ctx), sessionID, workDir, prompt, result.AgentResult.Output)
 	a.resetMemoryMaintenanceCycleIfBelowThreshold(ctx, current)
 	refreshSummary := result.AgentResult.Error == "" && a.Config.Memory.Enabled && a.shouldRefreshMemorySummary(ctx, current)
 	if refreshSummary {

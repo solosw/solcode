@@ -18,7 +18,16 @@ func TestTodoWriteTool_Invoke(t *testing.T) {
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "todos.json")
-	uctx := &tool.UseContext{SessionID: "test", MessageID: "msg1", WorkDir: dir, TodoPath: path}
+	var notified []tool.TodoItem
+	uctx := &tool.UseContext{
+		SessionID: "test",
+		MessageID: "msg1",
+		WorkDir:   dir,
+		TodoPath:  path,
+		OnTodosUpdated: func(ctx context.Context, todos []tool.TodoItem) {
+			notified = append([]tool.TodoItem(nil), todos...)
+		},
+	}
 
 	todos := []tool.TodoItem{
 		{ID: "1", Content: "Write tests", Status: "in_progress", Priority: "high", ActiveForm: "Writing tests"},
@@ -53,6 +62,9 @@ func TestTodoWriteTool_Invoke(t *testing.T) {
 	json.Unmarshal(data, &saved)
 	if len(saved) != 3 {
 		t.Fatalf("expected 3 todos saved, got %d", len(saved))
+	}
+	if len(notified) != 3 || notified[0].Content != "Write tests" {
+		t.Fatalf("OnTodosUpdated = %#v", notified)
 	}
 }
 

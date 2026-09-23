@@ -179,18 +179,38 @@ type ComputerUseConfig struct {
 // memories, and gate risky actions. Everything it decides has a deterministic
 // fallback, so leaving it off (the default) changes nothing.
 type JevConfig struct {
-	// Enabled turns on Jev decisions. Requires a resolvable APIKey.
+	// Enabled turns on Jev decisions. Activation still depends on Type:
+	// api needs a resolvable APIKey; local needs model + model_dir (Phase 1+).
 	Enabled bool `json:"enabled,omitempty"`
-	// BaseURL is the API origin (default https://api.typesafe.ai).
+	// Type selects the backend: "api" (hosted TypeSafe, default) or "local"
+	// (embedded ONNX). The two are mutually exclusive.
+	Type string `json:"type,omitempty"`
+	// BaseURL is the API origin (default https://api.typesafe.ai). api only.
 	BaseURL string `json:"base_url,omitempty"`
 	// BaseURLEnv names an env var holding BaseURL.
 	BaseURLEnv string `json:"base_url_env,omitempty"`
-	// APIKey authenticates the evaluation endpoint.
+	// APIKey authenticates the evaluation endpoint. api only.
 	APIKey string `json:"api_key,omitempty"`
 	// APIKeyEnv names an env var holding APIKey (default TYPESAFE_API_KEY).
 	APIKeyEnv string `json:"api_key_env,omitempty"`
-	// Model selects the System One model (default jev-latest).
+	// Model selects the System One model id. For api this is e.g. jev-latest;
+	// for local it is a free-form family id such as open-jev-deberta-v3-large.
 	Model string `json:"model,omitempty"`
+	// ModelDir is the local artifact root (OpenJev: open_jev_config.json;
+	// Laya: rl_agent_config.json; plus tokenizer + onnx). local only.
+	// Empty falls back to ~/.solcode/models/<model>.
+	ModelDir string `json:"model_dir,omitempty"`
+	// DType selects which ONNX graph under model_dir to load
+	// (e.g. "q4", "q4f16", "fp16", "fp32"). local only; default "q4" for OpenJev.
+	DType string `json:"dtype,omitempty"`
+	// Engine selects the local InferenceEngine implementation.
+	// Empty/"stub" keeps the unimplemented backend (Ask falls back).
+	// "ort" uses ONNX Runtime and auto-downloads the CPU shared library into
+	// ~/.solcode/lib when missing (Win/Linux). "onnx-go" is reserved.
+	Engine string `json:"engine,omitempty"`
+	// ORTLib is an optional path to onnxruntime.dll / libonnxruntime.so.
+	// Empty with engine=ort installs into ~/.solcode/lib when missing.
+	ORTLib string `json:"ort_lib,omitempty"`
 	// TimeoutSec bounds one evaluation (default 20, max 120).
 	TimeoutSec int `json:"timeout_sec,omitempty"`
 	// RouteMinConfidence is the floor below which routing falls back to the
@@ -1632,11 +1652,85 @@ func (c Config) ComputerUseEnabled() bool {
 	return c.ComputerUse.Enabled
 }
 
+// JevBackendAPI / JevBackendLocal are the allowed JevConfig.Type values.
+const (
+	JevBackendAPI   = "api"
+	JevBackendLocal = "local"
+)
+
+// JevType returns the normalized backend type. Empty Type means api so existing
+// settings keep working without a migration.
+func (c Config) JevType() string {
+	switch strings.ToLower(strings.TrimSpace(c.Jev.Type)) {
+	case JevBackendLocal:
+		return JevBackendLocal
+	default:
+		return JevBackendAPI
+	}
+}
+
 // JevEnabled reports whether the System One (Jev) decision layer should be used.
-// Requires enabled=true plus a resolvable api_key; Jev is opt-in and every
-// caller must still work when it is off.
+//
+// api requires enabled=true plus a resolvable api_key.
+// local requires enabled=true, a model id, and a model_dir that looks like an
+// OpenJev or Laya artifact root. The local InferenceEngine may still be a stub
+// — Ask then fails and Decider falls back.
 func (c Config) JevEnabled() bool {
-	return c.Jev.Enabled && strings.TrimSpace(c.Jev.APIKey) != ""
+	if !c.Jev.Enabled {
+		return false
+	}
+	switch c.JevType() {
+	case JevBackendLocal:
+		return strings.TrimSpace(c.Jev.Model) != "" && localJevArtifactsPresent(c.Jev.ModelDir, c.Jev.DType)
+	default:
+		return strings.TrimSpace(c.Jev.APIKey) != ""
+	}
+}
+
+// localJevArtifactsPresent mirrors jevlocal.ArtifactsPresent without importing
+// that package (config must stay free of evaluator deps). Keep the checks in
+// sync when OpenJev / Laya layouts change.
+func localJevArtifactsPresent(modelDir, dtype string) bool {
+	dir := strings.TrimSpace(modelDir)
+	if dir == "" {
+		return false
+	}
+	dtype = strings.ToLower(strings.TrimSpace(dtype))
+	switch {
+	case fileExists(filepath.Join(dir, "open_jev_config.json")):
+		if !fileExists(filepath.Join(dir, "tokenizer.json")) && !fileExists(filepath.Join(dir, "spm.model")) {
+			return false
+		}
+		if dtype == "" {
+			dtype = "q4"
+		}
+	case fileExists(filepath.Join(dir, "rl_agent_config.json")):
+		if !fileExists(filepath.Join(dir, "tokenizer.json")) {
+			return false
+		}
+		if dtype == "" {
+			dtype = "fp32"
+		}
+	default:
+		return false
+	}
+	candidates := []string{
+		filepath.Join(dir, "onnx", "model_"+dtype+".onnx"),
+		filepath.Join(dir, "onnx", "model.onnx"),
+		filepath.Join(dir, "model_"+dtype+".onnx"),
+		filepath.Join(dir, "model.onnx"),
+	}
+	for _, path := range candidates {
+		if fileExists(path) {
+			return true
+		}
+	}
+	return false
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
 }
 
 // normalizeJev resolves env indirection and bounds the timeout.
@@ -1645,8 +1739,16 @@ func (cfg *Config) normalizeJev() {
 		return
 	}
 	jev := &cfg.Jev
+	jev.Type = strings.ToLower(strings.TrimSpace(jev.Type))
+	if jev.Type == "" {
+		jev.Type = JevBackendAPI
+	}
 	jev.BaseURL = strings.TrimSpace(jev.BaseURL)
 	jev.Model = strings.TrimSpace(jev.Model)
+	jev.ModelDir = strings.TrimSpace(jev.ModelDir)
+	jev.DType = strings.ToLower(strings.TrimSpace(jev.DType))
+	jev.Engine = strings.ToLower(strings.TrimSpace(jev.Engine))
+	jev.ORTLib = strings.TrimSpace(jev.ORTLib)
 	jev.BaseURLEnv = strings.TrimSpace(jev.BaseURLEnv)
 	jev.APIKeyEnv = strings.TrimSpace(jev.APIKeyEnv)
 	if jev.APIKeyEnv != "" {
@@ -1667,6 +1769,17 @@ func (cfg *Config) normalizeJev() {
 	}
 	jev.APIKey = strings.TrimSpace(jev.APIKey)
 	jev.BaseURL = strings.TrimRight(strings.TrimSpace(jev.BaseURL), "/")
+	if jev.ModelDir != "" {
+		jev.ModelDir = expandPath(jev.ModelDir)
+	} else if jev.Type == JevBackendLocal && jev.Model != "" {
+		jev.ModelDir = filepath.Join(UserConfigDir(), "models", jev.Model)
+	}
+	if jev.ORTLib != "" {
+		jev.ORTLib = expandPath(jev.ORTLib)
+	}
+	if jev.Type == JevBackendLocal && jev.DType == "" {
+		jev.DType = "q4"
+	}
 	if jev.TimeoutSec <= 0 {
 		jev.TimeoutSec = 20
 	}

@@ -80,6 +80,9 @@ type Config struct {
 	OnAgentProgress  func(tool.AgentProgressEvent)
 	OnUsage          func(Usage)
 	OnAskUser        func(ctx context.Context, params tool.AskUserParams) (map[string]string, error)
+	// OnTodosUpdated records a session-memory todolist snapshot after each
+	// successful TodoWrite. Nil keeps TodoWrite persistence-only.
+	OnTodosUpdated   func(ctx context.Context, sessionID, workDir string, todos []tool.TodoItem)
 	QueuedPrompts    func() []string
 	RecordFileChange func(ctx context.Context, uctx *tool.UseContext, change tool.FileChange)
 	// CaptureCheckpoint records turn-start file content for code-only rewind.
@@ -472,6 +475,12 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 						return e.config.FingerprintBaseline()
 					}(),
 					AskUser: e.config.OnAskUser,
+					OnTodosUpdated: func(todoCtx context.Context, todos []tool.TodoItem) {
+						if e.config.OnTodosUpdated == nil {
+							return
+						}
+						e.config.OnTodosUpdated(todoCtx, nonEmpty(runReq.SessionID, string(cfg.ID)), cfg.WorkDir, todos)
+					},
 				},
 			})
 			if err := ctx.Err(); err != nil {

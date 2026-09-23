@@ -46,8 +46,10 @@ type Entry struct {
 	Importance float64
 	Turn       int
 	Files      []string
-	Time       time.Time
-	SessionID  string
+	// Todos is the todolist snapshot for this turn, optionally annotated by Jev.
+	Todos     []TodoJudgment
+	Time      time.Time
+	SessionID string
 }
 
 type entryHeader struct {
@@ -262,6 +264,11 @@ func formatEntry(entry Entry) string {
 		b.WriteString(strings.Join(entry.Files, ", "))
 		b.WriteString("\n")
 	}
+	if formatted := formatTodos(entry.Todos); formatted != "" {
+		b.WriteString("- todos: ")
+		b.WriteString(formatted)
+		b.WriteString("\n")
+	}
 	b.WriteString("\n")
 	b.WriteString(entry.Summary)
 	b.WriteString("\n")
@@ -314,6 +321,8 @@ func parseEntries(text string) []Entry {
 			current.Keywords = splitList(strings.TrimPrefix(trimmed, "- keywords:"))
 		case strings.HasPrefix(trimmed, "- files:"):
 			current.Files = splitList(strings.TrimPrefix(trimmed, "- files:"))
+		case strings.HasPrefix(trimmed, "- todos:"):
+			current.Todos = parseTodos(strings.TrimPrefix(trimmed, "- todos:"))
 		default:
 			summary.WriteString(line)
 			summary.WriteString("\n")

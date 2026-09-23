@@ -765,7 +765,9 @@ solcode/
 ├── api_tests/                 # API-level integration tests
 └── unit_tests/                # Unit tests
 ```
-
+## Jev model
+- modelscope.cn/models/onnx-community/open-jev-deberta-v3-large-ONNX
+- huggingface.co/tozp/laya-onnx/tree/main
 ## License
 
 MIT

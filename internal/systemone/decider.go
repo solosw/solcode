@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-// Decider wraps a Client with deterministic fallbacks.
+// Decider wraps an Evaluator with deterministic fallbacks.
 //
 // Every method is total: it never returns an error and never blocks a caller
 // on a network failure. When Jev is disabled, unreachable, slow, or answers
@@ -16,15 +16,16 @@ import (
 // This is deliberate: a probabilistic model must never be load-bearing on a
 // security or data-loss decision path.
 type Decider struct {
-	client *Client
+	eval Evaluator
 	// onError surfaces failures for logging/observability. Optional.
 	onError func(error)
 }
 
-// NewDecider builds a decider. A nil or unconfigured client yields a decider
-// that always answers with the fallback.
-func NewDecider(client *Client) *Decider {
-	return &Decider{client: client}
+// NewDecider builds a decider. A nil or unconfigured evaluator yields a
+// decider that always answers with the fallback. *Client implements Evaluator,
+// so existing NewDecider(client) call sites keep working.
+func NewDecider(eval Evaluator) *Decider {
+	return &Decider{eval: eval}
 }
 
 // WithErrorHandler attaches a callback invoked whenever Jev could not be used.
@@ -38,7 +39,7 @@ func (d *Decider) WithErrorHandler(fn func(error)) *Decider {
 
 // Enabled reports whether Jev can actually be called.
 func (d *Decider) Enabled() bool {
-	return d != nil && d.client != nil && d.client.Configured()
+	return d != nil && d.eval != nil && d.eval.Configured()
 }
 
 func (d *Decider) report(err error) {
@@ -58,7 +59,7 @@ func (d *Decider) Choose(ctx context.Context, state any, instructions string, op
 	if !d.Enabled() || len(options) == 0 {
 		return fallback, 0
 	}
-	answer, err := d.client.SingleChoice(ctx, state, instructions, options)
+	answer, err := singleChoice(ctx, d.eval, state, instructions, options)
 	if err != nil {
 		d.report(err)
 		return fallback, 0
@@ -85,7 +86,7 @@ func (d *Decider) Noul(ctx context.Context, state any, instructions string, yesA
 	if !d.Enabled() {
 		return fallback, 0
 	}
-	answer, err := d.client.SingleNoul(ctx, state, instructions)
+	answer, err := singleNoul(ctx, d.eval, state, instructions)
 	if err != nil {
 		d.report(err)
 		return fallback, 0
@@ -118,7 +119,7 @@ func (d *Decider) Answer(ctx context.Context, state any, instructions string, le
 	} else {
 		question = Noul(instructions)
 	}
-	answers, _, err := d.client.Ask(ctx, state, map[string]Question{"question": question})
+	answers, _, err := d.eval.Ask(ctx, state, map[string]Question{"question": question})
 	if err != nil {
 		d.report(err)
 		return Answer{}, err
@@ -232,7 +233,7 @@ func (d *Decider) Rank(ctx context.Context, state any, instructions string, cand
 	if !d.Enabled() || len(candidates) == 0 {
 		return nil
 	}
-	ranked, err := d.client.Rank(ctx, state, instructions, candidates, topN)
+	ranked, err := rank(ctx, d.eval, state, instructions, candidates, topN)
 	if err != nil {
 		d.report(err)
 		return nil

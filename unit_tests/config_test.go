@@ -155,6 +155,123 @@ func TestJevRequiresAPIKey(t *testing.T) {
 	}
 }
 
+func TestJevTypeDefaultsToAPI(t *testing.T) {
+	cfg := config.Default()
+	if cfg.JevType() != config.JevBackendAPI {
+		t.Fatalf("JevType = %q, want api", cfg.JevType())
+	}
+	cfg.Jev.Type = "LOCAL"
+	if err := cfg.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Jev.Type != config.JevBackendLocal {
+		t.Fatalf("normalized Type = %q", cfg.Jev.Type)
+	}
+	if cfg.JevType() != config.JevBackendLocal {
+		t.Fatalf("JevType = %q", cfg.JevType())
+	}
+}
+
+// Local settings normalize model_dir / dtype. Without OpenJev artifacts on disk
+// JevEnabled stays false; with a complete model_dir it turns on.
+func TestJevLocalNormalizesAndRequiresArtifacts(t *testing.T) {
+	cfg := config.Default()
+	cfg.Jev = config.JevConfig{
+		Enabled: true,
+		Type:    config.JevBackendLocal,
+		Model:   "open-jev-deberta-v3-large",
+		Routing: true,
+	}
+	if err := cfg.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	wantDir := filepath.Join(config.UserConfigDir(), "models", "open-jev-deberta-v3-large")
+	if cfg.Jev.ModelDir != wantDir {
+		t.Fatalf("ModelDir = %q, want %q", cfg.Jev.ModelDir, wantDir)
+	}
+	if cfg.Jev.DType != "q4" {
+		t.Fatalf("DType = %q, want q4", cfg.Jev.DType)
+	}
+
+	empty := config.Default()
+	empty.Jev = config.JevConfig{
+		Enabled:  true,
+		Type:     config.JevBackendLocal,
+		Model:    "missing",
+		ModelDir: t.TempDir(),
+		DType:    "q4",
+	}
+	if err := empty.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	if empty.JevEnabled() {
+		t.Fatal("local without artifacts must stay disabled")
+	}
+}
+
+func TestLoadJevLocalSettings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	writeFile(t, path, `{
+		"jev": {
+			"enabled": true,
+			"type": "local",
+			"model": "open-jev-deberta-v3-large",
+			"model_dir": "~/models/open-jev",
+			"dtype": "q4f16",
+			"engine": "ort",
+			"ort_lib": "~/lib/onnxruntime.dll",
+			"routing": true
+		}
+	}`)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load() = %v", err)
+	}
+	if cfg.Jev.Type != config.JevBackendLocal {
+		t.Fatalf("Type = %q", cfg.Jev.Type)
+	}
+	if cfg.Jev.Model != "open-jev-deberta-v3-large" || cfg.Jev.DType != "q4f16" {
+		t.Fatalf("Jev = %+v", cfg.Jev)
+	}
+	if cfg.Jev.Engine != "ort" {
+		t.Fatalf("Engine = %q", cfg.Jev.Engine)
+	}
+	if !strings.Contains(filepath.ToSlash(cfg.Jev.ModelDir), "/models/open-jev") {
+		t.Fatalf("ModelDir = %q, want expanded ~/models/open-jev", cfg.Jev.ModelDir)
+	}
+	if !strings.Contains(filepath.ToSlash(cfg.Jev.ORTLib), "/lib/onnxruntime.dll") {
+		t.Fatalf("ORTLib = %q", cfg.Jev.ORTLib)
+	}
+	// ~/models/open-jev is almost certainly missing artifacts in the test env.
+	if cfg.JevEnabled() {
+		t.Fatal("local settings without on-disk artifacts must not enable Jev")
+	}
+}
+
+// Laya uses rl_agent_config.json rather than open_jev_config.json; JevEnabled
+// must treat a complete Laya layout as local artifacts present.
+func TestJevEnabledRecognizesLayaArtifacts(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "rl_agent_config.json"), `{"max_len":512}`)
+	writeFile(t, filepath.Join(dir, "tokenizer.json"), `{}`)
+	writeFile(t, filepath.Join(dir, "model.onnx"), "onnx")
+
+	cfg := config.Default()
+	cfg.Jev = config.JevConfig{
+		Enabled:  true,
+		Type:     config.JevBackendLocal,
+		Model:    "laya-test",
+		ModelDir: dir,
+		DType:    "fp32",
+	}
+	if err := cfg.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.JevEnabled() {
+		t.Fatal("Laya layout should enable local Jev")
+	}
+}
+
 func TestJevNormalizeBoundsTimeoutAndConfidence(t *testing.T) {
 	cfg := config.Default()
 	cfg.Jev = config.JevConfig{

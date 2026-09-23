@@ -793,7 +793,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case AskUserRequestMsg:
 		customInput := textinput.New()
 		customInput.Placeholder = "Type a custom answer"
-		customInput.CharLimit = 1000
+		customInput.CharLimit = 10000
 		customInput.SetWidth(max(20, m.width-12))
 		m.pendingAsk = &pendingAskUser{
 			questions:   append([]AskUserQuestion(nil), msg.Questions...),
@@ -2519,7 +2519,7 @@ func (m Model) renderAskUserDialog() string {
 	}
 	body := strings.Join([]string{
 		title,
-		truncate(strings.TrimSpace(q.Question), 600),
+		truncate(strings.TrimSpace(q.Question), 6000),
 		list,
 		t.PermHint.Render(hint),
 	}, "\n")

@@ -146,6 +146,59 @@ func TestReadMissingFileIsEmpty(t *testing.T) {
 	}
 }
 
+func TestTodosRoundTripAndMerge(t *testing.T) {
+	store := NewStore(t.TempDir())
+	ctx := context.Background()
+	base := time.Date(2026, 4, 1, 12, 0, 0, 0, time.Local)
+
+	if _, err := store.Append(ctx, Entry{
+		Summary:   "Turn one snapshot.",
+		Turn:      0,
+		Time:      base,
+		SessionID: "main",
+		Todos: []TodoJudgment{
+			{ID: "1", Content: "Wire turn end", Status: TodoInProgress, Valid: true},
+			{ID: "2", Content: "Prune files", Status: TodoPending, Valid: true},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Append(ctx, Entry{
+		Summary:   "Turn two snapshot.",
+		Turn:      1,
+		Time:      base.Add(time.Hour),
+		SessionID: "main",
+		Todos: []TodoJudgment{
+			{ID: "1", Content: "Wire turn end", Status: TodoCompleted, Valid: true, Done: true},
+			{ID: "2", Content: "Prune files", Status: TodoInProgress, Valid: false},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	list, err := store.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 2 || len(list[1].Todos) != 2 {
+		t.Fatalf("list = %#v", list)
+	}
+	if list[1].Todos[0].Done != true || list[1].Todos[1].Valid != false {
+		t.Fatalf("parsed todos = %#v", list[1].Todos)
+	}
+
+	merged := MergeTodos(list)
+	if len(merged) != 2 {
+		t.Fatalf("merged = %#v", merged)
+	}
+	if merged[0].ID != "1" || !merged[0].Done || merged[0].Status != TodoCompleted {
+		t.Fatalf("merged[0] = %#v", merged[0])
+	}
+	if merged[1].ID != "2" || merged[1].Valid {
+		t.Fatalf("merged[1] = %#v", merged[1])
+	}
+}
+
 func TestReadForSessionFiltersBySessionID(t *testing.T) {
 	store := NewStore(t.TempDir())
 	ctx := context.Background()

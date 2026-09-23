@@ -3,6 +3,7 @@ package checkpoint
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -70,6 +71,38 @@ func TestStoreCaptureDedupAndRestore(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(work, "b.txt")); !os.IsNotExist(err) {
 		t.Fatalf("b.txt should be deleted, err=%v", err)
+	}
+}
+
+func TestStoreCaptureSkipsUnimportantPaths(t *testing.T) {
+	prev := IsUnimportantPath
+	IsUnimportantPath = func(relSlashPath string) bool {
+		base := filepath.Base(relSlashPath)
+		return base == "go.sum" || strings.HasSuffix(relSlashPath, ".log")
+	}
+	t.Cleanup(func() { IsUnimportantPath = prev })
+
+	work := t.TempDir()
+	store, err := NewStore(t.TempDir(), "main", work, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.BeginTurn("noise"); err != nil {
+		t.Fatal(err)
+	}
+	content := "x"
+	if err := store.Capture("go.sum", &content); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Capture("tmp/debug.log", &content); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Capture("keep.go", &content); err != nil {
+		t.Fatal(err)
+	}
+	files := store.TurnFiles(0)
+	if len(files) != 1 || files[0] != "keep.go" {
+		t.Fatalf("files = %#v", files)
 	}
 }
 

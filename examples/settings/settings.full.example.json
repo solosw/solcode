@@ -14,6 +14,7 @@
   },
   "jev": {
     "enabled": false,
+    "type": "api",
     "base_url": "https://api.typesafe.ai",
     "api_key_env": "TYPESAFE_API_KEY",
     "model": "jev-latest",

@@ -1,0 +1,16 @@
+{
+  "jev": {
+    "enabled": true,
+    "type": "local",
+    "model": "open-jev-deberta-v3-large",
+    "model_dir": "~/.solcode/models/open-jev-deberta-v3-large",
+    "dtype": "q4",
+    "engine": "ort",
+    "ort_lib": "",
+    "timeout_sec": 20,
+    "route_min_confidence": 0.6,
+    "routing": true,
+    "memory_judge": true,
+    "guardrail": true
+  }
+}

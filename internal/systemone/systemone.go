@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -469,82 +468,15 @@ type Ranked struct {
 // threshold. This is the Choice-based reranking pattern: put the real options
 // in one question rather than scoring candidates one at a time.
 func (c *Client) Rank(ctx context.Context, state any, instructions string, candidates []Candidate, topN int) ([]Ranked, error) {
-	if c == nil {
-		return nil, fmt.Errorf("systemone client is nil")
-	}
-	options := make(map[string]string, len(candidates))
-	names := make([]string, 0, len(candidates))
-	for _, candidate := range candidates {
-		name := strings.TrimSpace(candidate.Name)
-		if name == "" {
-			continue
-		}
-		if _, dup := options[name]; dup {
-			continue
-		}
-		options[name] = strings.TrimSpace(candidate.Description)
-		names = append(names, name)
-	}
-	if len(names) == 0 {
-		return nil, nil
-	}
-	answers, _, err := c.Ask(ctx, state, map[string]Question{
-		"ranking": Choice(instructions, options),
-	})
-	if err != nil {
-		return nil, err
-	}
-	answer, ok := answers["ranking"]
-	if !ok {
-		return nil, fmt.Errorf("systemone ranking returned no answer")
-	}
-	ranked := make([]Ranked, 0, len(names))
-	for _, name := range names {
-		ranked = append(ranked, Ranked{
-			Name:         name,
-			Probability:  answer.Probabilities[name],
-			Confidence:   answer.Confidence,
-			Distribution: answer.Probabilities,
-		})
-	}
-	sort.SliceStable(ranked, func(i, j int) bool {
-		if ranked[i].Probability != ranked[j].Probability {
-			return ranked[i].Probability > ranked[j].Probability
-		}
-		return ranked[i].Name < ranked[j].Name
-	})
-	if topN > 0 && len(ranked) > topN {
-		ranked = ranked[:topN]
-	}
-	return ranked, nil
+	return rank(ctx, c, state, instructions, candidates, topN)
 }
 
 // SingleChoice asks one Choice question and returns the selected option.
 func (c *Client) SingleChoice(ctx context.Context, state any, instructions string, options map[string]string) (Answer, error) {
-	answers, _, err := c.Ask(ctx, state, map[string]Question{
-		"question": Choice(instructions, options),
-	})
-	if err != nil {
-		return Answer{}, err
-	}
-	answer, ok := answers["question"]
-	if !ok {
-		return Answer{}, fmt.Errorf("systemone returned no answer")
-	}
-	return answer, nil
+	return singleChoice(ctx, c, state, instructions, options)
 }
 
 // SingleNoul asks one yes/no question and returns the probability of yes.
 func (c *Client) SingleNoul(ctx context.Context, state any, instructions string) (Answer, error) {
-	answers, _, err := c.Ask(ctx, state, map[string]Question{
-		"question": Noul(instructions),
-	})
-	if err != nil {
-		return Answer{}, err
-	}
-	answer, ok := answers["question"]
-	if !ok {
-		return Answer{}, fmt.Errorf("systemone returned no answer")
-	}
-	return answer, nil
+	return singleNoul(ctx, c, state, instructions)
 }
