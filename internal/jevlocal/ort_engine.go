@@ -18,13 +18,18 @@ const (
 	defaultORTLibNameSO = "libonnxruntime.so"
 )
 
-// ORTOptions configures the ONNX Runtime CPU engine.
+// ORTOptions configures an ONNX Runtime session.
 type ORTOptions struct {
 	// ModelPath is the .onnx graph (external .onnx_data may sit beside it).
 	ModelPath string
 	// SharedLibrary is the onnxruntime.dll / .so path. Empty uses
 	// ~/.solcode/lib/onnxruntime.dll (Windows) or libonnxruntime.so.
 	SharedLibrary string
+	// GPU enables the CUDA execution provider. Requires a CUDA-capable ORT
+	// shared library (the auto-installed package is CPU-only).
+	GPU bool
+	// CudaDeviceID selects the CUDA device when GPU is true (default 0).
+	CudaDeviceID int
 }
 
 var (
@@ -79,7 +84,7 @@ func ensureORTEnvironment(sharedLibrary string) error {
 	return ortEnvErr
 }
 
-// ORTEngine is an InferenceEngine backed by ONNX Runtime (CPU for now).
+// ORTEngine is an InferenceEngine backed by ONNX Runtime (CPU by default; CUDA optional).
 type ORTEngine struct {
 	modelPath string
 	session   *ort.DynamicAdvancedSession
@@ -123,7 +128,17 @@ func NewORTEngine(opts ORTOptions) (*ORTEngine, error) {
 		outTypes[out.Name] = out.DataType
 	}
 
-	session, err := ort.NewDynamicAdvancedSession(modelPath, inNames, outNames, nil)
+	sessionOpts, err := buildORTSessionOptions(opts)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if sessionOpts != nil {
+			_ = sessionOpts.Destroy()
+		}
+	}()
+
+	session, err := ort.NewDynamicAdvancedSession(modelPath, inNames, outNames, sessionOpts)
 	if err != nil {
 		return nil, fmt.Errorf("NewDynamicAdvancedSession: %w", err)
 	}
@@ -135,6 +150,37 @@ func NewORTEngine(opts ORTOptions) (*ORTEngine, error) {
 		inTypes:   inTypes,
 		outTypes:  outTypes,
 	}, nil
+}
+
+func buildORTSessionOptions(opts ORTOptions) (*ort.SessionOptions, error) {
+	if !opts.GPU {
+		return nil, nil
+	}
+	sessionOpts, err := ort.NewSessionOptions()
+	if err != nil {
+		return nil, fmt.Errorf("NewSessionOptions: %w", err)
+	}
+	cudaOpts, err := ort.NewCUDAProviderOptions()
+	if err != nil {
+		_ = sessionOpts.Destroy()
+		return nil, fmt.Errorf("NewCUDAProviderOptions: %w", err)
+	}
+	defer cudaOpts.Destroy()
+	deviceID := opts.CudaDeviceID
+	if deviceID < 0 {
+		deviceID = 0
+	}
+	if err := cudaOpts.Update(map[string]string{
+		"device_id": fmt.Sprintf("%d", deviceID),
+	}); err != nil {
+		_ = sessionOpts.Destroy()
+		return nil, fmt.Errorf("CUDAProviderOptions.Update: %w", err)
+	}
+	if err := sessionOpts.AppendExecutionProviderCUDA(cudaOpts); err != nil {
+		_ = sessionOpts.Destroy()
+		return nil, fmt.Errorf("AppendExecutionProviderCUDA: %w (need a CUDA ORT build under ~/.solcode/lib or jev.ort_lib)", err)
+	}
+	return sessionOpts, nil
 }
 
 func (e *ORTEngine) Name() string { return EngineORT }

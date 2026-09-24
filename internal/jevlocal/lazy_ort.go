@@ -12,23 +12,27 @@ import (
 // swaps the live session in. Ask/RunNamed keep returning ErrEngineNotReady until
 // then (or forever if load fails / Close wins the race).
 type loadingORTEngine struct {
-	modelPath string
-	ortLib    string
+	modelPath    string
+	ortLib       string
+	gpu          bool
+	cudaDeviceID int
 
-	mu     sync.RWMutex
-	inner  *ORTEngine
+	mu      sync.RWMutex
+	inner   *ORTEngine
 	loadErr error
-	closed bool
+	closed  bool
 
 	done   chan struct{}
 	logged atomic.Bool
 }
 
-func startLoadingORTEngine(modelPath, ortLib string) *loadingORTEngine {
+func startLoadingORTEngine(modelPath, ortLib string, gpu bool, cudaDeviceID int) *loadingORTEngine {
 	e := &loadingORTEngine{
-		modelPath: modelPath,
-		ortLib:    ortLib,
-		done:      make(chan struct{}),
+		modelPath:    modelPath,
+		ortLib:       ortLib,
+		gpu:          gpu,
+		cudaDeviceID: cudaDeviceID,
+		done:         make(chan struct{}),
 	}
 	go e.load()
 	return e
@@ -45,6 +49,8 @@ func (e *loadingORTEngine) load() {
 	eng, err := NewORTEngine(ORTOptions{
 		ModelPath:     e.modelPath,
 		SharedLibrary: lib,
+		GPU:           e.gpu,
+		CudaDeviceID:  e.cudaDeviceID,
 	})
 	if err != nil {
 		e.finish(nil, fmt.Errorf("%w: %v", ErrEngineNotReady, err))

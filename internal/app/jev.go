@@ -39,11 +39,13 @@ func buildJev(cfg config.Config) (*jevRuntime, error) {
 	switch cfg.JevType() {
 	case config.JevBackendLocal:
 		local, err := jevlocal.New(jevlocal.Options{
-			ModelDir:   cfg.Jev.ModelDir,
-			Model:      cfg.Jev.Model,
-			DType:      cfg.Jev.DType,
-			EngineName: cfg.Jev.Engine,
-			ORTLib:     cfg.Jev.ORTLib,
+			ModelDir:     cfg.Jev.ModelDir,
+			Model:        cfg.Jev.Model,
+			DType:        cfg.Jev.DType,
+			EngineName:   cfg.Jev.Engine,
+			ORTLib:       cfg.ORTLibraryPath(),
+			GPU:          cfg.ORTGPUEnabled(),
+			CudaDeviceID: cfg.ORT.CudaDeviceID,
 		})
 		if err != nil {
 			// Artifacts disappeared between JevEnabled and here — stay silent.

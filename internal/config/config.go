@@ -160,6 +160,10 @@ type Config struct {
 	ComputerUse ComputerUseConfig `json:"computer_use,omitempty"`
 	// Jev configures the TypeSafe System One decision layer. Off by default.
 	Jev JevConfig `json:"jev,omitempty"`
+	// ORT is shared ONNX Runtime settings for local Jev and local embeddings.
+	// Default is CPU. gpu=true enables the CUDA execution provider (manual GPU
+	// ORT package required under ~/.solcode/lib or jev.ort_lib).
+	ORT ORTConfig `json:"ort,omitempty"`
 	// Embedding configures optional vector embeddings for semantic search.
 	// Off by default. Project index lives under ProjectStateDir/embeddings
 	// (sibling of knowledge.db); shared ONNX weights fall back to
@@ -175,6 +179,18 @@ type Config struct {
 type ComputerUseConfig struct {
 	// Enabled registers the ComputerUse tool and loads the builtin skill.
 	Enabled bool `json:"enabled,omitempty"`
+}
+
+// ORTConfig is shared ONNX Runtime settings for local Jev and local embeddings.
+//
+// Default is CPU (gpu=false). Enabling GPU requires a CUDA-capable ORT shared
+// library (not the CPU package auto-installed into ~/.solcode/lib).
+// Shared-library path comes from jev.ort_lib, then ~/.solcode/lib.
+type ORTConfig struct {
+	// GPU enables the CUDA execution provider for local ORT sessions.
+	GPU bool `json:"gpu,omitempty"`
+	// CudaDeviceID selects the CUDA device when GPU is true (default 0).
+	CudaDeviceID int `json:"cuda_device_id,omitempty"`
 }
 
 // EmbeddingBackendAPI / EmbeddingBackendLocal are allowed EmbeddingConfig.Type values.
@@ -605,6 +621,7 @@ func (cfg *Config) Normalize() error {
 
 	cfg.LSP = normalizeLSPConfig(cfg.LSP)
 	cfg.normalizeImage()
+	cfg.normalizeORT()
 	cfg.normalizeJev()
 	cfg.normalizeEmbedding()
 
@@ -1874,6 +1891,27 @@ func localJevArtifactsPresent(modelDir, dtype string) bool {
 func fileExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir()
+}
+
+// normalizeORT cleans shared ONNX Runtime settings. GPU stays off by default.
+func (cfg *Config) normalizeORT() {
+	if cfg == nil {
+		return
+	}
+	if cfg.ORT.CudaDeviceID < 0 {
+		cfg.ORT.CudaDeviceID = 0
+	}
+}
+
+// ORTLibraryPath returns the shared library path for local ORT sessions.
+// Prefer jev.ort_lib; empty means the caller uses ~/.solcode/lib.
+func (c Config) ORTLibraryPath() string {
+	return strings.TrimSpace(c.Jev.ORTLib)
+}
+
+// ORTGPUEnabled reports whether local ORT sessions should use CUDA EP.
+func (c Config) ORTGPUEnabled() bool {
+	return c.ORT.GPU
 }
 
 // normalizeJev resolves env indirection and bounds the timeout.

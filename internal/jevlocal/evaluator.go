@@ -21,6 +21,10 @@ type Options struct {
 	EngineName string
 	// ORTLib is an optional path to onnxruntime.dll / .so for engine=ort.
 	ORTLib string
+	// GPU enables the CUDA execution provider for engine=ort.
+	GPU bool
+	// CudaDeviceID selects the CUDA device when GPU is true (default 0).
+	CudaDeviceID int
 	// Engine overrides the inference backend. Nil selects from EngineName
 	// (or UnimplementedEngine when stub/unavailable). Injected engines are
 	// used as-is and are not wrapped in the async ORT loader.
@@ -70,7 +74,7 @@ func defaultEngine(arts Artifacts, opts Options) (InferenceEngine, error) {
 	case "", EngineORT:
 		// Async: return immediately so app.New / ReloadFeatures are not blocked
 		// by ORT shared-lib install + session create. Ask falls back until Ready.
-		return startLoadingORTEngine(arts.ONNXPath, opts.ORTLib), nil
+		return startLoadingORTEngine(arts.ONNXPath, opts.ORTLib, opts.GPU, opts.CudaDeviceID), nil
 	case "onnx-go":
 		// Reserved: pure-Go backend not wired yet (onnx-go/gorgonnx cannot load
 		// OpenJev INT4 or reliably run Laya). Prefer engine=ort with auto-install.

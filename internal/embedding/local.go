@@ -29,12 +29,14 @@ type LocalArtifacts struct {
 }
 
 type localProvider struct {
-	arts       LocalArtifacts
-	dimensions int
-	maxLen     int
-	queryPref  string
-	docPref    string
-	ortLib     string
+	arts         LocalArtifacts
+	dimensions   int
+	maxLen       int
+	queryPref    string
+	docPref      string
+	ortLib       string
+	gpu          bool
+	cudaDeviceID int
 
 	mu      sync.Mutex
 	tok     *sp.Tokenizer
@@ -56,12 +58,14 @@ func newLocalProvider(opts Options) (*localProvider, error) {
 		return nil, err
 	}
 	p := &localProvider{
-		arts:       arts,
-		dimensions: cfg.Dimensions,
-		maxLen:     arts.MaxLen,
-		queryPref:  defaultQueryPrefix,
-		docPref:    defaultDocPrefix,
-		ortLib:     strings.TrimSpace(opts.ORTLib),
+		arts:         arts,
+		dimensions:   cfg.Dimensions,
+		maxLen:       arts.MaxLen,
+		queryPref:    defaultQueryPrefix,
+		docPref:      defaultDocPrefix,
+		ortLib:       strings.TrimSpace(opts.ORTLib),
+		gpu:          opts.GPU,
+		cudaDeviceID: opts.CudaDeviceID,
 	}
 	go p.ensureLoaded()
 	return p, nil
@@ -144,6 +148,8 @@ func (p *localProvider) ensureLoaded() {
 		eng, err := jevlocal.NewORTEngine(jevlocal.ORTOptions{
 			ModelPath:     p.arts.ONNXPath,
 			SharedLibrary: lib,
+			GPU:           p.gpu,
+			CudaDeviceID:  p.cudaDeviceID,
 		})
 		if err != nil {
 			p.loadErr = fmt.Errorf("embedding local ort: %w", err)

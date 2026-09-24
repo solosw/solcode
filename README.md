@@ -103,6 +103,7 @@ Local computer-use build (matches CI):
 - For source builds only: Go 1.26.2+ (toolchain pin in `go.mod`)
 - Optional: language servers on `PATH` for the [LSP](#lsp-language-server-protocol) tool (e.g. `gopls`, `pyright-langserver`)
 - Optional local Jev: OpenJev/Laya model directory; local defaults to `engine=ort` (CPU ONNX Runtime auto-installed under `~/.solcode/lib` on Windows/Linux when missing). ORT loads in the background so startup is not blocked; early decisions may use deterministic fallbacks until the session is ready
+- Optional local ORT GPU: default is CPU; set `ort.gpu=true` and install a CUDA-capable ORT build (see [Local ORT GPU](#local-ort-gpu-optional))
 
 ### First run
 
@@ -299,6 +300,47 @@ These skills are **not** registered without Jev routing, and `skills.disabled` /
 - **One Noul per candidate, not one Choice.** Tool screening asks a separate
   yes/no question about each candidate, because a request can need several
   tools at once and a Choice would return a single winner.
+
+### Local ORT GPU (optional)
+
+Local Jev (`jev.type=local`, `engine=ort`) and local embeddings (`embedding.type=local`)
+share one ONNX Runtime. **Default is CPU.** Auto-install only downloads the CPU
+package into `~/.solcode/lib`.
+
+To use NVIDIA CUDA:
+
+1. Install a CUDA toolkit / driver stack that matches the ORT GPU build you download
+   (see [CUDA Execution Provider](https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html)).
+2. Download the **GPU** ORT archive for the same version as `DefaultORTVersion` in
+   `internal/jevlocal/ort_install.go` from
+   [microsoft/onnxruntime releases](https://github.com/microsoft/onnxruntime/releases)
+   (asset names look like `onnxruntime-win-x64-gpu-<ver>.zip` or
+   `onnxruntime-linux-x64-gpu-<ver>.tgz` — not the CPU zip/tgz).
+3. Extract into `~/.solcode/lib` (or point `jev.ort_lib` at the primary library):
+   - Windows: `onnxruntime.dll` plus `onnxruntime_providers_shared.dll` and
+     `onnxruntime_providers_cuda.dll` (and any CUDA deps shipped beside them)
+   - Linux: versioned `libonnxruntime.so.<ver>` plus `libonnxruntime_providers_shared.so`
+     and `libonnxruntime_providers_cuda.so`
+4. Enable the shared switch (applies to both local Jev and local embeddings):
+
+```json
+{
+  "ort": {
+    "gpu": true,
+    "cuda_device_id": 0
+  },
+  "jev": {
+    "ort_lib": ""
+  }
+}
+```
+
+Library path resolution: `jev.ort_lib` if set, otherwise `~/.solcode/lib`.
+Leaving `ort.gpu` false (or omitted) keeps CPU. GPU builds are **not**
+auto-downloaded; if CUDA EP fails to attach, check that the shared library is a
+GPU package and that `providers_cuda` sits next to it.
+
+See also [`examples/settings/settings.ort.gpu.example.json`](examples/settings/settings.ort.gpu.example.json).
 
 ### Context and tool-result handling
 

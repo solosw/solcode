@@ -31,6 +31,10 @@ type Options struct {
 	ModelDir string
 	// ORTLib overrides the default ~/.solcode/lib onnxruntime shared library.
 	ORTLib string
+	// GPU enables CUDA EP for the local ORT session (shared with Jev via ort{}).
+	GPU bool
+	// CudaDeviceID selects the CUDA device when GPU is true (default 0).
+	CudaDeviceID int
 }
 
 // NewProvider builds an API or local embedding backend from cfg.
