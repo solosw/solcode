@@ -306,7 +306,21 @@
                 </select>
               </label>
               <label>ORT library path
-                <input id="set-jev-ort-lib" type="text" placeholder="Empty auto-installs into ~/.solcode/lib" />
+                <input id="set-jev-ort-lib" type="text" placeholder="Path to onnxruntime.dll / .so (empty = ~/.solcode/lib auto CPU)" />
+              </label>
+              <label class="settings-row settings-toggle-row" style="grid-column: 1 / -1">
+                <div class="settings-row-main">
+                  <strong>ORT GPU (CUDA)</strong>
+                  <div class="settings-row-detail">
+                    Shared by local Jev and local embeddings. Default is CPU; GPU builds are
+                    <em>not</em> auto-downloaded — point the library path at a CUDA ORT package
+                    (with <code>providers_cuda</code> beside the primary DLL/SO).
+                  </div>
+                </div>
+                <input type="checkbox" id="set-ort-gpu" />
+              </label>
+              <label>CUDA device ID
+                <input id="set-ort-cuda-device-id" type="number" min="0" step="1" value="0" />
               </label>
             </div>
 

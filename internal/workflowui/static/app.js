@@ -78,6 +78,8 @@
     setJevDType: document.getElementById("set-jev-dtype"),
     setJevEngine: document.getElementById("set-jev-engine"),
     setJevOrtLib: document.getElementById("set-jev-ort-lib"),
+    setOrtGpu: document.getElementById("set-ort-gpu"),
+    setOrtCudaDeviceId: document.getElementById("set-ort-cuda-device-id"),
     setJevTimeout: document.getElementById("set-jev-timeout"),
     setJevConfidence: document.getElementById("set-jev-confidence"),
     setJevRouting: document.getElementById("set-jev-routing"),
@@ -857,6 +859,9 @@
     jev.routing = Boolean(el.setJevRouting.checked);
     jev.memory_judge = Boolean(el.setJevMemoryJudge.checked);
     jev.guardrail = Boolean(el.setJevGuardrail.checked);
+    const ort = d.ort || (d.ort = {});
+    ort.gpu = Boolean(el.setOrtGpu.checked);
+    ort.cuda_device_id = numberInput(el.setOrtCudaDeviceId.value, ort.cuda_device_id ?? 0);
     // The key is write-only: an empty field means "keep what is stored", so it
     // is only included in the payload when the user actually typed something.
     const typedKey = el.setJevApiKey.value.trim();
@@ -1016,6 +1021,9 @@
     el.setJevDType.value = jev.dtype || "";
     el.setJevEngine.value = jev.engine || "ort";
     el.setJevOrtLib.value = jev.ort_lib || "";
+    const ort = d.ort || {};
+    el.setOrtGpu.checked = Boolean(ort.gpu);
+    el.setOrtCudaDeviceId.value = ort.cuda_device_id ?? 0;
     el.setJevTimeout.value = jev.timeout_sec ?? 20;
     el.setJevConfidence.value = jev.route_min_confidence ?? 0.6;
     el.setJevRouting.checked = Boolean(jev.routing);
@@ -1112,6 +1120,8 @@
       jev_dtype: d.jev?.dtype || "",
       jev_engine: d.jev?.engine || "ort",
       jev_ort_lib: d.jev?.ort_lib || "",
+      ort_gpu: Boolean(d.ort?.gpu),
+      ort_cuda_device_id: d.ort?.cuda_device_id ?? 0,
       jev_timeout_sec: d.jev?.timeout_sec ?? 20,
       jev_route_min_confidence: d.jev?.route_min_confidence ?? 0.6,
       jev_routing: Boolean(d.jev?.routing),
@@ -1355,6 +1365,7 @@
       el.setJevType,
       el.setJevEngine,
       el.setJevApiKey,
+      el.setOrtGpu,
       el.setJevRouting,
       el.setJevMemoryJudge,
       el.setJevGuardrail,
@@ -1376,6 +1387,7 @@
       el.setJevModelDir,
       el.setJevDType,
       el.setJevOrtLib,
+      el.setOrtCudaDeviceId,
       el.setJevTimeout,
       el.setJevConfidence,
       el.setEmbeddingBaseUrl,

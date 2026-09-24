@@ -47,6 +47,10 @@ func TestSettingsPersistFeaturesThroughDisk(t *testing.T) {
 				"memory_judge":         next.Jev.MemoryJudge,
 				"guardrail":            next.Jev.Guardrail,
 			},
+			"ort": map[string]any{
+				"gpu":            next.ORT.GPU,
+				"cuda_device_id": next.ORT.CudaDeviceID,
+			},
 			"embedding": map[string]any{
 				"enabled":     next.Embedding.Enabled,
 				"type":        next.Embedding.Type,
@@ -90,6 +94,8 @@ func TestSettingsPersistFeaturesThroughDisk(t *testing.T) {
 		"jev_routing":              true,
 		"jev_memory_judge":         true,
 		"jev_guardrail":            true,
+		"ort_gpu":                  true,
+		"ort_cuda_device_id":       1,
 		"embedding_enabled":        true,
 		"embedding_type":           "api",
 		"embedding_api_key":        "emb_persisted",
@@ -148,6 +154,16 @@ func TestSettingsPersistFeaturesThroughDisk(t *testing.T) {
 	}
 	if reloaded.Jev.TimeoutSec != 30 || reloaded.Jev.RouteMinConfidence != 0.7 {
 		t.Fatalf("reloaded jev = %+v", reloaded.Jev)
+	}
+	ortBlock, ok := persisted["ort"].(map[string]any)
+	if !ok || ortBlock["gpu"] != true {
+		t.Fatalf("persisted ort = %#v", persisted["ort"])
+	}
+	if ortBlock["cuda_device_id"] != float64(1) {
+		t.Fatalf("persisted ort.cuda_device_id = %v", ortBlock["cuda_device_id"])
+	}
+	if !reloaded.ORT.GPU || reloaded.ORT.CudaDeviceID != 1 {
+		t.Fatalf("reloaded ort = %+v", reloaded.ORT)
 	}
 	if !reloaded.EmbeddingEnabled() {
 		t.Fatalf("reloaded Embedding should be active: %+v", reloaded.Embedding)

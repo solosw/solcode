@@ -808,6 +808,10 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 						"memory_judge":         next.Jev.MemoryJudge,
 						"guardrail":            next.Jev.Guardrail,
 					},
+					"ort": map[string]any{
+						"gpu":            next.ORT.GPU,
+						"cuda_device_id": next.ORT.CudaDeviceID,
+					},
 					"embedding": map[string]any{
 						"enabled":     next.Embedding.Enabled,
 						"type":        next.Embedding.Type,

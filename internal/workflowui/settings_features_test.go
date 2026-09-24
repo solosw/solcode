@@ -184,14 +184,16 @@ func TestPostSettingsAppliesLocalJev(t *testing.T) {
 	_, url, applied := settingsServer(t, cfg)
 
 	res := postSettings(t, url, map[string]any{
-		"jev_enabled":   true,
-		"jev_type":      "local",
-		"jev_model":     "open-jev-deberta-v3-large",
-		"jev_model_dir": "~/.solcode/models/open-jev-deberta-v3-large",
-		"jev_dtype":     "q4",
-		"jev_engine":    "ort",
-		"jev_ort_lib":   "",
-		"jev_routing":   true,
+		"jev_enabled":        true,
+		"jev_type":           "local",
+		"jev_model":          "open-jev-deberta-v3-large",
+		"jev_model_dir":      "~/.solcode/models/open-jev-deberta-v3-large",
+		"jev_dtype":          "q4",
+		"jev_engine":         "ort",
+		"jev_ort_lib":        "C:\\ort\\onnxruntime.dll",
+		"ort_gpu":            true,
+		"ort_cuda_device_id": 1,
+		"jev_routing":        true,
 	})
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
@@ -206,8 +208,64 @@ func TestPostSettingsAppliesLocalJev(t *testing.T) {
 	if applied.Jev.Engine != "ort" {
 		t.Fatalf("engine = %q", applied.Jev.Engine)
 	}
+	if applied.Jev.ORTLib != `C:\ort\onnxruntime.dll` {
+		t.Fatalf("ort_lib = %q", applied.Jev.ORTLib)
+	}
+	if !applied.ORT.GPU || applied.ORT.CudaDeviceID != 1 {
+		t.Fatalf("ort = %+v", applied.ORT)
+	}
 	if !strings.Contains(filepath.ToSlash(applied.Jev.ModelDir), "/models/open-jev-deberta-v3-large") {
 		t.Fatalf("model_dir = %q", applied.Jev.ModelDir)
+	}
+}
+
+func TestSettingsExposeORT(t *testing.T) {
+	cfg := config.Default()
+	cfg.WorkDir = t.TempDir()
+	cfg.ORT = config.ORTConfig{GPU: true, CudaDeviceID: 2}
+	cfg.Jev = config.JevConfig{
+		Enabled:  true,
+		Type:     config.JevBackendLocal,
+		Model:    "laya-onnx",
+		ModelDir: "~/.solcode/models/laya-onnx",
+		Engine:   "ort",
+		ORTLib:   `C:\ort\onnxruntime.dll`,
+	}
+	_, url, _ := settingsServer(t, cfg)
+
+	body := decodeSettings(t, url)
+	ort, ok := body["ort"].(map[string]any)
+	if !ok {
+		t.Fatalf("ort = %#v", body["ort"])
+	}
+	if ort["gpu"] != true {
+		t.Fatalf("ort.gpu = %v", ort["gpu"])
+	}
+	if ort["cuda_device_id"] != float64(2) {
+		t.Fatalf("ort.cuda_device_id = %v", ort["cuda_device_id"])
+	}
+	jev, ok := body["jev"].(map[string]any)
+	if !ok {
+		t.Fatalf("jev = %#v", body["jev"])
+	}
+	if jev["ort_lib"] != `C:\ort\onnxruntime.dll` {
+		t.Fatalf("jev.ort_lib = %v", jev["ort_lib"])
+	}
+}
+
+func TestPostSettingsDoesNotResetUnmentionedORTFields(t *testing.T) {
+	cfg := config.Default()
+	cfg.WorkDir = t.TempDir()
+	cfg.ORT = config.ORTConfig{GPU: true, CudaDeviceID: 3}
+	_, url, applied := settingsServer(t, cfg)
+
+	res := postSettings(t, url, map[string]any{"jev_routing": true})
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", res.StatusCode)
+	}
+	if !applied.ORT.GPU || applied.ORT.CudaDeviceID != 3 {
+		t.Fatalf("ort wiped: %+v", applied.ORT)
 	}
 }
 

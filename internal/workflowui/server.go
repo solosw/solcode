@@ -292,6 +292,8 @@ type settingsResponse struct {
 	ComputerUse computerUseSettings `json:"computer_use"`
 	// Jev configures the TypeSafe System One decision layer.
 	Jev jevSettings `json:"jev"`
+	// ORT is shared ONNX Runtime settings for local Jev and local embeddings.
+	ORT ortSettings `json:"ort"`
 	// Embedding configures optional vector embeddings for semantic search.
 	Embedding embeddingSettings `json:"embedding"`
 }
@@ -299,6 +301,13 @@ type settingsResponse struct {
 // computerUseSettings is the UI-facing view of the ComputerUse toggle.
 type computerUseSettings struct {
 	Enabled bool `json:"enabled"`
+}
+
+// ortSettings is the UI-facing view of shared ONNX Runtime options.
+// GPU enables CUDA EP; library path remains jev.ort_lib / ~/.solcode/lib.
+type ortSettings struct {
+	GPU          bool `json:"gpu"`
+	CudaDeviceID int  `json:"cuda_device_id"`
 }
 
 // jevSettings is the UI-facing view of the Jev decision layer.
@@ -504,6 +513,10 @@ func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
 			MemoryJudge:        cfg.Jev.MemoryJudge,
 			Guardrail:          cfg.Jev.Guardrail,
 		},
+		ORT: ortSettings{
+			GPU:          cfg.ORT.GPU,
+			CudaDeviceID: cfg.ORT.CudaDeviceID,
+		},
 		Embedding: embeddingSettings{
 			Enabled:    cfg.Embedding.Enabled,
 			Type:       cfg.EmbeddingType(),
@@ -580,6 +593,10 @@ type settingsUpdate struct {
 	JevMemoryJudge        *bool    `json:"jev_memory_judge,omitempty"`
 	JevGuardrail          *bool    `json:"jev_guardrail,omitempty"`
 
+	// ORT fields (shared CUDA switch). Absent fields leave current values.
+	ORTGPU          *bool `json:"ort_gpu,omitempty"`
+	ORTCudaDeviceID *int  `json:"ort_cuda_device_id,omitempty"`
+
 	// Embedding fields. Absent fields leave the current value untouched.
 	EmbeddingEnabled    *bool   `json:"embedding_enabled,omitempty"`
 	EmbeddingType       *string `json:"embedding_type,omitempty"`
@@ -621,6 +638,7 @@ func (s *Server) postSettings(w http.ResponseWriter, r *http.Request) {
 	applyActiveModelSettings(&next, req)
 	applyComputerUseSettings(&next, req)
 	applyJevSettings(&next, req)
+	applyORTSettings(&next, req)
 	applyEmbeddingSettings(&next, req)
 
 	// MCP toggles
@@ -723,6 +741,19 @@ func applyJevSettings(cfg *config.Config, req settingsUpdate) {
 	}
 	if req.JevGuardrail != nil {
 		cfg.Jev.Guardrail = *req.JevGuardrail
+	}
+}
+
+// applyORTSettings applies shared ONNX Runtime fields that were provided.
+func applyORTSettings(cfg *config.Config, req settingsUpdate) {
+	if cfg == nil {
+		return
+	}
+	if req.ORTGPU != nil {
+		cfg.ORT.GPU = *req.ORTGPU
+	}
+	if req.ORTCudaDeviceID != nil {
+		cfg.ORT.CudaDeviceID = *req.ORTCudaDeviceID
 	}
 }
 
