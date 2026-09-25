@@ -1,0 +1,42 @@
+{
+  "name": "solcode-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Solcode Desktop — an Electron front end for the solcode coding agent",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/main/main.js",
+  "scripts": {
+    "build:main": "tsc -p tsconfig.main.json",
+    "build:renderer": "vite build",
+    "build": "yarn build:main && yarn build:renderer",
+    "typecheck": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.renderer.json --noEmit",
+    "start": "yarn build && electron .",
+    "package:dir": "yarn build && electron-builder --dir",
+    "dist:win": "yarn build && electron-builder --win --config electron-builder.yml",
+    "dist:mac": "yarn build && electron-builder --mac --config electron-builder.yml"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "4.3.3",
+    "@types/node": "22.20.0",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.1",
+    "electron": "44.4.5",
+    "electron-builder": "26.15.3",
+    "tailwindcss": "4.3.3",
+    "typescript": "5.9.3",
+    "vite": "8.3.1"
+  },
+  "dependencies": {
+    "@fontsource-variable/inter": "5.3.0",
+    "clsx": "2.1.1",
+    "dompurify": "3.4.16",
+    "lucide-react": "1.48.0",
+    "marked": "18.0.14",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "tailwind-merge": "3.7.0"
+  },
+  "packageManager": "yarn@1.22.22+sha512.a6b2f7906b721bba3d67d4aff083df04dad64c399707841b7acf00f6b133b7ac24255f2652fa22ae3534329dc6180534e98d17432037ff6fd140556e2bb3137e"
+}

@@ -1,0 +1,22 @@
+appId: dev.solcode.desktop
+productName: Solcode Desktop
+directories:
+  output: release
+  buildResources: build
+files:
+  - dist/**/*
+  - package.json
+asar: true
+mac:
+  category: public.app-category.developer-tools
+  target:
+    - dir
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+linux:
+  target:
+    - dir
+  category: Development

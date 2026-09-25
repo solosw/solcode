@@ -112,3 +112,33 @@ Turn memory: jev: jev local ort failed: jev local inference engine is not ready:
 - files: examples/settings/settings.ort.gpu.example.json, internal/app/app.go, internal/app/jev.go, internal/app/jev_test.go, internal/embedding/api.go, internal/embedding/embedding.go, internal/embedding/embedding_test.go, internal/embedding/local.go, internal/embedding/local_test.go, internal/embedding/store.go, internal/engine/context_builder.go, internal/engine/engine.go, internal/engine/folded_tools.go, internal/engine/folded_tools_test.go, internal/jevlocal/artifact.go, internal/jevlocal/artifact_test.go, internal/jevlocal/builder.go, internal/jevlocal/engine.go, internal/jevlocal/evaluator.go, internal/jevlocal/evaluator_test.go, internal/jevlocal/family.go, internal/jevlocal/laya.go, internal/jevlocal/laya_test.go, internal/jevlocal/lazy_ort.go, internal/jevlocal/openjev.go, internal/jevlocal/openjev_family.go, internal/jevlocal/ort_engine.go, internal/jevlocal/ort_engine_test.go, internal/jevlocal/ort_install.go, internal/jevlocal/ort_install_test.go, internal/jevlocal/tensors.go, internal/jevlocal/tokenizer.go, internal/memory/embedding.go, internal/memory/embedding_test.go, internal/memory/manager.go, internal/sessionmemory/store_test.go, internal/tool/tool_search.go, internal/workflowui/server.go, internal/workflowui/settings_features_persist_test.go, internal/workflowui/settings_features_test.go
 
 Turn memory: 在webUI里面也加上这个设置
+
+## 2026-09-24 22:58:45 · session acp-1790261820330446600-1 · turn 0 · importance 0.40
+- keywords: turn, todolist
+- todos: d1|探查 fork 构建产物（DLL/导入库/静态库）|completed|valid|done; d2|设计 decision 引擎的 C shim 接口|completed|valid|done; d2b|诊断 ABI 不匹配（common_params 跨边界）|completed|valid|done; d3|改为在 fork CMake 内构建 shim|in_progress|valid|open; d3c|用 C 程序验证 shim 能跑出真概率|pending|valid|open; d4|写 Go CGO 绑定|pending|valid|open; d5|接入 Jev evaluator 并测试|pending|valid|open
+
+Turn memory: jev local ort ready查看现在是不是用的gpu
+
+## 2026-09-24 23:00:24 · session acp-1790261820330446600-1 · turn 1 · importance 0.40
+- keywords: turn, todolist
+- todos: d1|探查 fork 构建产物（DLL/导入库/静态库）|completed|valid|done; d2|设计 decision 引擎的 C shim 接口|completed|valid|done; d2b|诊断 ABI 不匹配（common_params 跨边界）|completed|valid|done; d3|改为在 fork CMake 内构建 shim|in_progress|valid|open; d3c|用 C 程序验证 shim 能跑出真概率|pending|valid|open; d4|写 Go CGO 绑定|pending|valid|open; d5|接入 Jev evaluator 并测试|pending|valid|open
+
+Turn memory: 我的意思是查看现在的配置，是不是用的GPU
+
+## 2026-09-25 13:20:52 · session acp-1790312882696227000-1 · turn 0 · importance 0.40
+- keywords: turn, todolist
+- todos: d1|探查 fork 构建产物（DLL/导入库/静态库）|completed|valid|done; d2|设计 decision 引擎的 C shim 接口|completed|valid|done; d2b|诊断 ABI 不匹配（common_params 跨边界）|completed|valid|done; d3|改为在 fork CMake 内构建 shim|in_progress|valid|open; d3c|用 C 程序验证 shim 能跑出真概率|pending|valid|open; d4|写 Go CGO 绑定|pending|valid|open; d5|接入 Jev evaluator 并测试|pending|valid|open
+
+Turn memory: 现在我要给这个Agent做一个桌面端，给我找一个现成的桌面端然后改一下就能用，最终效果要做出Codex这种效果。先给我找开源项目，然后哪一个最容易改
+
+## 2026-09-25 13:48:54 · session acp-1790312882696227000-1 · turn 1 · importance 0.40
+- keywords: turn, todolist
+- todos: d1|探查 fork 构建产物（DLL/导入库/静态库）|completed|valid|done; d2|设计 decision 引擎的 C shim 接口|completed|valid|done; d2b|诊断 ABI 不匹配（common_params 跨边界）|completed|valid|done; d3|改为在 fork CMake 内构建 shim|in_progress|valid|open; d3c|用 C 程序验证 shim 能跑出真概率|pending|valid|open; d4|写 Go CGO 绑定|pending|valid|open; d5|接入 Jev evaluator 并测试|pending|valid|open
+
+Turn memory: C:/software/projects/solcode/dsh-desktop-master 用这个项目给我改
+
+## 2026-09-25 17:45:15 · session acp-1790312882696227000-1 · turn 2 · importance 0.50
+- keywords: solcode-desktop, electron, acp, codex-ui, dsh-desktop
+- files: desktop/.gitignore, desktop/README.md, desktop/electron-builder.yml, desktop/package-lock.json, desktop/package.json, desktop/scripts/integration-check.mjs, desktop/scripts/screenshot.mjs, desktop/scripts/window-check.mjs, desktop/src/main/acp-client.ts, desktop/src/main/agent-session.ts, desktop/src/main/main.ts, desktop/src/main/preload.cts, desktop/src/renderer/App.tsx, desktop/src/renderer/components/Composer.tsx, desktop/src/renderer/components/DiffView.tsx, desktop/src/renderer/components/Markdown.tsx, desktop/src/renderer/components/PermissionDialog.tsx, desktop/src/renderer/components/Sidebar.tsx, desktop/src/renderer/components/ToolCard.tsx, desktop/src/renderer/components/Transcript.tsx, desktop/src/renderer/env.d.ts, desktop/src/renderer/index.html, desktop/src/renderer/lib/utils.ts, desktop/src/renderer/main.tsx, desktop/src/renderer/theme.css, desktop/src/shared/protocol.js, desktop/src/shared/protocol.js.map, desktop/src/shared/protocol.ts, desktop/tsconfig.main.json, desktop/tsconfig.renderer.json, desktop/vite.config.ts, dsh-desktop-master/AGENTS.md, dsh-desktop-master/CODE_OF_CONDUCT.en.md, dsh-desktop-master/CODE_OF_CONDUCT.md, dsh-desktop-master/CONTRIBUTING.en.md, dsh-desktop-master/CONTRIBUTING.md, dsh-desktop-master/LICENSE, dsh-desktop-master/PRIVACY.i18n.yaml, dsh-desktop-master/PRIVACY.md, dsh-desktop-master/PRIVACY.zh.md
+
+Built a new Electron desktop app for solcode at `desktop/`, replacing the requested dsh-desktop-master base (DeepSeek Harness shell) which was rejected after inspection: it is a DSH Host wrapper, not an ACP client, its chat UI lives inside vendored @deepseek-ai/dsh-web-frontend tarballs, its deepseek-harness git submodule was empty, and its whole build depends on @deepseek-ai/cordis/dsh-app-boot so it cannot compile without DeepSeek. So instead of stripping that repo, created a clean app reusing only its design ideas (dark-first shadcn-style tokens). Result: `desktop/` with tsc main process + Vite/React 19/Tailwind 4 renderer, an ACP client over `solcode --acp` stdio, session state machine, and a Codex-style UI (sidebar with permission modes/plan/changed-files/context meter, streaming transcript with collapsible reasoning, tool cards with inline diffs, permission dialog). Verified: typecheck clean, `scripts/integration-check.mjs` PASS (protocol v1, 5 modes, 17 commands, usage, streaming text), `scripts/window-check.mjs` PASS (drives a real turn over CDP and asserts DOM), screenshot at `.verify/window.png` shows a working transcript with tool calls. Key protocol gotchas discovered by probing the real binary are documented in `desktop/README.md`: NDJSON framing (no Content-Length), chunk text nested under content:{text}, usage flattened as used/size, unknown server-initiated requests must be answered or the agent blocks. Note: WriteMemory repeatedly merged entries into an unrelated stale entry about settings/embedding file modifications, so durable notes went into desktop/README.md instead. Not yet implemented: session list/resume UI, image attachments, dedicated review pane.
