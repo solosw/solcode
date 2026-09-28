@@ -22,6 +22,7 @@ import (
 	"github.com/solosw/solcode/internal/config"
 	"github.com/solosw/solcode/internal/engine"
 	"github.com/solosw/solcode/internal/httpproxy"
+	"github.com/solosw/solcode/internal/organizer/yzma"
 	"github.com/solosw/solcode/internal/permission"
 	"github.com/solosw/solcode/internal/session"
 	"github.com/solosw/solcode/internal/skill"
@@ -722,6 +723,7 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 		return names
 	})
 	var workflowUIServer *workflowui.Server
+	memoryOrganizerInstaller := yzma.NewInstaller()
 	var settingsReload struct {
 		sync.Mutex
 		generation uint64
@@ -823,6 +825,23 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 						"timeout_sec": next.Embedding.TimeoutSec,
 						"dimensions":  next.Embedding.Dimensions,
 					},
+					// Written as a nested object so unrelated memory keys a
+					// future version may add survive the merge.
+					"memory": map[string]any{
+						"organizer": map[string]any{
+							"enabled":           next.Memory.Organizer.Enabled,
+							"runtime":           next.Memory.Organizer.Runtime,
+							"model_path":        next.Memory.Organizer.ModelPath,
+							"lib_dir":           next.Memory.Organizer.LibDir,
+							"processor":         next.Memory.Organizer.Processor,
+							"context_size":      next.Memory.Organizer.ContextSize,
+							"threads":           next.Memory.Organizer.Threads,
+							"gpu_layers":        next.Memory.Organizer.GPULayers,
+							"max_output_tokens": next.Memory.Organizer.MaxOutputTokens,
+							"temperature":       next.Memory.Organizer.Temperature,
+							"timeout_sec":       next.Memory.Organizer.TimeoutSec,
+						},
+					},
 				}
 				if err := config.SaveLocalOverrides(persistencePath, updates); err != nil {
 					return fmt.Errorf("could not persist settings: %w", err)
@@ -902,6 +921,30 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 					})
 				}
 				return out
+			},
+			MemoryOrganizerLibraryStatus: func() workflowui.LibraryInstallStatus {
+				status := memoryOrganizerInstaller.Status()
+				libDir := cfg.OrganizerLibDir()
+				return workflowui.LibraryInstallStatus{
+					State:          string(status.State),
+					Processor:      status.Processor,
+					Version:        status.Version,
+					Bytes:          status.Bytes,
+					Percent:        status.Percent,
+					Message:        status.Message,
+					Error:          status.Error,
+					LibDir:         libDir,
+					LibraryPresent: yzma.LibraryPresent(libDir),
+				}
+			},
+			MemoryOrganizerLibraryInstall: func(processor string) error {
+				if strings.TrimSpace(processor) == "" {
+					processor = cfg.Memory.Organizer.Processor
+				}
+				return memoryOrganizerInstaller.Start(context.Background(), cfg.OrganizerLibDir(), processor)
+			},
+			MemoryOrganizerLibraryCancel: func() {
+				memoryOrganizerInstaller.Cancel()
 			},
 			OpenBrowser: true,
 		})

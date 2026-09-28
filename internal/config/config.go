@@ -406,6 +406,52 @@ type MemoryConfig struct {
 	TierM2TTLHours           int     `json:"tier_m2_ttl_hours,omitempty"`
 	PromotionAccessThreshold int     `json:"promotion_access_threshold,omitempty"`
 	PromotionConfidence      float64 `json:"promotion_confidence,omitempty"`
+	// Organizer configures the fully local memory-organizer model. When it is
+	// enabled, the model's own memory-writing tools are disabled and memory is
+	// produced asynchronously by this local model instead.
+	Organizer OrganizerConfig `json:"organizer,omitempty"`
+}
+
+// OrganizerRuntimeYzma loads GGUF in-process through github.com/hybridgroup/yzma.
+// Only this runtime is implemented; the field exists so alternative local
+// backends can be added without a config migration.
+const OrganizerRuntimeYzma = "yzma"
+
+// DefaultOrganizerRuntime is used when memory.organizer.runtime is empty.
+const DefaultOrganizerRuntime = OrganizerRuntimeYzma
+
+// OrganizerConfig configures the local memory-organizer model (llama.cpp/GGUF).
+//
+// The whole path stays local: no remote or hosted endpoint is consulted, and
+// there is no fallback to the chat provider. A missing library or model leaves
+// the organizer unavailable instead of routing memory work to a network model.
+type OrganizerConfig struct {
+	// Enabled turns the local organizer on. It is also the single source of
+	// truth for disabling the model-visible memory write tools.
+	Enabled bool `json:"enabled,omitempty"`
+	// Runtime selects the local inference backend. Empty means "yzma".
+	Runtime string `json:"runtime,omitempty"`
+	// ModelPath is the GGUF file the organizer loads. Required when Enabled.
+	ModelPath string `json:"model_path,omitempty"`
+	// LibDir overrides the llama.cpp shared-library directory.
+	// Empty falls back to YZMA_LIB, then ~/.solcode/lib/llama.
+	LibDir string `json:"lib_dir,omitempty"`
+	// Processor selects the hardware backend for library acquisition:
+	// cpu, cuda, metal, or vulkan.
+	Processor string `json:"processor,omitempty"`
+	// ContextSize is the llama.cpp context window in tokens.
+	ContextSize int `json:"context_size,omitempty"`
+	// Threads bounds inference threads. Zero lets llama.cpp decide.
+	Threads int `json:"threads,omitempty"`
+	// GPULayers is the number of layers offloaded to the GPU.
+	// 0 keeps everything on the CPU; negative offloads all layers.
+	GPULayers int `json:"gpu_layers,omitempty"`
+	// MaxOutputTokens caps one generated completion.
+	MaxOutputTokens int `json:"max_output_tokens,omitempty"`
+	// Temperature controls sampling. 0 selects greedy decoding.
+	Temperature float64 `json:"temperature,omitempty"`
+	// TimeoutSec bounds one organizer request (default 180, max 900).
+	TimeoutSec int `json:"timeout_sec,omitempty"`
 }
 
 type MCPServerConfig struct {
@@ -624,6 +670,7 @@ func (cfg *Config) Normalize() error {
 	cfg.normalizeORT()
 	cfg.normalizeJev()
 	cfg.normalizeEmbedding()
+	cfg.normalizeOrganizer()
 
 	cfg.normalizeSessionMemory()
 	ensureDefaultToolResultCompressHook(cfg)
@@ -1781,6 +1828,94 @@ func (cfg *Config) normalizeEmbedding() {
 	if emb.Dimensions < 0 {
 		emb.Dimensions = 0
 	}
+}
+
+// normalizeOrganizer cleans local memory-organizer settings.
+//
+// The organizer config never resolves env indirection into a remote endpoint:
+// unlike Jev/embedding it has no api mode at all, so there is nothing to fall
+// back to when the model is missing.
+func (cfg *Config) normalizeOrganizer() {
+	if cfg == nil {
+		return
+	}
+	org := &cfg.Memory.Organizer
+	org.Runtime = strings.ToLower(strings.TrimSpace(org.Runtime))
+	if org.Runtime == "" {
+		org.Runtime = DefaultOrganizerRuntime
+	}
+	org.Processor = strings.ToLower(strings.TrimSpace(org.Processor))
+	switch org.Processor {
+	case "cpu", "cuda", "metal", "vulkan":
+	default:
+		org.Processor = "cpu"
+	}
+	org.ModelPath = expandPath(org.ModelPath)
+	org.LibDir = expandPath(org.LibDir)
+	if org.ContextSize <= 0 {
+		org.ContextSize = 8192
+	}
+	if org.ContextSize > 131072 {
+		org.ContextSize = 131072
+	}
+	if org.Threads < 0 {
+		org.Threads = 0
+	}
+	if org.MaxOutputTokens <= 0 {
+		org.MaxOutputTokens = 1500
+	}
+	if org.MaxOutputTokens > 8192 {
+		org.MaxOutputTokens = 8192
+	}
+	if org.Temperature < 0 {
+		org.Temperature = 0
+	}
+	if org.Temperature > 2 {
+		org.Temperature = 2
+	}
+	if org.TimeoutSec <= 0 {
+		org.TimeoutSec = 180
+	}
+	if org.TimeoutSec > 900 {
+		org.TimeoutSec = 900
+	}
+}
+
+// OrganizerType returns the normalized organizer runtime. Empty means "yzma".
+func (c Config) OrganizerType() string {
+	switch strings.ToLower(strings.TrimSpace(c.Memory.Organizer.Runtime)) {
+	case OrganizerRuntimeYzma:
+		return OrganizerRuntimeYzma
+	default:
+		return DefaultOrganizerRuntime
+	}
+}
+
+// OrganizerEnabled reports whether the local memory organizer should run.
+//
+// Unlike Embedding/Jev there is no API variant, so a missing model path simply
+// leaves the organizer disabled. Callers must treat a false result as "produce
+// memory the legacy way", never as "use the chat provider instead".
+func (c Config) OrganizerEnabled() bool {
+	if !c.Memory.Organizer.Enabled {
+		return false
+	}
+	if c.OrganizerType() != OrganizerRuntimeYzma {
+		return false
+	}
+	return strings.TrimSpace(c.Memory.Organizer.ModelPath) != ""
+}
+
+// OrganizerLibDir returns the configured llama.cpp shared-library directory,
+// falling back to YZMA_LIB and then ~/.solcode/lib/llama.
+func (c Config) OrganizerLibDir() string {
+	if dir := strings.TrimSpace(c.Memory.Organizer.LibDir); dir != "" {
+		return dir
+	}
+	if dir := strings.TrimSpace(os.Getenv("YZMA_LIB")); dir != "" {
+		return dir
+	}
+	return filepath.Join(UserConfigDir(), "lib", "llama")
 }
 
 // EmbeddingType returns the normalized backend type. Empty Type means api.

@@ -421,6 +421,87 @@
               </label>
             </div>
           </section>
+
+          <section class="settings-section">
+            <div class="section-heading">
+              <h2>Memory Organizer (local model)</h2>
+              <span class="badge" id="memory-organizer-state"></span>
+            </div>
+            <p class="settings-hint">
+              Runs a local GGUF model in-process through llama.cpp to summarize finished
+              sessions and extract long-term memory. Everything stays on this machine:
+              there is no API mode and no fallback to the chat provider. While this is
+              enabled the model's own memory-writing tools are disabled.
+            </p>
+            <div class="settings-list">
+              <label class="settings-row settings-toggle-row">
+                <div class="settings-row-main">
+                  <strong>Enable local memory organizer</strong>
+                  <div class="settings-row-detail">
+                    Needs a GGUF model and the llama.cpp shared library. Install the
+                    library with <code>yzma install</code>, or point
+                    <code>lib_dir</code> at an existing build.
+                  </div>
+                </div>
+                <input type="checkbox" id="set-memory-organizer-enabled" />
+              </label>
+            </div>
+
+            <div class="settings-grid">
+              <label>Runtime
+                <select id="set-memory-organizer-runtime">
+                  <option value="yzma">yzma (in-process llama.cpp)</option>
+                </select>
+              </label>
+              <label>Processor (for library install)
+                <select id="set-memory-organizer-processor">
+                  <option value="cpu">CPU</option>
+                  <option value="cuda">CUDA</option>
+                  <option value="metal">Metal</option>
+                  <option value="vulkan">Vulkan</option>
+                </select>
+              </label>
+              <label>Context size (tokens)
+                <input id="set-memory-organizer-context" type="number" min="512" max="131072" step="512" />
+              </label>
+              <label>Threads (0 = auto)
+                <input id="set-memory-organizer-threads" type="number" min="0" step="1" />
+              </label>
+              <label>GPU layers (0 = CPU only, -1 = all)
+                <input id="set-memory-organizer-gpu-layers" type="number" step="1" />
+              </label>
+              <label>Max output tokens
+                <input id="set-memory-organizer-max-output" type="number" min="64" max="8192" step="64" />
+              </label>
+              <label>Temperature (0 = greedy)
+                <input id="set-memory-organizer-temperature" type="number" min="0" max="2" step="0.05" />
+              </label>
+              <label>Timeout (sec)
+                <input id="set-memory-organizer-timeout" type="number" min="1" max="900" step="1" />
+              </label>
+            </div>
+
+            <div class="settings-grid">
+              <label>GGUF model path
+                <input id="set-memory-organizer-model-path" type="text" placeholder="~/.solcode/models/model-q4_k_m.gguf" />
+              </label>
+              <label>llama.cpp library dir (empty = ~/.solcode/lib/llama)
+                <input id="set-memory-organizer-lib-dir" type="text" placeholder="~/.solcode/lib/llama" />
+              </label>
+            </div>
+            <div id="memory-organizer-probe" class="settings-row-detail"></div>
+
+            <div class="settings-actions">
+              <button id="btn-memory-organizer-install" class="btn" type="button">
+                Download llama.cpp library
+              </button>
+              <button id="btn-memory-organizer-cancel" class="btn hidden" type="button">Cancel</button>
+              <span id="memory-organizer-install-status" class="status"></span>
+            </div>
+            <div id="memory-organizer-install-bar" class="install-bar hidden">
+              <div id="memory-organizer-install-fill" class="install-bar-fill"></div>
+            </div>
+          </section>
         </div>
       </main>
     </div>
