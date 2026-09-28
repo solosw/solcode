@@ -100,6 +100,25 @@
     setEmbeddingDimensions: document.getElementById("set-embedding-dimensions"),
     embeddingApiFields: document.getElementById("embedding-api-fields"),
     embeddingLocalFields: document.getElementById("embedding-local-fields"),
+
+    memoryOrganizerState: document.getElementById("memory-organizer-state"),
+    setMemoryOrganizerEnabled: document.getElementById("set-memory-organizer-enabled"),
+    setMemoryOrganizerRuntime: document.getElementById("set-memory-organizer-runtime"),
+    setMemoryOrganizerProcessor: document.getElementById("set-memory-organizer-processor"),
+    setMemoryOrganizerContext: document.getElementById("set-memory-organizer-context"),
+    setMemoryOrganizerThreads: document.getElementById("set-memory-organizer-threads"),
+    setMemoryOrganizerGpuLayers: document.getElementById("set-memory-organizer-gpu-layers"),
+    setMemoryOrganizerMaxOutput: document.getElementById("set-memory-organizer-max-output"),
+    setMemoryOrganizerTemperature: document.getElementById("set-memory-organizer-temperature"),
+    setMemoryOrganizerTimeout: document.getElementById("set-memory-organizer-timeout"),
+    setMemoryOrganizerModelPath: document.getElementById("set-memory-organizer-model-path"),
+    setMemoryOrganizerLibDir: document.getElementById("set-memory-organizer-lib-dir"),
+    memoryOrganizerProbe: document.getElementById("memory-organizer-probe"),
+    btnMemoryOrganizerInstall: document.getElementById("btn-memory-organizer-install"),
+    btnMemoryOrganizerCancel: document.getElementById("btn-memory-organizer-cancel"),
+    memoryOrganizerInstallStatus: document.getElementById("memory-organizer-install-status"),
+    memoryOrganizerInstallBar: document.getElementById("memory-organizer-install-bar"),
+    memoryOrganizerInstallFill: document.getElementById("memory-organizer-install-fill"),
   };
 
   function emptyWorkflow() {
@@ -826,6 +845,8 @@
       settings.draft = copySettings(data);
       clearSettingsDirty();
       renderSettingsV2();
+      // Reflect an install that started before this page loaded.
+      refreshMemoryOrganizerInstallStatus();
     } catch (err) {
       setSettingsStatus(String(err.message || err), "err");
     }
@@ -895,6 +916,19 @@
       delete emb.api_key;
     }
     updateEmbeddingBackendVisibility(emb.type);
+
+    const org = d.memory_organizer || (d.memory_organizer = {});
+    org.enabled = Boolean(el.setMemoryOrganizerEnabled.checked);
+    org.runtime = (el.setMemoryOrganizerRuntime.value || "yzma").trim() || "yzma";
+    org.processor = (el.setMemoryOrganizerProcessor.value || "cpu").trim().toLowerCase() || "cpu";
+    org.model_path = el.setMemoryOrganizerModelPath.value.trim();
+    org.lib_dir = el.setMemoryOrganizerLibDir.value.trim();
+    org.context_size = numberInput(el.setMemoryOrganizerContext.value, org.context_size);
+    org.threads = numberInput(el.setMemoryOrganizerThreads.value, org.threads);
+    org.gpu_layers = numberInput(el.setMemoryOrganizerGpuLayers.value, org.gpu_layers);
+    org.max_output_tokens = numberInput(el.setMemoryOrganizerMaxOutput.value, org.max_output_tokens);
+    org.temperature = floatInput(el.setMemoryOrganizerTemperature.value, org.temperature);
+    org.timeout_sec = numberInput(el.setMemoryOrganizerTimeout.value, org.timeout_sec);
   }
 
   function updateJevBackendVisibility(type) {
@@ -1057,6 +1091,54 @@
     const embLabel = embeddingStateLabel(emb);
     el.embeddingState.textContent = embLabel;
     el.embeddingState.className = "badge" + (embLabel === "active" || embLabel === "local" ? " ok" : "");
+
+    const org = d.memory_organizer || {};
+    el.setMemoryOrganizerEnabled.checked = Boolean(org.enabled);
+    el.setMemoryOrganizerRuntime.value = "yzma";
+    el.setMemoryOrganizerProcessor.value = ["cpu", "cuda", "metal", "vulkan"].includes(String(org.processor || "cpu").toLowerCase())
+      ? String(org.processor).toLowerCase()
+      : "cpu";
+    el.setMemoryOrganizerModelPath.value = org.model_path || "";
+    el.setMemoryOrganizerLibDir.value = org.lib_dir || "";
+    el.setMemoryOrganizerContext.value = org.context_size ?? 8192;
+    el.setMemoryOrganizerThreads.value = org.threads ?? 0;
+    el.setMemoryOrganizerGpuLayers.value = org.gpu_layers ?? 0;
+    el.setMemoryOrganizerMaxOutput.value = org.max_output_tokens ?? 1500;
+    el.setMemoryOrganizerTemperature.value = org.temperature ?? 0.2;
+    el.setMemoryOrganizerTimeout.value = org.timeout_sec ?? 180;
+
+    const orgLabel = memoryOrganizerStateLabel(org);
+    el.memoryOrganizerState.textContent = orgLabel;
+    el.memoryOrganizerState.className = "badge" + (orgLabel === "ready" ? " ok" : "");
+    renderMemoryOrganizerProbe(org);
+  }
+
+  // memoryOrganizerStateLabel mirrors the backend rule: the organizer needs a
+  // model file and the llama.cpp library, and has no API fallback.
+  function memoryOrganizerStateLabel(org) {
+    if (!org.enabled) return "off";
+    if (!(org.model_path || "").trim()) return "needs a model";
+    if (!org.model_present) return "model not found";
+    if (!org.library_present) return "needs llama.cpp library";
+    return "ready";
+  }
+
+  // renderMemoryOrganizerProbe shows what the server found on disk so a path
+  // typo is visible before enabling the organizer.
+  function renderMemoryOrganizerProbe(org) {
+    if (!el.memoryOrganizerProbe) return;
+    if (!org.enabled) {
+      el.memoryOrganizerProbe.textContent = "";
+      return;
+    }
+    const parts = [];
+    parts.push(org.model_present ? "model: found" : "model: missing");
+    parts.push(org.library_present ? "llama.cpp: found" : "llama.cpp: missing");
+    if (org.library_version) parts.push(`build ${org.library_version}`);
+    if (org.model_present && !org.library_present) {
+      parts.push("run `yzma install` to fetch the shared library");
+    }
+    el.memoryOrganizerProbe.textContent = parts.join(" · ");
   }
 
   // jevStateLabel mirrors the backend rule for the selected backend.
@@ -1097,6 +1179,140 @@
     el.embeddingState.className = "badge" + (label === "active" || label === "local" ? " ok" : "");
   }
 
+  function refreshMemoryOrganizerBadge() {
+    const org = settings.draft?.memory_organizer || {};
+    const label = memoryOrganizerStateLabel(org);
+    el.memoryOrganizerState.textContent = label;
+    el.memoryOrganizerState.className = "badge" + (label === "ready" ? " ok" : "");
+    renderMemoryOrganizerProbe(org);
+  }
+
+  // ---- llama.cpp library install ----
+  //
+  // The download can be tens of megabytes and the server has no SSE, so the
+  // install runs in the background and this polls the status endpoint. Polling
+  // stops as soon as the state settles.
+
+  let libraryPollTimer = null;
+
+  async function startMemoryOrganizerInstall() {
+    el.btnMemoryOrganizerInstall.disabled = true;
+    setMemoryOrganizerInstallStatus("Starting download…", "");
+    try {
+      const processor = (settings.draft?.memory_organizer?.processor || "cpu").trim() || "cpu";
+      const status = await api("/api/memory-organizer/library", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ processor }),
+      });
+      renderMemoryOrganizerInstall(status);
+      pollMemoryOrganizerInstall();
+    } catch (err) {
+      el.btnMemoryOrganizerInstall.disabled = false;
+      setMemoryOrganizerInstallStatus(String(err.message || err), "err");
+    }
+  }
+
+  function pollMemoryOrganizerInstall() {
+    if (libraryPollTimer) return;
+    libraryPollTimer = setInterval(async () => {
+      let status;
+      try {
+        status = await api("/api/memory-organizer/library");
+      } catch (err) {
+        stopMemoryOrganizerInstallPoll();
+        setMemoryOrganizerInstallStatus(String(err.message || err), "err");
+        return;
+      }
+      renderMemoryOrganizerInstall(status);
+      if (status.state !== "running") {
+        stopMemoryOrganizerInstallPoll();
+      }
+    }, 800);
+  }
+
+  function stopMemoryOrganizerInstallPoll() {
+    if (libraryPollTimer) {
+      clearInterval(libraryPollTimer);
+      libraryPollTimer = null;
+    }
+  }
+
+  // renderMemoryOrganizerInstall paints one status snapshot and re-enables the
+  // buttons once the install settles.
+  //
+  // The settings reload on success is guarded by lastInstallState: without it a
+  // "done" snapshot would reload settings, which re-fetches this same status and
+  // loop forever.
+  let lastInstallState = null;
+
+  function renderMemoryOrganizerInstall(status) {
+    if (!status) return;
+    const running = status.state === "running";
+    const stateChanged = status.state !== lastInstallState;
+    lastInstallState = status.state;
+
+    el.btnMemoryOrganizerInstall.disabled = running;
+    el.btnMemoryOrganizerInstall.classList.toggle("hidden", running);
+    el.btnMemoryOrganizerCancel.classList.toggle("hidden", !running);
+
+    el.memoryOrganizerInstallBar.classList.toggle("hidden", !running);
+    if (running) {
+      // A missing Content-Length means no honest percentage exists; show an
+      // indeterminate bar rather than a fabricated one.
+      const known = typeof status.percent === "number" && status.percent >= 0;
+      el.memoryOrganizerInstallBar.classList.toggle("indeterminate", !known);
+      el.memoryOrganizerInstallFill.style.width = known ? `${Math.min(100, status.percent)}%` : "";
+    } else {
+      el.memoryOrganizerInstallBar.classList.remove("indeterminate");
+      el.memoryOrganizerInstallFill.style.width = "0%";
+    }
+
+    if (running) {
+      const parts = [];
+      if (status.message) parts.push(status.message);
+      if (typeof status.percent === "number" && status.percent >= 0) {
+        parts.push(`${status.percent.toFixed(0)}%`);
+      }
+      setMemoryOrganizerInstallStatus(parts.join(" "), "");
+      return;
+    }
+
+    switch (status.state) {
+      case "done":
+        setMemoryOrganizerInstallStatus(status.message || "Installed.", "ok");
+        if (stateChanged) {
+          // Refresh the probe line so it reports the newly installed library.
+          loadSettingsV2();
+        }
+        break;
+      case "failed":
+        setMemoryOrganizerInstallStatus(status.error || status.message || "Install failed.", "err");
+        break;
+      case "cancelled":
+        setMemoryOrganizerInstallStatus(status.message || "Cancelled.", "");
+        break;
+      default:
+        setMemoryOrganizerInstallStatus("", "");
+    }
+  }
+
+  function setMemoryOrganizerInstallStatus(message, kind) {
+    el.memoryOrganizerInstallStatus.textContent = message || "";
+    el.memoryOrganizerInstallStatus.className = "status" + (kind ? " " + kind : "");
+  }
+
+  async function refreshMemoryOrganizerInstallStatus() {
+    try {
+      const status = await api("/api/memory-organizer/library");
+      renderMemoryOrganizerInstall(status);
+      // Resume polling when a download started in another tab or before reload.
+      if (status.state === "running") pollMemoryOrganizerInstall();
+    } catch {
+      // The endpoint is absent when the feature is not wired; stay silent.
+    }
+  }
+
   async function saveSettingsV2() {
     if (!settings.draft) return;
     syncRuntimeSettings();
@@ -1134,6 +1350,17 @@
       embedding_model: d.embedding?.model || "",
       embedding_timeout_sec: d.embedding?.timeout_sec ?? 30,
       embedding_dimensions: d.embedding?.dimensions ?? 0,
+      memory_organizer_enabled: Boolean(d.memory_organizer?.enabled),
+      memory_organizer_runtime: d.memory_organizer?.runtime || "yzma",
+      memory_organizer_model_path: d.memory_organizer?.model_path || "",
+      memory_organizer_lib_dir: d.memory_organizer?.lib_dir || "",
+      memory_organizer_processor: d.memory_organizer?.processor || "cpu",
+      memory_organizer_context_size: d.memory_organizer?.context_size ?? 8192,
+      memory_organizer_threads: d.memory_organizer?.threads ?? 0,
+      memory_organizer_gpu_layers: d.memory_organizer?.gpu_layers ?? 0,
+      memory_organizer_max_output_tokens: d.memory_organizer?.max_output_tokens ?? 1500,
+      memory_organizer_temperature: d.memory_organizer?.temperature ?? 0.2,
+      memory_organizer_timeout_sec: d.memory_organizer?.timeout_sec ?? 180,
     };
     // Only send the key when the user typed one; otherwise the stored key stays.
     if (d.jev?.api_key) {
@@ -1310,6 +1537,21 @@
     });
     document.getElementById("btn-save-settings").onclick = saveSettingsV2;
     document.getElementById("btn-reload-settings").onclick = loadSettingsV2;
+    el.btnMemoryOrganizerInstall.addEventListener("click", startMemoryOrganizerInstall);
+    el.btnMemoryOrganizerCancel.addEventListener("click", async () => {
+      el.btnMemoryOrganizerCancel.disabled = true;
+      setMemoryOrganizerInstallStatus("Cancelling…", "");
+      try {
+        // The server aborts the in-flight download; polling keeps running so
+        // the settled "cancelled" state is what the user finally sees.
+        await api("/api/memory-organizer/library", { method: "DELETE" });
+      } catch (err) {
+        setMemoryOrganizerInstallStatus(String(err.message || err), "err");
+      } finally {
+        el.btnMemoryOrganizerCancel.disabled = false;
+      }
+      pollMemoryOrganizerInstall();
+    });
     document.getElementById("btn-add-provider").onclick = addProviderV2;
     document.getElementById("btn-add-model").onclick = addModelV2;
     document.getElementById("btn-add-mcp").onclick = addMCPServerV2;
@@ -1372,11 +1614,15 @@
       el.setEmbeddingEnabled,
       el.setEmbeddingType,
       el.setEmbeddingApiKey,
+      el.setMemoryOrganizerEnabled,
+      el.setMemoryOrganizerRuntime,
+      el.setMemoryOrganizerProcessor,
     ].forEach((input) => {
       input.addEventListener("change", () => {
         syncFeatureSettings(settings.draft || {});
         refreshJevBadge();
         refreshEmbeddingBadge();
+        refreshMemoryOrganizerBadge();
         markSettingsDirty();
       });
     });
@@ -1395,11 +1641,20 @@
       el.setEmbeddingApiKeyEnv,
       el.setEmbeddingTimeout,
       el.setEmbeddingDimensions,
+      el.setMemoryOrganizerModelPath,
+      el.setMemoryOrganizerLibDir,
+      el.setMemoryOrganizerContext,
+      el.setMemoryOrganizerThreads,
+      el.setMemoryOrganizerGpuLayers,
+      el.setMemoryOrganizerMaxOutput,
+      el.setMemoryOrganizerTemperature,
+      el.setMemoryOrganizerTimeout,
     ].forEach((input) => {
       input.addEventListener("input", () => {
         syncFeatureSettings(settings.draft || {});
         refreshJevBadge();
         refreshEmbeddingBadge();
+        refreshMemoryOrganizerBadge();
         markSettingsDirty();
       });
     });

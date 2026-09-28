@@ -7,7 +7,9 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
@@ -37,6 +39,38 @@ type Config struct {
 	ApplySettings func(next config.Config) error
 	SaveMCPServer func(server config.MCPServerConfig, scope string) error
 	Skills        func() []SkillInfo
+
+	// Library download support for the local memory organizer. The UI stays
+	// decoupled from the native loader: it only moves this DTO around, and the
+	// installer itself lives behind these callbacks. All nil hides the feature.
+	MemoryOrganizerLibraryStatus  func() LibraryInstallStatus
+	MemoryOrganizerLibraryInstall func(processor string) error
+	// MemoryOrganizerLibraryCancel aborts a running install. Nil hides cancel.
+	MemoryOrganizerLibraryCancel func()
+}
+
+// LibraryInstallStatus is the UI-facing view of a llama.cpp library install.
+//
+// It mirrors the installer's snapshot without importing the package that talks
+// to the network and the native loader, keeping the settings server testable
+// with plain fakes.
+type LibraryInstallStatus struct {
+	State     string `json:"state"`
+	Processor string `json:"processor"`
+	Version   string `json:"version"`
+	Bytes     int64  `json:"bytes"`
+	// Percent is 0..100, or -1 when the total size is unknown.
+	Percent float64 `json:"percent"`
+	Message string  `json:"message"`
+	Error   string  `json:"error"`
+	LibDir  string  `json:"lib_dir"`
+	// LibraryPresent reports whether the library is already usable.
+	LibraryPresent bool `json:"library_present"`
+}
+
+// memoryOrganizerLibraryRequest is the POST body for a library install.
+type memoryOrganizerLibraryRequest struct {
+	Processor string `json:"processor"`
 }
 
 // SkillInfo is a skill descriptor exposed to the settings UI.
@@ -104,6 +138,7 @@ func Start(cfg Config) (*Server, string, error) {
 	mux.HandleFunc("/api/models", s.handleModels)
 	mux.HandleFunc("/api/models/", s.handleModelByName)
 	mux.HandleFunc("/api/mcp-servers", s.handleMCPServers)
+	mux.HandleFunc("/api/memory-organizer/library", s.handleMemoryOrganizerLibrary)
 	staticRoot, err := fs.Sub(staticFS, "static")
 	if err != nil {
 		_ = ln.Close()
@@ -296,6 +331,8 @@ type settingsResponse struct {
 	ORT ortSettings `json:"ort"`
 	// Embedding configures optional vector embeddings for semantic search.
 	Embedding embeddingSettings `json:"embedding"`
+	// MemoryOrganizer configures the fully local memory-organizer model.
+	MemoryOrganizer memoryOrganizerSettings `json:"memory_organizer"`
 }
 
 // computerUseSettings is the UI-facing view of the ComputerUse toggle.
@@ -347,6 +384,32 @@ type embeddingSettings struct {
 	Dir        string `json:"dir"`
 	TimeoutSec int    `json:"timeout_sec"`
 	Dimensions int    `json:"dimensions"`
+}
+
+// memoryOrganizerSettings is the UI-facing view of the local memory organizer.
+//
+// The organizer has no API mode: memory work never leaves the machine, so unlike
+// Jev/embedding there is no key or base URL to display. ModelPresent and
+// LibraryPresent are probed server-side so the browser can show whether the
+// configured paths actually resolve without exposing filesystem details.
+type memoryOrganizerSettings struct {
+	Enabled   bool   `json:"enabled"`
+	Runtime   string `json:"runtime"`
+	ModelPath string `json:"model_path"`
+	LibDir    string `json:"lib_dir"`
+	Processor string `json:"processor"`
+	// ModelPresent reports whether model_path names an existing file.
+	ModelPresent bool `json:"model_present"`
+	// LibraryPresent reports whether the llama.cpp library exists in lib_dir.
+	LibraryPresent bool `json:"library_present"`
+	// LibraryVersion is the recorded llama.cpp build, when known.
+	LibraryVersion  string  `json:"library_version"`
+	ContextSize     int     `json:"context_size"`
+	Threads         int     `json:"threads"`
+	GPULayers       int     `json:"gpu_layers"`
+	MaxOutputTokens int     `json:"max_output_tokens"`
+	Temperature     float64 `json:"temperature"`
+	TimeoutSec      int     `json:"timeout_sec"`
 }
 
 type providerSummary struct {
@@ -443,6 +506,53 @@ func (s *Server) handleMCPServers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"ok": true, "name": name, "scope": scope})
 }
 
+// handleMemoryOrganizerLibrary serves the llama.cpp library install status and
+// starts an install.
+//
+// GET returns a status snapshot for polling; POST starts a background download
+// and returns immediately. The download can be tens of megabytes, so it is
+// never run inside the request: the browser polls GET until the state settles.
+func (s *Server) handleMemoryOrganizerLibrary(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.MemoryOrganizerLibraryStatus == nil {
+		http.Error(w, "memory organizer library install is not configured", http.StatusNotImplemented)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, s.cfg.MemoryOrganizerLibraryStatus())
+	case http.MethodPost:
+		if s.cfg.MemoryOrganizerLibraryInstall == nil {
+			http.Error(w, "memory organizer library install is not configured", http.StatusNotImplemented)
+			return
+		}
+		var req memoryOrganizerLibraryRequest
+		if r.Body != nil {
+			// An empty body is valid: the processor then falls back to the
+			// configured value.
+			_ = json.NewDecoder(r.Body).Decode(&req)
+		}
+		if err := s.cfg.MemoryOrganizerLibraryInstall(strings.TrimSpace(req.Processor)); err != nil {
+			// A concurrent install is a conflict, not a bad request.
+			status := http.StatusBadRequest
+			if strings.Contains(err.Error(), "already running") {
+				status = http.StatusConflict
+			}
+			http.Error(w, err.Error(), status)
+			return
+		}
+		writeJSON(w, s.cfg.MemoryOrganizerLibraryStatus())
+	case http.MethodDelete:
+		if s.cfg.MemoryOrganizerLibraryCancel == nil {
+			http.Error(w, "memory organizer library cancel is not configured", http.StatusNotImplemented)
+			return
+		}
+		s.cfg.MemoryOrganizerLibraryCancel()
+		writeJSON(w, s.cfg.MemoryOrganizerLibraryStatus())
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
 func cleanStrings(values []string) []string {
 	out := make([]string, 0, len(values))
 	for _, value := range values {
@@ -528,6 +638,7 @@ func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
 			TimeoutSec: cfg.Embedding.TimeoutSec,
 			Dimensions: cfg.Embedding.Dimensions,
 		},
+		MemoryOrganizer: buildMemoryOrganizerSettings(cfg),
 	}
 	for _, p := range cfg.Providers {
 		summary := providerSummary{
@@ -545,6 +656,85 @@ func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
 		resp.Skills = s.cfg.Skills()
 	}
 	writeJSON(w, resp)
+}
+
+// buildMemoryOrganizerSettings renders the organizer config for the UI and
+// probes the filesystem so the browser can show whether the configured paths
+// resolve. Probing is cheap (two stat calls) and never loads the model.
+func buildMemoryOrganizerSettings(cfg config.Config) memoryOrganizerSettings {
+	org := cfg.Memory.Organizer
+	libDir := cfg.OrganizerLibDir()
+	return memoryOrganizerSettings{
+		Enabled:         org.Enabled,
+		Runtime:         cfg.OrganizerType(),
+		ModelPath:       org.ModelPath,
+		LibDir:          org.LibDir,
+		Processor:       org.Processor,
+		ModelPresent:    memoryOrganizerModelPresent(org.ModelPath),
+		LibraryPresent:  memoryOrganizerLibraryPresent(libDir),
+		LibraryVersion:  memoryOrganizerLibraryVersion(libDir),
+		ContextSize:     org.ContextSize,
+		Threads:         org.Threads,
+		GPULayers:       org.GPULayers,
+		MaxOutputTokens: org.MaxOutputTokens,
+		Temperature:     org.Temperature,
+		TimeoutSec:      org.TimeoutSec,
+	}
+}
+
+// The organizer probes live behind these small wrappers so the settings UI does
+// not import the native-loading package directly.
+
+func memoryOrganizerModelPresent(path string) bool {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return false
+	}
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
+}
+
+func memoryOrganizerLibraryPresent(dir string) bool {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		return false
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if strings.Contains(name, "llama") &&
+			(strings.HasSuffix(name, ".dll") || strings.HasSuffix(name, ".so") ||
+				strings.Contains(name, ".so.") || strings.HasSuffix(name, ".dylib")) {
+			return true
+		}
+	}
+	return false
+}
+
+// memoryOrganizerLibraryVersion reports the recorded llama.cpp build in dir.
+// It reads the install record yzma writes; a missing record is not an error.
+func memoryOrganizerLibraryVersion(dir string) string {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		return ""
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "yzma-install.json"))
+	if err != nil {
+		return ""
+	}
+	var record struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(data, &record); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(record.Version)
 }
 
 func settingsModelName(cfg config.Config) string {
@@ -606,6 +796,20 @@ type settingsUpdate struct {
 	EmbeddingModel      *string `json:"embedding_model,omitempty"`
 	EmbeddingTimeoutSec *int    `json:"embedding_timeout_sec,omitempty"`
 	EmbeddingDimensions *int    `json:"embedding_dimensions,omitempty"`
+
+	// Memory organizer fields. Absent fields leave the current value untouched,
+	// so a partial update cannot silently reset the local model configuration.
+	MemoryOrganizerEnabled   *bool    `json:"memory_organizer_enabled,omitempty"`
+	MemoryOrganizerRuntime   *string  `json:"memory_organizer_runtime,omitempty"`
+	MemoryOrganizerModelPath *string  `json:"memory_organizer_model_path,omitempty"`
+	MemoryOrganizerLibDir    *string  `json:"memory_organizer_lib_dir,omitempty"`
+	MemoryOrganizerProcessor *string  `json:"memory_organizer_processor,omitempty"`
+	MemoryOrganizerContext   *int     `json:"memory_organizer_context_size,omitempty"`
+	MemoryOrganizerThreads   *int     `json:"memory_organizer_threads,omitempty"`
+	MemoryOrganizerGPULayers *int     `json:"memory_organizer_gpu_layers,omitempty"`
+	MemoryOrganizerMaxOut    *int     `json:"memory_organizer_max_output_tokens,omitempty"`
+	MemoryOrganizerTemp      *float64 `json:"memory_organizer_temperature,omitempty"`
+	MemoryOrganizerTimeout   *int     `json:"memory_organizer_timeout_sec,omitempty"`
 }
 
 func (s *Server) postSettings(w http.ResponseWriter, r *http.Request) {
@@ -640,6 +844,7 @@ func (s *Server) postSettings(w http.ResponseWriter, r *http.Request) {
 	applyJevSettings(&next, req)
 	applyORTSettings(&next, req)
 	applyEmbeddingSettings(&next, req)
+	applyMemoryOrganizerSettings(&next, req)
 
 	// MCP toggles
 	if len(req.MCPDisabled) > 0 {
@@ -789,6 +994,52 @@ func applyEmbeddingSettings(cfg *config.Config, req settingsUpdate) {
 	}
 	if req.EmbeddingDimensions != nil {
 		cfg.Embedding.Dimensions = *req.EmbeddingDimensions
+	}
+}
+
+// applyMemoryOrganizerSettings applies the local memory-organizer fields that
+// were provided.
+//
+// Each field is optional so a partial update cannot silently reset the rest of
+// the organizer configuration. Unlike Jev/embedding there is no API key or base
+// URL to resolve: the organizer is local-only by construction.
+func applyMemoryOrganizerSettings(cfg *config.Config, req settingsUpdate) {
+	if cfg == nil {
+		return
+	}
+	org := &cfg.Memory.Organizer
+	if req.MemoryOrganizerEnabled != nil {
+		org.Enabled = *req.MemoryOrganizerEnabled
+	}
+	if req.MemoryOrganizerRuntime != nil {
+		org.Runtime = strings.ToLower(strings.TrimSpace(*req.MemoryOrganizerRuntime))
+	}
+	if req.MemoryOrganizerModelPath != nil {
+		org.ModelPath = strings.TrimSpace(*req.MemoryOrganizerModelPath)
+	}
+	if req.MemoryOrganizerLibDir != nil {
+		org.LibDir = strings.TrimSpace(*req.MemoryOrganizerLibDir)
+	}
+	if req.MemoryOrganizerProcessor != nil {
+		org.Processor = strings.ToLower(strings.TrimSpace(*req.MemoryOrganizerProcessor))
+	}
+	if req.MemoryOrganizerContext != nil {
+		org.ContextSize = *req.MemoryOrganizerContext
+	}
+	if req.MemoryOrganizerThreads != nil {
+		org.Threads = *req.MemoryOrganizerThreads
+	}
+	if req.MemoryOrganizerGPULayers != nil {
+		org.GPULayers = *req.MemoryOrganizerGPULayers
+	}
+	if req.MemoryOrganizerMaxOut != nil {
+		org.MaxOutputTokens = *req.MemoryOrganizerMaxOut
+	}
+	if req.MemoryOrganizerTemp != nil {
+		org.Temperature = *req.MemoryOrganizerTemp
+	}
+	if req.MemoryOrganizerTimeout != nil {
+		org.TimeoutSec = *req.MemoryOrganizerTimeout
 	}
 }
 
