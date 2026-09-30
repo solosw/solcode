@@ -1,10 +1,13 @@
 package yzma
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -134,6 +137,87 @@ func TestRuntimeLockSerializes(t *testing.T) {
 	// Second critical section must not interleave into the first.
 	if !(order[0] == 1 && order[1] == 2 && order[2] == 3 && order[3] == 4) {
 		t.Fatalf("runtime lock interleaved: %v", order)
+	}
+}
+
+func TestReleaseOtherGPUHoldersSkipsSelf(t *testing.T) {
+	type holder struct{ id string }
+	a := &holder{id: "a"}
+	b := &holder{id: "b"}
+	var freed []string
+	var mu sync.Mutex
+	note := func(id string) {
+		mu.Lock()
+		freed = append(freed, id)
+		mu.Unlock()
+	}
+	RegisterGPUHolder(a, func() { note("a") })
+	RegisterGPUHolder(b, func() { note("b") })
+	t.Cleanup(func() {
+		UnregisterGPUHolder(a)
+		UnregisterGPUHolder(b)
+	})
+	ReleaseOtherGPUHolders(a)
+	mu.Lock()
+	defer mu.Unlock()
+	if len(freed) != 1 || freed[0] != "b" {
+		t.Fatalf("freed = %v, want only b", freed)
+	}
+}
+
+func TestShouldIsolateNativeWindowsGPU(t *testing.T) {
+	t.Setenv(isolateEnvDisable, "")
+	t.Setenv(workerEnvMarker, "")
+	if runtime.GOOS == "windows" {
+		if !ShouldIsolateNative(-1) {
+			t.Fatal("windows GPU layers should isolate by default")
+		}
+		if !ShouldIsolateNative(32) {
+			t.Fatal("windows positive gpu layers should isolate")
+		}
+		if ShouldIsolateNative(0) {
+			t.Fatal("cpu-only must stay in-process")
+		}
+	} else if ShouldIsolateNative(-1) {
+		t.Fatal("non-windows must not isolate by default")
+	}
+	t.Setenv(isolateEnvDisable, "0")
+	if ShouldIsolateNative(-1) {
+		t.Fatal("SOLCODE_ISOLATE_NATIVE=0 must disable isolation")
+	}
+}
+
+func TestLogNativeWritesFsyncedLine(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "native_gpu.log")
+	SetDiagPath(path)
+	t.Cleanup(func() { SetDiagPath("") })
+	LogNative("unit_test_stage", map[string]any{"ok": true})
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read diag: %v", err)
+	}
+	if !strings.Contains(string(data), `"stage":"unit_test_stage"`) {
+		t.Fatalf("diag = %q", data)
+	}
+}
+
+func TestRunNativeWorkerUnknownOp(t *testing.T) {
+	in := strings.NewReader(`{"op":"nope"}`)
+	var out bytes.Buffer
+	code := RunNativeWorker(in, &out)
+	if code == 0 {
+		t.Fatal("unknown op should fail")
+	}
+	var resp WorkerResponse
+	if err := json.Unmarshal(out.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.OK {
+		t.Fatal("want ok=false")
+	}
+	if !strings.Contains(resp.Error, "unknown op") {
+		t.Fatalf("error = %q", resp.Error)
 	}
 }
 

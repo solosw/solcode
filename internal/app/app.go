@@ -34,20 +34,20 @@ import (
 )
 
 type App struct {
-	Config           config.Config
-	Client           *cpanthropic.Client
-	Tools            *tool.Registry
-	Hooks            *hook.Runtime
-	Permissions      *permission.Service
-	Engine           *engine.Engine
-	Coordinator      *agent.Coordinator
-	Sessions         *session.Manager
-	MemoryStore      *memory.FileStore
-	MemoryManager    *memory.Manager
+	Config        config.Config
+	Client        *cpanthropic.Client
+	Tools         *tool.Registry
+	Hooks         *hook.Runtime
+	Permissions   *permission.Service
+	Engine        *engine.Engine
+	Coordinator   *agent.Coordinator
+	Sessions      *session.Manager
+	MemoryStore   *memory.FileStore
+	MemoryManager *memory.Manager
 	// EmbeddingStore holds the optional chromem index for durable memories.
 	EmbeddingStore *embedding.Store
 	// organizer is the optional local GGUF memory organizer (Letta archival writer).
-	organizer *organizerRuntime
+	organizer        *organizerRuntime
 	SkillRegistry    *skill.Registry
 	WorkflowRegistry *workflow.Registry
 	MCPRegistry      *mcp.Registry
@@ -1003,11 +1003,11 @@ func activeTodos(path string) []tool.TodoItem {
 
 // retrieveNewSessionMemoryContext injects Letta-style core memory.
 //
-// - New-session / bootstrap (cross-session opt-in): core + beliefs + archival
-//   hits on the user prompt (full bootstrap).
-// - Ordinary turns: a *lightweight* core + current-beliefs block only (small
-//   token budget). Full archival recall stays on ReadMemory so the stable
-//   system prefix is not rewritten and prompt-cache stays warm.
+//   - New-session / bootstrap (cross-session opt-in): core + beliefs + archival
+//     hits on the user prompt (full bootstrap).
+//   - Ordinary turns: a *lightweight* core + current-beliefs block only (small
+//     token budget). Full archival recall stays on ReadMemory so the stable
+//     system prefix is not rewritten and prompt-cache stays warm.
 func (a *App) retrieveNewSessionMemoryContext(ctx context.Context, prompt string, current *session.Session, newSession bool) ([]engine.ContextItem, error) {
 	if current == nil {
 		return nil, nil
@@ -3380,6 +3380,8 @@ func (a *App) recordCompactEvent(kind string, fields map[string]any) {
 	}
 	defer file.Close()
 	_, _ = file.Write(append(data, '\n'))
+	// Fsync so organizer/GPU failures still leave evidence if the process dies next.
+	_ = file.Sync()
 }
 
 func memoryModelName(cfg config.Config) string {

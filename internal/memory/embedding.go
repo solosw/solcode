@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 
@@ -82,6 +83,13 @@ func (m *Manager) indexMemory(ctx context.Context, item Item) {
 	if m == nil || m.Vectors == nil {
 		return
 	}
+	// Never let embedding/index failures (or Go panics) abort a successful write.
+	// Native CUDA crashes are isolated in the GGUF worker process on Windows GPU.
+	defer func() {
+		if rec := recover(); rec != nil {
+			fmt.Fprintf(os.Stderr, "memory index panic id=%s: %v\n", item.ID, rec)
+		}
+	}()
 	content := embedContent(item)
 	if strings.TrimSpace(content) == "" || strings.TrimSpace(item.ID) == "" {
 		return
@@ -89,11 +97,17 @@ func (m *Manager) indexMemory(ctx context.Context, item Item) {
 	meta := embedMetadata(item)
 	var vec []float32
 	if p := m.Vectors.Provider(); p != nil {
-		if emb, err := embedding.EmbedDocument(ctx, p, content); err == nil {
+		emb, err := embedding.EmbedDocument(ctx, p, content)
+		if err != nil {
+			// Log but keep the archival write; vector index is best-effort.
+			fmt.Fprintf(os.Stderr, "memory embed failed id=%s: %v\n", item.ID, err)
+		} else {
 			vec = emb
 		}
 	}
-	_ = m.Vectors.Add(ctx, item.ID, content, meta, vec)
+	if err := m.Vectors.Add(ctx, item.ID, content, meta, vec); err != nil {
+		fmt.Fprintf(os.Stderr, "memory index add failed id=%s: %v\n", item.ID, err)
+	}
 }
 
 func embedContent(item Item) string {

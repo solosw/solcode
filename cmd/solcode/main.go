@@ -47,6 +47,7 @@ func main() {
 	var modelOverride string
 	var showVersion bool
 	var acpMode bool
+	var nativeWorker bool
 
 	flag.StringVar(&configPath, "config", "", "Path to JSON config file")
 	flag.StringVar(&prompt, "prompt", "", "Prompt to run non-interactively")
@@ -56,11 +57,17 @@ func main() {
 	flag.StringVar(&modelOverride, "model", "", "Override model (name or ID from config)")
 	flag.BoolVar(&showVersion, "version", false, "Print version and exit")
 	flag.BoolVar(&acpMode, "acp", false, "Run as an Agent Client Protocol server on stdio")
+	flag.BoolVar(&nativeWorker, "native-worker", false, "Internal: run one isolated llama.cpp generate/embed then exit")
 	flag.Parse()
 
 	if showVersion {
 		fmt.Println(version)
 		return
+	}
+
+	// Isolated CUDA worker: parent agent stays alive if this child hits 0xC0000005.
+	if nativeWorker || yzma.RunningAsWorker() {
+		os.Exit(yzma.RunNativeWorker(os.Stdin, os.Stdout))
 	}
 
 	if !acpMode && flag.NArg() > 0 {
