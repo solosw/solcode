@@ -25,8 +25,8 @@ const (
 // ggufProvider embeds text with llama.cpp / EmbeddingGemma GGUF.
 //
 // It shares the process-global yzma runtime with the memory organizer and loads
-// the GGUF on first Embed. By default the model is released after each call so
-// idle workspaces do not pin another few hundred MB of RSS.
+// the GGUF on first Embed. The model remains loaded until its idle timer expires
+// so CUDA backend work can finish before native resources are released.
 type ggufProvider struct {
 	modelPath  string
 	libDir     string
@@ -267,10 +267,10 @@ func (p *ggufProvider) unloadIfIdle() {
 }
 
 func (p *ggufProvider) releaseAfterEmbed() {
-	if p.idleAfter <= 0 {
+	if p == nil || p.idleAfter <= 0 {
 		return
 	}
-	p.freeModelLocked()
+	p.armIdleUnloadLocked()
 }
 
 func (p *ggufProvider) waitReady(ctx context.Context) error {
