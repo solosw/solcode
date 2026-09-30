@@ -64,12 +64,17 @@ func (m *Manager) WithVectorIndex(store *embedding.Store) *Manager {
 	return m
 }
 
-// WithDecider attaches a Jev Decider used to Rank merged retrieval candidates.
+// WithDecider attaches a Jev Decider used to Rank merged retrieval candidates
+// and, when no ConflictJudge is set yet, installs JevConflictJudge for write-time
+// supersede/contradict adjudication (heuristic fallback when Jev is off).
 func (m *Manager) WithDecider(decider *systemone.Decider) *Manager {
 	if m == nil {
 		return nil
 	}
 	m.Decider = decider
+	if m.ConflictJudge == nil && decider != nil {
+		m.ConflictJudge = JevConflictJudge{Decider: decider}
+	}
 	return m
 }
 

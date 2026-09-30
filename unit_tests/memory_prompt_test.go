@@ -24,10 +24,11 @@ func TestDefaultSystemPromptDocumentsMemoryTools(t *testing.T) {
 		"ReadSessionMemory",
 		".solcode/solcode.md",
 		"not interchangeable",
-		"normal task-lifecycle action",
-		"before the final response",
-		"one to three entries",
+		"Core:",
+		"Archival:",
+		"Recall:",
 		"cross-session memory",
+		"local memory organizer",
 	} {
 		if !strings.Contains(req.System, want) {
 			t.Fatalf("expected system prompt to document memory tools with %q, got %q", want, req.System)

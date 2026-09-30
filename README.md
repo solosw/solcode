@@ -104,6 +104,7 @@ Local computer-use build (matches CI):
 - Optional: language servers on `PATH` for the [LSP](#lsp-language-server-protocol) tool (e.g. `gopls`, `pyright-langserver`)
 - Optional local Jev: OpenJev/Laya model directory; local defaults to `engine=ort` (CPU ONNX Runtime auto-installed under `~/.solcode/lib` on Windows/Linux when missing). ORT loads in the background so startup is not blocked; early decisions may use deterministic fallbacks until the session is ready
 - Optional local ORT GPU: default is CPU; set `ort.gpu=true` and install a CUDA-capable ORT build (see [Local ORT GPU](#local-ort-gpu-optional))
+- Optional local memory organizer: a GGUF model you supply plus the `llama.cpp` shared library, loaded in-process via [yzma](https://github.com/hybridgroup/yzma) (no CGO). Get the library from the Web UI or `yzma install` (see [Memory organizer](#memory-organizer-optional))
 
 ### First run
 
@@ -300,6 +301,116 @@ These skills are **not** registered without Jev routing, and `skills.disabled` /
 - **One Noul per candidate, not one Choice.** Tool screening asks a separate
   yes/no question about each candidate, because a request can need several
   tools at once and a Choice would return a single winner.
+
+### Memory organizer (optional)
+
+> **Status: wired into compaction.** When enabled, compact triggers an async
+> local organizer run (session recall → `.solcode/solcode.md`, archival
+> candidates → durable memories), hides `WriteMemory` / `WriteSessionMemory`,
+> keeps `Read*` tools, and runs lifecycle consolidation. Opt-in new sessions
+> can bootstrap core + archival memory into the first prompt (Letta-style).
+> Quality still depends on the local GGUF model.
+
+A **fully local** GGUF model that summarizes finished sessions and extracts
+durable memory. It runs **in-process** through `llama.cpp`, loaded with
+[`hybridgroup/yzma`](https://github.com/hybridgroup/yzma) over purego FFI — no
+CGO, no external server, and no remote endpoint. There is deliberately no API
+mode and no fallback to the chat provider: if the local model cannot load, the
+organizer is simply unavailable.
+
+Off by default.
+
+**What you need to provide**
+
+| Piece | How to get it | Notes |
+|---|---|---|
+| llama.cpp shared library | **Web UI download** (see below), or `yzma install` | Platform-specific binary; solcode binds it at runtime |
+| GGUF model | **Your own file** | Not downloaded by solcode; pick the size you can afford |
+
+```json
+{
+  "memory": {
+    "organizer": {
+      "enabled": true,
+      "runtime": "yzma",
+      "model_path": "~/.solcode/models/qwen2.5-3b-instruct-q4_k_m.gguf",
+      "lib_dir": "",
+      "processor": "cpu",
+      "context_size": 8192,
+      "threads": 0,
+      "gpu_layers": 0,
+      "max_output_tokens": 1500,
+      "temperature": 0.2,
+      "timeout_sec": 180
+    }
+  }
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `enabled` | Turns the organizer on. |
+| `runtime` | Local backend. Only `yzma` (in-process llama.cpp) is implemented. |
+| `model_path` | The GGUF file to load. Required when `enabled`. |
+| `lib_dir` | llama.cpp shared-library directory. Empty falls back to `YZMA_LIB`, then `~/.solcode/lib/llama`. |
+| `processor` | Which build to fetch when downloading: `cpu`, `cuda`, `metal`, `vulkan`. |
+| `context_size` | Context window in tokens (default 8192). Bounds how much transcript fits. |
+| `threads` | Inference threads. `0` lets llama.cpp decide. |
+| `gpu_layers` | Layers offloaded to the GPU. `0` = CPU only, `-1` = all. |
+| `max_output_tokens` | Completion cap for one organizer run. |
+| `temperature` | Sampling temperature. `0` selects greedy decoding. |
+| `timeout_sec` | Per-request deadline (default 180, max 900). |
+
+See also [`examples/settings/settings.memory.organizer.example.json`](examples/settings/settings.memory.organizer.example.json).
+
+**Getting the llama.cpp library**
+
+Two ways — both need no compiler and no CGO.
+
+*From the Web UI* — open `/workflow-ui` → **Settings** → *Memory Organizer (local
+model)*, pick a `Processor`, and press **Download llama.cpp library**. The
+settings card shows whether the model file and the library were found on disk,
+and the download runs in the background with a progress bar. Leave the page if
+you like; reopening it resumes showing the install state.
+
+*From the CLI* — use the `yzma` tool, which fetches a build matching your yzma
+version:
+
+```bash
+go install github.com/hybridgroup/yzma/cmd/yzma@latest
+yzma install --processor cpu          # cpu | cuda | metal | vulkan
+yzma install -l /path/to/libs         # equivalent to YZMA_LIB
+```
+
+**The library and the yzma version must match.** Letting `yzma install` (or the
+Web UI button) choose the build is the reliable path; pointing `lib_dir` at a
+random `llama.cpp` build may fail to bind. The settings card reports the
+installed build when the record is present.
+
+**Restart after downloading.** The library is bound process-wide at load time,
+so a completed download does not take effect until solcode restarts. The probe
+line updates immediately, but the in-memory generator still uses the old
+binding.
+
+**Where things live** (all under your home directory by default):
+
+```
+~/.solcode/lib/llama/     # llama.cpp shared library (+ yzma-install.json record)
+~/.solcode/models/        # your GGUF model files (put them wherever you like)
+```
+
+Env overrides: `YZMA_LIB` for the library directory. The model path is expanded
+from `~` and environment variables.
+
+**Notes**
+
+- Loading a multi-gigabyte GGUF takes seconds to tens of seconds. The loader is
+  written to run on a background goroutine so startup is never blocked, and to
+  report itself unavailable until ready.
+- `gpu_layers` needs a GPU-capable build. Fetch one with
+  `processor=cuda|vulkan|metal`; the CPU build ignores the setting.
+- The organizer validates its own output: candidates with an unknown kind or
+  tier, or containing secrets, are discarded rather than kept.
 
 ### Local ORT GPU (optional)
 

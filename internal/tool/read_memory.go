@@ -31,6 +31,7 @@ type MemoryEntry struct {
 	Kind  string
 	Scope string
 	Tags  []string
+	Topic string
 	// OtherSession is true when the entry came from a different session.
 	OtherSession bool
 }
@@ -38,6 +39,9 @@ type MemoryEntry struct {
 // MemoryReadResult reports retrieved entries plus why results may be limited.
 type MemoryReadResult struct {
 	Entries []MemoryEntry
+	// Beliefs is the current one-per-topic belief set when the query is empty
+	// or explicitly asks for beliefs (app may fill this).
+	Beliefs []string
 	// CrossSessionAllowed is false when this session opted out of
 	// cross-session memory, so only its own entries are visible.
 	CrossSessionAllowed bool
@@ -78,11 +82,13 @@ at start, so reach for this tool when you need more than that:
 - before working out a build command, test layout, or project convention from scratch
 - when a decision looks like it was already made and you want the recorded reason
 - before saving a new entry, to see what is already remembered
+- with an empty query: returns the current belief set (one active item per topic)
+  plus recent entries
 
-Pass a query describing what you need; leave it empty to list the most relevant
-recent entries. Narrow with kind or scope only when you are sure of them, since a
-wrong filter hides entries that do exist. Results tagged other-session came from a
-different session than this one.
+Pass a query describing what you need; leave it empty to list current beliefs and
+the most relevant recent entries. Narrow with kind or scope only when you are sure
+of them, since a wrong filter hides entries that do exist. Results tagged
+other-session came from a different session than this one.
 
 Memory is a note from past work, not ground truth. When an entry contradicts code you
 just read, trust the code and save the correction with WriteMemory.`
@@ -166,12 +172,29 @@ func (t *readMemoryTool) Invoke(ctx context.Context, uctx *UseContext, input jso
 
 func formatMemoryReadResult(result MemoryReadResult, req MemoryReadRequest) string {
 	var b strings.Builder
-	if len(result.Entries) == 0 {
-		b.WriteString("No stored memory matched")
-		if req.Query != "" {
-			b.WriteString(fmt.Sprintf(" %q", req.Query))
+	if len(result.Beliefs) > 0 {
+		b.WriteString("Current beliefs (one per topic):\n")
+		for _, line := range result.Beliefs {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			if !strings.HasPrefix(line, "-") {
+				b.WriteString("- ")
+			}
+			b.WriteString(line)
+			b.WriteByte('\n')
 		}
-		b.WriteString(".")
+		b.WriteByte('\n')
+	}
+	if len(result.Entries) == 0 {
+		if len(result.Beliefs) == 0 {
+			b.WriteString("No stored memory matched")
+			if req.Query != "" {
+				b.WriteString(fmt.Sprintf(" %q", req.Query))
+			}
+			b.WriteString(".")
+		}
 	} else {
 		b.WriteString(fmt.Sprintf("%d stored %s", len(result.Entries), pluralizeMemory(len(result.Entries))))
 		if req.Query != "" {
@@ -182,6 +205,9 @@ func formatMemoryReadResult(result MemoryReadResult, req MemoryReadRequest) stri
 			b.WriteString(fmt.Sprintf("%d. [%s/%s", i+1, defaultIfEmpty(entry.Kind, "fact"), defaultIfEmpty(entry.Scope, "project")))
 			if entry.Tier != "" {
 				b.WriteString(" " + entry.Tier)
+			}
+			if entry.Topic != "" {
+				b.WriteString(" topic:" + entry.Topic)
 			}
 			if entry.OtherSession {
 				b.WriteString(" other-session")

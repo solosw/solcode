@@ -89,6 +89,28 @@ func extractToolTraceMemories(input ExtractionInput) []MemoryJudgement {
 	return judgements
 }
 
+// ToolTraceFacts returns short deterministic bullets (edits, validation
+// commands, tools used) extracted from a transcript. Used to ground the local
+// organizer without another LLM pass.
+func ToolTraceFacts(transcript string) []string {
+	judgements := extractToolTraceMemories(ExtractionInput{
+		Transcript:          transcript,
+		CompactedTranscript: transcript,
+	})
+	if len(judgements) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(judgements))
+	for _, j := range judgements {
+		text := strings.TrimSpace(j.CanonicalText)
+		if text == "" {
+			continue
+		}
+		out = append(out, text)
+	}
+	return out
+}
+
 func tracedToolCalls(transcript string) []tracedToolCall {
 	var calls []tracedToolCall
 	var current *tracedToolCall

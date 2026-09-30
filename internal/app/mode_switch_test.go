@@ -188,10 +188,18 @@ func TestModeSwitchToolPersistsTransitionAndRefreshesNextEngineRequest(t *testin
 	if len(client.systems) != 2 {
 		t.Fatalf("engine requests = %d, want 2", len(client.systems))
 	}
-	if strings.Contains(client.systems[0], permission.PlanModePromptMarker) {
-		t.Fatalf("first request unexpectedly had plan instructions")
+	// 简短规则常驻 system prompt：两次请求都应包含，且完全一致。
+	if !strings.Contains(client.systems[0], permission.PlanModeShortInstructions) {
+		t.Fatalf("first request missing compact plan rules: %s", client.systems[0])
 	}
-	if !strings.Contains(client.systems[1], permission.PlanModePromptMarker) {
-		t.Fatalf("second request did not refresh plan instructions:\n%s", client.systems[1])
+	if !strings.Contains(client.systems[1], permission.PlanModeShortInstructions) {
+		t.Fatalf("second request missing compact plan rules: %s", client.systems[1])
+	}
+	if client.systems[0] != client.systems[1] {
+		t.Fatalf("system prefix changed across mode switch\nfirst:\n%s\nsecond:\n%s", client.systems[0], client.systems[1])
+	}
+	// 详细 ACTIVE 指令只在动态上下文中出现，不进 system prompt。
+	if strings.Contains(client.systems[1], "(ACTIVE)") {
+		t.Fatalf("active plan instructions leaked into system prefix: %s", client.systems[1])
 	}
 }

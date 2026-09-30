@@ -3,6 +3,7 @@ package yzma
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -65,6 +66,13 @@ func New(cfg Config) organizer.LocalGenerator {
 // is process-global, so the first successful load wins.
 var libBindOnce sync.Once
 
+// backendOnce serializes ggml backend registration, which is also process-global.
+// backendErr records the outcome of that single registration attempt.
+var (
+	backendOnce sync.Once
+	backendErr  error
+)
+
 func (g *generator) Name() string { return "yzma-llama.cpp" }
 
 func (g *generator) Ready() bool {
@@ -103,7 +111,27 @@ func (g *generator) ensureLoaded() {
 			return
 		}
 
-		llama.BackendInit()
+		// Backends must be registered before any model is loaded. llama.Load
+		// only binds symbols; without this call ModelLoadFromFile fails with
+		// "no backends are loaded". Loading is process-global, so it runs once.
+		backendOnce.Do(func() {
+			// Silence llama.cpp / ggml stdout (model load dumps, CUDA graph
+			// "id N reused" spam). The organizer runs inside solcode's process;
+			// those lines otherwise flood the TUI and live-test output. Match
+			// the official yzma chat example's non-verbose path.
+			llama.LogSet(llama.LogSilent())
+			llama.BackendInit()
+			// Register the ggml backends shipped next to llama.dll. The
+			// default search path does not cover the install directory, so the
+			// explicit path form is required.
+			if err := llama.GGMLBackendLoadAllFromPath(libDir); err != nil {
+				backendErr = fmt.Errorf("yzma: load ggml backends from %s: %w", libDir, err)
+			}
+		})
+		if backendErr != nil {
+			g.setLoadErr(backendErr)
+			return
+		}
 
 		modelParams := llama.ModelDefaultParams()
 		if g.cfg.GPULayers == 0 {
@@ -188,8 +216,27 @@ func (g *generator) Generate(ctx context.Context, req organizer.GenerateRequest)
 		return "", fmt.Errorf("%w: still loading", organizer.ErrUnavailable)
 	}
 
-	prompt := g.applyChatTemplate(req.System, req.User)
-	tokens := llama.Tokenize(g.vocab, prompt, true, true)
+	// Each Generate is an independent completion on a shared context, so the
+	// KV/recurrent state from any previous call must be wiped first. Without
+	// this, BatchGetOne's auto-tracked positions collide with leftover cache
+	// and the model either emits EOG immediately or produces garbage.
+	if mem, err := llama.GetMemory(g.ctx); err == nil && mem != 0 {
+		_ = llama.MemoryClear(mem, true)
+	}
+
+	prompt, usedTemplate := g.applyChatTemplate(req.System, req.User)
+	if strings.TrimSpace(prompt) == "" {
+		return "", fmt.Errorf("yzma: chat template rendered an empty prompt")
+	}
+	// parseSpecial must stay true so <|im_start|> / <|im_end|> from the
+	// template become real special tokens rather than literal text.
+	//
+	// addSpecial (BOS) is only for the plain-concatenation fallback: a real
+	// chat template (MiniCPM's includes `{{- bos_token }}`, chatml emits the
+	// role markers itself) already shaped the prompt, and a second BOS confuses
+	// small models into garbage completions. Every Generate clears the KV cache
+	// first, so this is always a fresh "first" message either way.
+	tokens := llama.Tokenize(g.vocab, prompt, !usedTemplate, true)
 	if len(tokens) == 0 {
 		return "", fmt.Errorf("yzma: prompt tokenized to nothing")
 	}
@@ -206,8 +253,18 @@ func (g *generator) Generate(ctx context.Context, req organizer.GenerateRequest)
 	var out strings.Builder
 	pieceBuf := make([]byte, pieceBufferSize)
 
+	// The first batch carries the whole prompt; every later batch carries the
+	// single token just sampled. decoded bounds the generated tokens, so a bogus
+	// (empty) batch cannot spin forever.
+	//
+	// Do NOT call SamplerAccept after SamplerSample: llama_sampler_sample already
+	// accepts into the chain, and a second Accept crashes the grammar sampler
+	// (see .solcode/step.log). The official yzma chat/hello examples never call it.
 	batch := llama.BatchGetOne(tokens)
-	for pos := 0; pos < maxTokens; pos++ {
+	if batch.NTokens <= 0 {
+		return "", fmt.Errorf("yzma: empty decode batch for a non-empty prompt")
+	}
+	for decoded := 0; decoded < maxTokens; decoded++ {
 		if err := ctx.Err(); err != nil {
 			return out.String(), err
 		}
@@ -215,15 +272,19 @@ func (g *generator) Generate(ctx context.Context, req organizer.GenerateRequest)
 			return out.String(), fmt.Errorf("yzma: decode: %w", err)
 		}
 		next := llama.SamplerSample(smpl, g.ctx, -1)
-		if llama.VocabIsEOG(g.vocab, next) {
+		if next == llama.TokenNull || llama.VocabIsEOG(g.vocab, next) {
 			break
 		}
 		if n := llama.TokenToPiece(g.vocab, next, pieceBuf, 0, false); n > 0 {
+			if int(n) > len(pieceBuf) {
+				n = int32(len(pieceBuf))
+			}
 			out.Write(pieceBuf[:n])
 		}
-		llama.SamplerAccept(smpl, next)
-		// Feed the sampled token back as the next single-token batch.
 		batch = llama.BatchGetOne([]llama.Token{next})
+		if batch.NTokens <= 0 {
+			break
+		}
 	}
 	return out.String(), nil
 }
@@ -250,40 +311,86 @@ func (g *generator) buildSampler(req organizer.GenerateRequest) llama.Sampler {
 	return chain
 }
 
-// applyChatTemplate renders system+user through the model's own template.
+// applyChatTemplate renders system+user through a chat template.
 //
-// Using the GGUF's embedded template keeps the prompt shaped the way the model
-// was trained. When the model ships no template the messages are concatenated,
-// which still works for instruction-tuned models though less precisely.
-func (g *generator) applyChatTemplate(system, user string) string {
-	template := llama.ModelChatTemplate(g.model, "")
-	if strings.TrimSpace(template) == "" {
+// The returned bool is true when a real chat template shaped the prompt (so the
+// caller must NOT ask Tokenize to add BOS again). False means we fell back to a
+// plain concatenation and Tokenize should add special tokens itself.
+//
+// Buffer / return-value rules for llama_chat_apply_template, which this wrapper
+// must get right:
+//
+//   - n >= 0 && n <= len(buf): success; n is the byte length written.
+//   - n > len(buf): buffer too small; n is the required size (positive form).
+//   - n < 0: either "need -n bytes" OR a hard failure (unsupported Jinja).
+//     Empirically a failure is almost always -1 with a tiny |n| while the
+//     prompt is clearly larger; a real size hint has -n >> len(prompt).
+//     Treating a hard -1 as "need 1 byte" used to make us fall through to a
+//     plain concatenation, which then decoded to empty output on chat models.
+//
+// When the GGUF's own Jinja fails (common for tool-calling templates the
+// installed llama.cpp cannot evaluate), fall back to the builtin "chatml"
+// name — that is exactly what the official yzma chat example does when the
+// model template is empty.
+func (g *generator) applyChatTemplate(system, user string) (string, bool) {
+	plain := func() string {
 		if strings.TrimSpace(system) == "" {
 			return user
 		}
 		return system + "\n\n" + user
 	}
+
 	messages := make([]llama.ChatMessage, 0, 2)
 	if strings.TrimSpace(system) != "" {
 		messages = append(messages, llama.NewChatMessage("system", system))
 	}
 	messages = append(messages, llama.NewChatMessage("user", user))
+	// NewChatMessage holds *byte into GC-managed NUL-terminated copies. Keep
+	// the slice alive across the FFI call so those bytes are not collected.
+	defer runtime.KeepAlive(messages)
 
-	// ChatApplyTemplate reports the required buffer size when the buffer is too
-	// small, so size it from the returned length on the first pass.
-	buf := make([]byte, 4096)
-	if n := llama.ChatApplyTemplate(template, messages, true, buf); int(n) > len(buf) {
-		buf = make([]byte, n)
-		n = llama.ChatApplyTemplate(template, messages, true, buf)
-		if int(n) > len(buf) {
-			return system + "\n\n" + user
+	try := func(template string) (string, bool) {
+		if strings.TrimSpace(template) == "" {
+			return "", false
 		}
+		buf := make([]byte, 256*1024)
+		n := llama.ChatApplyTemplate(template, messages, true, buf)
+		if n < 0 {
+			need := int(-n)
+			// A hard failure is typically -1; a real "buffer too small" hint
+			// is large. Only retry when the claimed size is plausible.
+			if need <= len(buf) || need > 8*1024*1024 {
+				return "", false
+			}
+			buf = make([]byte, need+1024)
+			n = llama.ChatApplyTemplate(template, messages, true, buf)
+			if n < 0 {
+				return "", false
+			}
+		}
+		if int(n) > len(buf) {
+			buf = make([]byte, int(n)+1024)
+			n = llama.ChatApplyTemplate(template, messages, true, buf)
+			if n < 0 || int(n) > len(buf) {
+				return "", false
+			}
+		}
+		rendered := string(buf[:n])
+		if strings.TrimSpace(rendered) == "" {
+			return "", false
+		}
+		return rendered, true
 	}
-	rendered := strings.TrimRight(string(buf), "\x00")
-	if strings.TrimSpace(rendered) == "" {
-		return system + "\n\n" + user
+
+	if rendered, ok := try(llama.ModelChatTemplate(g.model, "")); ok {
+		return rendered, true
 	}
-	return rendered
+	// Official yzma chat fallback when the model template is missing or, in
+	// our case, when its Jinja cannot be evaluated by this llama.cpp build.
+	if rendered, ok := try("chatml"); ok {
+		return rendered, true
+	}
+	return plain(), false
 }
 
 // Close frees the context and model. It is safe to call more than once.

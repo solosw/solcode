@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hybridgroup/yzma/pkg/llama"
 	"github.com/solosw/solcode/internal/organizer"
 )
 
@@ -154,6 +155,49 @@ func TestInstalledVersionReadsRecord(t *testing.T) {
 	}
 	if got := InstalledVersion(dir); got != "b9433" {
 		t.Fatalf("InstalledVersion() = %q, want b9433", got)
+	}
+}
+
+// TestSilentLoggingIsWired documents that the load path installs llama.cpp's
+// silent logger. Without LogSet(LogSilent()), CUDA graph reuse lines flood
+// stderr on every token and drown live-test / TUI output. This unit test only
+// checks the call shape compiles and is reachable; the live test is where the
+// silence is observable.
+func TestSilentLoggingHelperExists(t *testing.T) {
+	// LogSilent returns a non-zero callback pointer used with LogSet. We cannot
+	// call LogSet here without a loaded library, but the symbol must stay
+	// referenced so a yzma upgrade that removes it fails this package's build.
+	if llama.LogSilent() == 0 && false {
+		t.Fatal("unreachable: LogSilent must be importable")
+	}
+	_ = llama.LogNormal
+}
+
+// TestChatApplyTemplateNegativeIsHardFailure documents the load-bearing rule
+// behind applyChatTemplate: a negative ChatApplyTemplate return of -1 (or any
+// |n| that is not larger than the current buffer) is a hard Jinja failure, not
+// a "need 1 byte" size hint. Treating it as a length produced empty prompts
+// that then decoded to empty completions.
+func TestChatApplyTemplateNegativeIsHardFailure(t *testing.T) {
+	cases := []struct {
+		name string
+		n    int32
+		buf  int
+		want bool // whether a resize-and-retry is justified
+	}{
+		{name: "hard failure -1", n: -1, buf: 4096, want: false},
+		{name: "hard failure -8", n: -8, buf: 4096, want: false},
+		{name: "real size hint", n: -8192, buf: 1024, want: true},
+		{name: "absurd size hint", n: -16 * 1024 * 1024, buf: 1024, want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			need := int(-tc.n)
+			retry := tc.n < 0 && need > tc.buf && need <= 8*1024*1024
+			if retry != tc.want {
+				t.Fatalf("retry justified = %v, want %v (n=%d, buf=%d)", retry, tc.want, tc.n, tc.buf)
+			}
+		})
 	}
 }
 

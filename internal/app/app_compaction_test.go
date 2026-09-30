@@ -608,15 +608,62 @@ func TestOrdinaryTurnsDoNotInjectDynamicMemoryContext(t *testing.T) {
 	if got := application.projectKnowledgeForRequest(context.Background(), current, "continue"); got != "" {
 		t.Fatalf("projectKnowledgeForRequest() = %q, want empty on ordinary turns", got)
 	}
-	items, err := application.retrieveNewSessionMemoryContext(context.Background(), "continue", current, true)
+	// No MemoryManager / memory disabled → bootstrap still clears the flag but
+	// injects nothing (ordinary established turns with a manager are gated by
+	// shouldRetrieveNewSessionMemory separately).
+	items, err := application.retrieveNewSessionMemoryContext(context.Background(), "continue", current, false)
 	if err != nil {
 		t.Fatalf("retrieveNewSessionMemoryContext() = %v", err)
 	}
 	if len(items) != 0 {
-		t.Fatalf("retrieveNewSessionMemoryContext() = %#v, want no injection on ordinary turns", items)
+		t.Fatalf("retrieveNewSessionMemoryContext() = %#v, want no injection without a memory manager", items)
 	}
 	if current.Metadata.MemoryBootstrapPending {
-		t.Fatal("expected legacy MemoryBootstrapPending flag to be cleared")
+		t.Fatal("expected MemoryBootstrapPending flag to be cleared")
+	}
+}
+
+func TestOptInBootstrapInjectsCoreMemory(t *testing.T) {
+	cfg := config.Default()
+	cfg.Memory.Enabled = true
+	dir := t.TempDir()
+	memStore := memory.NewFileStore(filepath.Join(dir, "memories"))
+	mgr := memory.NewManager(memStore, memory.DefaultGate{}, memory.StaticJudge{})
+	_, err := mgr.RememberOrganizerCandidate(context.Background(), memory.OrganizerCandidateInput{
+		Text:       "User prefers concise replies in Chinese.",
+		Kind:       memory.KindPreference,
+		Scope:      memory.ScopeGlobal,
+		Tier:       memory.TierLongTerm,
+		Confidence: 0.95,
+		Reason:     "preference",
+	})
+	if err != nil {
+		t.Fatalf("seed memory: %v", err)
+	}
+	application := &App{Config: cfg, MemoryManager: mgr, MemoryStore: memStore}
+	current := session.NewSession("boot", dir, cfg.Model)
+	allowed := true
+	current.Metadata.CrossSessionMemory = &allowed
+	current.Metadata.MemoryBootstrapPending = true
+
+	items, err := application.retrieveNewSessionMemoryContext(context.Background(), "continue in Chinese", current, false)
+	if err != nil {
+		t.Fatalf("retrieve: %v", err)
+	}
+	if len(items) == 0 {
+		t.Fatal("expected opt-in bootstrap to inject core/archival memory")
+	}
+	foundCore := false
+	for _, item := range items {
+		if item.Source == "core" || strings.Contains(item.Content, "concise replies") {
+			foundCore = true
+		}
+	}
+	if !foundCore {
+		t.Fatalf("bootstrap items = %#v, want core preference", items)
+	}
+	if current.Metadata.MemoryBootstrapPending {
+		t.Fatal("expected bootstrap flag cleared after injection")
 	}
 }
 

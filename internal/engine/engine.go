@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
+	"sync"
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
 	"github.com/solosw/solcode/internal/agent"
@@ -111,14 +113,56 @@ type Config struct {
 
 type Engine struct {
 	config Config
+
+	// stickyExtras is the session-scoped, only-growing set of non-core tool
+	// names that have been sticky-enabled (ToolSearch hit, actual use, router).
+	// Main and sub/task agents share it so the tools suffix stays aligned and
+	// the public core prefix is never rebuilt from a different extras set.
+	// Protected by stickyMu.
+	stickyMu     sync.Mutex
+	stickyExtras map[string]bool
 }
 
 func NewEngine(config Config) *Engine {
-	return &Engine{config: config}
+	return &Engine{config: config, stickyExtras: map[string]bool{}}
 }
 
 func (e *Engine) UpdateConfig(config Config) {
 	e.config = config
+}
+
+// snapshotStickyExtras returns a copy of the shared sticky set for a run.
+func (e *Engine) snapshotStickyExtras() map[string]bool {
+	e.stickyMu.Lock()
+	defer e.stickyMu.Unlock()
+	out := make(map[string]bool, len(e.stickyExtras))
+	for name := range e.stickyExtras {
+		out[name] = true
+	}
+	return out
+}
+
+// mergeStickyExtras records newly enabled non-core tools into the shared set.
+// Only grows; names are never removed mid-session (prompt-cache stability).
+func (e *Engine) mergeStickyExtras(enabled map[string]bool) {
+	if e == nil || len(enabled) == 0 {
+		return
+	}
+	e.stickyMu.Lock()
+	defer e.stickyMu.Unlock()
+	if e.stickyExtras == nil {
+		e.stickyExtras = map[string]bool{}
+	}
+	for name, on := range enabled {
+		if !on {
+			continue
+		}
+		name = strings.TrimSpace(name)
+		if name == "" || coreToolNames[name] || hiddenFromModel[name] {
+			continue
+		}
+		e.stickyExtras[name] = true
+	}
 }
 
 func skillNameFromInput(input json.RawMessage) string {
@@ -156,6 +200,13 @@ type RunRequest struct {
 	ProjectKnowledge string
 }
 
+// PrefixSnapshot describes the stable tools+system public prefix shared by
+// main and sub/task agents in one Engine. ExtraToolNames is the only-growing
+// sticky set; Core is implicit (coreToolNames ∩ registry).
+type PrefixSnapshot struct {
+	ExtraToolNames []string
+}
+
 type RunResult struct {
 	AgentResult agent.AgentResult
 	Messages    []sdk.MessageParam
@@ -177,7 +228,8 @@ func (e *Engine) runLegacyModel(ctx context.Context, req RunRequest) RunResult {
 	messages := append([]sdk.MessageParam(nil), req.Messages...)
 	prompt := cfg.Prompt
 	prompt, blocked, errText := e.runUserPromptHook(ctx, cfg, prompt)
-	// Plan-mode instructions live on the system prompt; never inject into user turns.
+	// Plan-mode instructions live in the ephemeral user context block
+	// (ModeInstructions), never in the user prompt text or the system prefix.
 	prompt = permission.StripPlanModePrompt(prompt)
 	userMsg, modelText := userMessageFromPrompt(prompt, cfg.WorkDir)
 	messages = append(messages, userMsg)
@@ -207,7 +259,8 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 	messages := append([]sdk.MessageParam(nil), runReq.Messages...)
 	prompt := cfg.Prompt
 	prompt, blocked, errText := e.runUserPromptHook(ctx, cfg, prompt)
-	// Plan-mode instructions live on the system prompt; never inject into user turns.
+	// Plan-mode instructions live in the ephemeral user context block
+	// (ModeInstructions), never in the user prompt text or the system prefix.
 	// Also strip any historical plan-mode prefix from older sessions / mode switches.
 	prompt = permission.StripPlanModePrompt(prompt)
 	userMsg, modelText := userMessageFromPrompt(prompt, cfg.WorkDir)
@@ -226,8 +279,13 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 		turnLimit = 10000
 	}
 
-	allTools := e.selectedTools(cfg.AllowedTools)
-	enabledTools := make(map[string]bool)
+	allTools := e.selectedTools(nil) // full registry pool; AllowedTools is executor-only
+	// Start from the Engine-shared sticky set so subagents inherit extras main
+	// (or earlier tasks) already paid to cache.
+	enabledTools := e.snapshotStickyExtras()
+	if enabledTools == nil {
+		enabledTools = map[string]bool{}
+	}
 	// routingAttempted keeps the semantic router to one advisory request per
 	// run instead of one per turn.
 	routingAttempted := false
@@ -239,13 +297,14 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 	// skillRouteText is the rendered instructions of the selected skill, loaded
 	// into the conversation so the selection cannot be ignored.
 	var skillRouteText string
-	executor := NewToolExecutorWithPermissions(e.config.Tools, e.config.Hooks, e.config.Permissions).WithGuardrail(e.config.Guardrail)
+	executor := NewToolExecutorWithPermissions(e.config.Tools, e.config.Hooks, e.config.Permissions).
+		WithGuardrail(e.config.Guardrail).
+		WithAllowedTools(cfg.AllowedTools)
 	builder := ContextBuilder{
 		SystemPrompt: e.config.SystemPrompt,
 		ProjectRules: e.config.ProjectRules,
 		Skills:       e.config.Skills,
 		SkillNames:   e.config.SkillNames,
-		PlanMode:     e.config.Permissions != nil && e.config.Permissions.Mode() == permission.ModePlan,
 	}
 
 	var finalText string
@@ -283,7 +342,12 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 		// Compact schemas each turn: full registry stays available to the
 		// executor and ToolSearch, while only core + sticky + live matches
 		// are sent to the model.
-		tools := SelectToolsForTurn(allTools, cfg.AllowedTools, selectionQuery(prompt, ""), enabledTools)
+		//
+		// AllowedTools is an EXECUTOR permission, not a schema filter. The
+		// tools list on the wire always starts from the shared core prefix so
+		// main and sub/task agents keep a common tools+system cache key.
+		// Runtime denials for disallowed tools happen in ToolExecutor.
+		tools := SelectToolsForTurn(allTools, nil, selectionQuery(prompt, ""), enabledTools)
 		// When lexical matching resolved nothing beyond the core set, ask Jev
 		// which capability the request is actually describing. This only runs on
 		// the miss path, so prompts that name a tool keep their current behavior
@@ -291,7 +355,9 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 		//
 		// It is attempted at most once per run: a miss that Jev also cannot
 		// resolve would otherwise be re-asked on every turn of the loop.
-		if e.config.Router != nil && !routingAttempted && len(cfg.AllowedTools) == 0 {
+		// Sub/task agents skip Jev tool routing so they do not grow a different
+		// extras set from main on the same session prefix.
+		if e.config.Router != nil && !routingAttempted && isMain {
 			if misses := routerMisses(allTools, selectionQuery(prompt, ""), enabledTools, tools); len(misses) > 0 {
 				routingAttempted = true
 				for _, name := range e.config.Router.RouteTools(ctx, prompt, misses) {
@@ -307,25 +373,33 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 				if !hasNonCoreEnabled(enabledTools) {
 					enableToolsFromQuery(allTools, prompt, enabledTools)
 				}
-				tools = SelectToolsForTurn(allTools, cfg.AllowedTools, selectionQuery(prompt, ""), enabledTools)
+				e.mergeStickyExtras(enabledTools)
+				tools = SelectToolsForTurn(allTools, nil, selectionQuery(prompt, ""), enabledTools)
 			}
 		}
-		builder.PlanMode = e.config.Permissions != nil && e.config.Permissions.Mode() == permission.ModePlan
-		// Ask Jev which skill fits this prompt and narrow the advertised catalog
-		// to it. The catalog is otherwise a list the model has to reason about
-		// itself, and narrowing it both sharpens the choice and shortens the
-		// prompt. A nil result means Jev had no confident match, and the full
-		// catalog is advertised as before.
+		// Mode policy is turn-local and must not rewrite the cached system
+		// prefix. Plan mode (and future mode overlays) go into the ephemeral
+		// user context block via ModeInstructions.
+		builder.ModeInstructions = ""
+		if e.config.Permissions != nil && e.config.Permissions.Mode() == permission.ModePlan {
+			builder.ModeInstructions = planModeSystemPrompt()
+			builder.PlanMode = true
+		} else {
+			builder.PlanMode = false
+		}
+		// Skill routing: keep the FULL catalog in the stable system prompt so
+		// main and sub/task agents share the same skills section (prompt-cache
+		// prefix). The selected skill is force-loaded into the dynamic user
+		// context via ForceSkill — narrowing builder.Skills would rewrite system
+		// and bust the tools+system cache across agents/turns.
 		if !skillRouteResolved {
 			skillRoute = e.routedSkills(ctx, prompt)
 			skillRouteResolved = true
-			// A selected skill is force-loaded into the conversation. Narrowing
-			// the catalog alone leaves the model free to ignore the selection,
-			// which would make the routing decision worthless. The empty result
-			// for a "none" answer is the hand-back: the model decides.
 			skillRouteText = e.forceLoadedSkill(ctx, prompt, skillRoute)
 		}
-		builder.Skills = skillRoute
+		// Always advertise the full configured catalog on the wire.
+		builder.Skills = e.config.Skills
+		builder.SkillNames = e.config.SkillNames
 		builder.ForceSkill = skillRouteText
 		// Tell the model what exists beyond this turn's schema list. Without
 		// this it cannot know a capability is merely unloaded rather than
@@ -512,12 +586,14 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 			}
 			// Keep tools the model actually used (and ToolSearch hits) sticky so
 			// subsequent turns retain their schemas without re-sending the full
-			// MCP inventory.
+			// MCP inventory. Merge into the Engine-shared set so subagents see
+			// the same extras suffix (public prefix stability).
 			if !toolResult.IsError {
 				enabledTools[use.Name] = true
 				if use.Name == tool.ToolSearchToolName {
 					enableToolsFromSearch(allTools, input, enabledTools)
 				}
+				e.mergeStickyExtras(enabledTools)
 			}
 			apiResult := toolResultToAPI(use.ID, toolResult)
 			text := apiResult.Text
@@ -539,7 +615,7 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 				if queued == "" {
 					continue
 				}
-				// Plan-mode instructions are on the system prompt only.
+				// Plan-mode instructions are ModeInstructions only.
 				queued = permission.StripPlanModePrompt(queued)
 				msg, _ := userMessageFromPrompt(queued, cfg.WorkDir)
 				messages = append(messages, msg)
@@ -587,14 +663,51 @@ func nonEmpty(value, fallback string) string {
 	return fallback
 }
 
-func (e *Engine) selectedTools(allowed []string) []tool.Tool {
+// selectedTools returns the registry pool available to this agent run.
+//
+// AllowedTools no longer shrinks this pool: the wire schema always starts from
+// the shared core set (SelectToolsForTurn) and AllowedTools is enforced at
+// execute time. The allowed argument is retained for call-site compatibility
+// and ignored when building the pool.
+func (e *Engine) selectedTools(_ []string) []tool.Tool {
 	if e.config.Tools == nil {
 		return nil
 	}
-	if allowed == nil {
-		return e.config.Tools.All()
+	return e.config.Tools.All()
+}
+
+// effectiveToolAllowlist is retained for tests that still exercise the legacy
+// SelectToolsForTurn allowlist path. The engine loop no longer uses it for
+// schema selection — AllowedTools is executor-only.
+func effectiveToolAllowlist(cfg agent.AgentConfig) []string {
+	if len(cfg.AllowedTools) == 0 {
+		return nil
 	}
-	return e.config.Tools.Filter(allowed)
+	return cfg.AllowedTools
+}
+
+// PrefixExtras returns the current shared sticky extra tool names (copy).
+// Useful for tests and for parents that want to snapshot the public suffix.
+func (e *Engine) PrefixExtras() []string {
+	snap := e.snapshotStickyExtras()
+	if len(snap) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(snap))
+	for name := range snap {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// PrefixSnapshot returns the shared only-growing extras suffix for this Engine.
+// Main and sub/task agents read the same snapshot so tools[] stay cache-aligned.
+func (e *Engine) PrefixSnapshot() PrefixSnapshot {
+	if e == nil {
+		return PrefixSnapshot{}
+	}
+	return PrefixSnapshot{ExtraToolNames: e.PrefixExtras()}
 }
 
 // routedSkills returns the skill catalog to advertise for this prompt.

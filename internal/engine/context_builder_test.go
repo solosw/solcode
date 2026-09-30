@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
+	"github.com/solosw/solcode/internal/permission"
 )
 
 func TestContextBlockOmitsRecentSessionStateHeader(t *testing.T) {
@@ -96,6 +97,49 @@ func TestSystemPromptIncludesProjectRules(t *testing.T) {
 	wdAt := strings.Index(got, "Working directory: /tmp/demo")
 	if rulesAt < 0 || wdAt < 0 || rulesAt > wdAt {
 		t.Fatalf("project rules should appear before working directory:\n%s", got)
+	}
+}
+
+// plan mode 的短规则现在固定在 system prompt 里（不再随模式变化），
+// 变的只是动态上下文里的 ACTIVE 指令块。
+func TestSystemPromptStableAcrossPlanMode(t *testing.T) {
+	base := ContextBuilder{
+		SystemPrompt: "Custom preamble.",
+		ProjectRules: "Prefer table-driven tests.",
+	}
+	off := base
+	off.PlanMode = false
+	off.ModeInstructions = ""
+
+	on := base
+	on.PlanMode = true
+	on.ModeInstructions = planModeSystemPrompt()
+
+	sysOff := off.systemPrompt("/tmp/demo")
+	sysOn := on.systemPrompt("/tmp/demo")
+	if sysOff != sysOn {
+		t.Fatalf("system prompt must not change when plan mode toggles\noff:\n%s\non:\n%s", sysOff, sysOn)
+	}
+	// 短规则（READ-ONLY）常驻 system prompt，两种模式都有。
+	if !strings.Contains(sysOn, permission.PlanModeShortInstructions) {
+		t.Fatalf("system prompt missing compact plan-mode rules: %q", sysOn)
+	}
+	// 详细的 ACTIVE 指令（角色 + 输出格式）不能进 system prompt。
+	if strings.Contains(sysOn, "(ACTIVE)") || strings.Contains(sysOn, "software architect") {
+		t.Fatalf("active plan-mode instructions leaked into system prefix: %q", sysOn)
+	}
+	// 简短规则应只出现一次，不能重复注入。
+	if strings.Count(sysOn, "PLAN MODE") != 1 {
+		t.Fatalf("compact plan rules must appear exactly once, got %d: %q", strings.Count(sysOn, "PLAN MODE"), sysOn)
+	}
+
+	block := on.contextBlock("", nil, "")
+	if !strings.Contains(block, "(ACTIVE)") {
+		t.Fatalf("plan mode detail must live in dynamic context block, got %q", block)
+	}
+	blockOff := off.contextBlock("", nil, "")
+	if blockOff != "" {
+		t.Fatalf("plan mode detail must be absent when ModeInstructions empty: %q", blockOff)
 	}
 }
 

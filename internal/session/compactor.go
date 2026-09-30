@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
+	"github.com/solosw/solcode/internal/permission"
 	"github.com/solosw/solcode/internal/tokenest"
 	headroom "github.com/superops-team/headroom-go"
 )
@@ -322,6 +323,9 @@ func isEphemeralContextMessage(message sdk.MessageParam) bool {
 	return strings.HasPrefix(lower, "session summary:\n") ||
 		strings.HasPrefix(lower, "retrieved memory:\n") ||
 		strings.HasPrefix(lower, "previously compacted session context:\n") ||
+		strings.HasPrefix(lower, "project knowledge context:\n") ||
+		strings.HasPrefix(text, permission.PlanModePromptMarker) ||
+		strings.HasPrefix(lower, "selected skill for this request") ||
 		(strings.Contains(lower, "\nretrieved memory:\n") && strings.Contains(lower, "session summary:"))
 }
 

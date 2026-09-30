@@ -45,7 +45,9 @@ type App struct {
 	MemoryStore      *memory.FileStore
 	MemoryManager    *memory.Manager
 	// EmbeddingStore holds the optional chromem index for durable memories.
-	EmbeddingStore   *embedding.Store
+	EmbeddingStore *embedding.Store
+	// organizer is the optional local GGUF memory organizer (Letta archival writer).
+	organizer *organizerRuntime
 	SkillRegistry    *skill.Registry
 	WorkflowRegistry *workflow.Registry
 	MCPRegistry      *mcp.Registry
@@ -304,14 +306,22 @@ func New(cfg config.Config, opts ...Option) (*App, error) {
 		if jev != nil && jev.decider != nil && jev.decider.Enabled() {
 			application.MemoryManager.WithDecider(jev.decider)
 		}
-		// Let the model decide when a fact is worth remembering, and let it
-		// look up what was remembered before instead of re-deriving it.
-		registry.Register(tool.NewWriteMemoryTool(application), tool.NewReadMemoryTool(application))
+		// Read path always available when memory is on. Write tools are hidden
+		// when the local organizer owns archival writes (Letta-style).
+		registry.Register(tool.NewReadMemoryTool(application))
+		if !cfg.OrganizerEnabled() {
+			registry.Register(tool.NewWriteMemoryTool(application))
+		}
 	}
 	registry.Register(tool.NewReadObservationTool(application))
-	// Session memories live in the project's solcode.md and record the checkpoint
-	// turn, changed files, timestamp, and session id alongside the model's entry.
-	registry.Register(tool.NewWriteSessionMemoryTool(application), tool.NewReadSessionMemoryTool(application))
+	// Session recall log: Read always; Write only when the organizer is off.
+	registry.Register(tool.NewReadSessionMemoryTool(application))
+	if !cfg.OrganizerEnabled() {
+		registry.Register(tool.NewWriteSessionMemoryTool(application))
+	}
+	if cfg.OrganizerEnabled() {
+		application.organizer = newOrganizerRuntime(cfg)
+	}
 
 	return application, nil
 }
@@ -481,6 +491,12 @@ func (a *App) Close() error {
 			firstErr = err
 		}
 		a.EmbeddingStore = nil
+	}
+	if a.organizer != nil {
+		if err := a.organizer.Close(); firstErr == nil {
+			firstErr = err
+		}
+		a.organizer = nil
 	}
 	if a.jev != nil {
 		if err := a.jev.Close(); firstErr == nil {
@@ -884,6 +900,12 @@ func (a *App) RunPromptWithSession(ctx context.Context, sessionID, prompt, workD
 	// Persist a per-turn session-memory snapshot (todolist + pruned files) after
 	// the main agent finishes. Failures inside are logged and ignored.
 	a.recordTurnSessionMemory(context.WithoutCancel(ctx), sessionID, workDir, prompt, result.AgentResult.Output)
+	// Local organizer: summarize + archive durable facts after a clean prompt
+	// end. Cancel / interrupt / agent error skip this; compact still organizes
+	// separately so both paths may run (near-dupe merge keeps archival clean).
+	if a.Config.OrganizerEnabled() && shouldRunOrganizerAfterTurn(ctx, result.AgentResult.Error) {
+		a.runOrganizerAfterTurn(context.WithoutCancel(ctx), current, prompt, result.AgentResult.Output)
+	}
 	a.resetMemoryMaintenanceCycleIfBelowThreshold(ctx, current)
 	refreshSummary := result.AgentResult.Error == "" && a.Config.Memory.Enabled && a.shouldRefreshMemorySummary(ctx, current)
 	if refreshSummary {
@@ -982,17 +1004,170 @@ func activeTodos(path string) []tool.TodoItem {
 	return out
 }
 
-// retrieveNewSessionMemoryContext no longer injects retrieved memory into
-// ordinary turns. Memory-related context enters the model only via durable
-// compaction messages (session summary / project knowledge) after context
-// has been compacted. Cross-session recall remains available through the
-// ReadMemory tool and post-compact durable context.
+// retrieveNewSessionMemoryContext injects Letta-style core memory.
+//
+// - New-session / bootstrap (cross-session opt-in): core + beliefs + archival
+//   hits on the user prompt (full bootstrap).
+// - Ordinary turns: a *lightweight* core + current-beliefs block only (small
+//   token budget). Full archival recall stays on ReadMemory so the stable
+//   system prefix is not rewritten and prompt-cache stays warm.
 func (a *App) retrieveNewSessionMemoryContext(ctx context.Context, prompt string, current *session.Session, newSession bool) ([]engine.ContextItem, error) {
-	if current != nil && current.Metadata.MemoryBootstrapPending {
-		// Clear the legacy one-shot flag so it cannot re-arm older sessions.
+	if current == nil {
+		return nil, nil
+	}
+	pending := current.Metadata.MemoryBootstrapPending
+	if pending {
 		current.Metadata.MemoryBootstrapPending = false
 	}
-	return nil, nil
+	if a == nil || a.MemoryManager == nil || !a.Config.Memory.Enabled {
+		return nil, nil
+	}
+
+	bootstrap := shouldRetrieveNewSessionMemory(current, newSession) || pending
+	// Ordinary turns still get a tiny always-on core/beliefs injection.
+	// Bootstrap keeps the fuller archival fill below.
+	if !bootstrap {
+		return a.retrieveTurnCoreMemoryContext(ctx, current, prompt)
+	}
+
+	sessionID := string(current.Metadata.ID)
+	allowCross := sessionAllowsCrossSessionMemory(current)
+	limit := a.Config.Memory.RetrievalLimit
+	if limit <= 0 {
+		limit = 8
+	}
+
+	// Core blocks first (always-on preferences/constraints).
+	all, err := a.MemoryManager.Store.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	filtered := filterMemoryItemsForSession(all, sessionID, allowCross)
+	blocks := memory.SelectCoreBlocks(filtered, memory.CoreSelectionOptions{
+		SessionID:     sessionID,
+		MaxTotalItems: minInt(limit, 6),
+	})
+	items := memory.CoreItems(blocks)
+
+	// Fill remaining budget with hybrid archival retrieval on the user prompt.
+	remaining := limit - len(items)
+	if remaining > 0 && strings.TrimSpace(prompt) != "" {
+		retrieved, rerr := a.MemoryManager.Retrieve(ctx, prompt, sessionID, allowCross, remaining+4)
+		if rerr != nil {
+			return nil, rerr
+		}
+		seen := map[string]bool{}
+		for _, item := range items {
+			seen[item.ID] = true
+		}
+		for _, item := range retrieved {
+			if seen[item.ID] || memory.IsCoreCandidate(item) {
+				continue
+			}
+			seen[item.ID] = true
+			items = append(items, item)
+			if len(items) >= limit {
+				break
+			}
+		}
+	}
+
+	// Reinforce accessed memories (MemGPT touch on recall).
+	for _, item := range items {
+		_ = a.MemoryManager.Store.Touch(ctx, item)
+	}
+
+	// Prefer a labeled core block, then archival hits that are not already core.
+	coreIDs := map[string]bool{}
+	for _, it := range memory.CoreItems(blocks) {
+		coreIDs[it.ID] = true
+	}
+	archival := make([]memory.Item, 0, len(items))
+	for _, item := range items {
+		if coreIDs[item.ID] {
+			continue
+		}
+		archival = append(archival, item)
+	}
+	out := a.memoryContextFromItems(ctx, archival)
+	out = append(memoryCoreBeliefContextItems(filtered, sessionID, limit), out...)
+	return out, nil
+}
+
+// retrieveTurnCoreMemoryContext is the per-turn lightweight injection: a few
+// core preference/constraint lines plus the current one-per-topic belief set.
+// No archival Retrieve, no Touch storms — cheap and cache-friendly.
+func (a *App) retrieveTurnCoreMemoryContext(ctx context.Context, current *session.Session, prompt string) ([]engine.ContextItem, error) {
+	if a == nil || a.MemoryManager == nil || current == nil || a.MemoryManager.Store == nil {
+		return nil, nil
+	}
+	sessionID := string(current.Metadata.ID)
+	allowCross := sessionAllowsCrossSessionMemory(current)
+	all, err := a.MemoryManager.Store.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	filtered := filterMemoryItemsForSession(all, sessionID, allowCross)
+	if len(filtered) == 0 {
+		return nil, nil
+	}
+	// Cap turn-level injection tightly so ordinary turns stay cheap.
+	const turnCoreMax = 4
+	const turnBeliefMax = 4
+	_ = prompt // reserved for future prompt-conditioned belief ranking
+	return memoryCoreBeliefContextItems(filtered, sessionID, turnCoreMax+turnBeliefMax), nil
+}
+
+func filterMemoryItemsForSession(all []memory.Item, sessionID string, allowCross bool) []memory.Item {
+	filtered := make([]memory.Item, 0, len(all))
+	for _, item := range all {
+		if !allowCross && item.SourceSessionID != "" && item.SourceSessionID != sessionID {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	return filtered
+}
+
+// memoryCoreBeliefContextItems builds the ordered [core, beliefs] context
+// blocks used by both bootstrap and turn-level injection.
+func memoryCoreBeliefContextItems(filtered []memory.Item, sessionID string, budget int) []engine.ContextItem {
+	if budget <= 0 {
+		budget = 6
+	}
+	coreBudget := minInt(budget, 4)
+	beliefBudget := minInt(budget, 4)
+	blocks := memory.SelectCoreBlocks(filtered, memory.CoreSelectionOptions{
+		SessionID:     sessionID,
+		MaxTotalItems: coreBudget,
+	})
+	var out []engine.ContextItem
+	if beliefs := memory.SelectCurrentBeliefs(filtered, beliefBudget); len(beliefs) > 0 {
+		if text := memory.FormatCurrentBeliefs(beliefs); text != "" {
+			out = append(out, engine.ContextItem{
+				Title:      "beliefs",
+				Content:    text,
+				Source:     "beliefs",
+				Importance: 0.95,
+			})
+		}
+	}
+	if core := memory.FormatCoreBlocks(blocks); core != "" {
+		out = append([]engine.ContextItem{{
+			Title:      "core",
+			Content:    core,
+			Source:     "core",
+			Importance: 1,
+		}}, out...)
+	}
+	return out
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func (a *App) memoryContextFromItems(_ context.Context, items []memory.Item) []engine.ContextItem {
@@ -1756,10 +1931,66 @@ func conciseConversationLines(transcript string) []string {
 }
 
 func (a *App) rememberCompactedSession(ctx context.Context, current *session.Session, previousSummary, nextSummary string, result session.CompactResult, estimatedTokens int) error {
-	if a == nil || current == nil || a.MemoryManager == nil || !a.Config.Memory.Enabled {
+	if a == nil || current == nil {
 		return nil
 	}
-	_, err := a.MemoryManager.RememberExtracted(ctx, memory.ExtractionInput{
+
+	// Letta/MemGPT archival path: when the local organizer is enabled it owns
+	// session-end extraction asynchronously. Legacy tool-trace / chat extractor
+	// still runs when the organizer is off or memory is enabled as a fallback.
+	if a.Config.OrganizerEnabled() {
+		transcript := result.OriginalTranscript
+		if strings.TrimSpace(transcript) == "" {
+			transcript = nextSummary
+		}
+		a.runOrganizerAfterCompact(ctx, current, previousSummary, nextSummary, transcript)
+	}
+
+	if a.MemoryManager == nil || !a.Config.Memory.Enabled {
+		return nil
+	}
+
+	// When organizer is on, skip the chat-provider extractor to honor the
+	// "no remote fallback for memory organization" rule; keep deterministic
+	// tool-trace extraction only (Extractor left nil path still stores traces).
+	var extractErr error
+	if a.Config.OrganizerEnabled() {
+		// Tool-trace only: temporarily ignore AI extractor by using a shallow copy path.
+		extractErr = a.rememberCompactedToolTraceOnly(ctx, current, previousSummary, nextSummary, result, estimatedTokens)
+	} else {
+		_, extractErr = a.MemoryManager.RememberExtracted(ctx, memory.ExtractionInput{
+			SourceSessionID:     string(current.Metadata.ID),
+			WorkDir:             current.Metadata.WorkDir,
+			PreviousSummary:     previousSummary,
+			NewSummary:          nextSummary,
+			Transcript:          result.OriginalTranscript,
+			OriginalTranscript:  result.OriginalTranscript,
+			CompactedTranscript: result.CompactedTranscript,
+			RetainedTranscript:  result.RetainedTranscript,
+			DiscardedTranscript: result.DiscardedTranscript,
+			TriggerReason:       "compaction",
+			EstimatedTokens:     estimatedTokens,
+		})
+	}
+	if cerr := a.MemoryManager.Consolidate(ctx); cerr != nil && extractErr == nil {
+		extractErr = cerr
+	}
+	return extractErr
+}
+
+// rememberCompactedToolTraceOnly stores deterministic tool-trace memories from
+// a compaction without calling the chat-provider Extractor (used when the
+// local organizer owns LLM extraction).
+func (a *App) rememberCompactedToolTraceOnly(ctx context.Context, current *session.Session, previousSummary, nextSummary string, result session.CompactResult, estimatedTokens int) error {
+	if a == nil || current == nil || a.MemoryManager == nil {
+		return nil
+	}
+	// Swap extractor out for this call so only tool-trace heuristics run.
+	mgr := a.MemoryManager
+	prev := mgr.Extractor
+	mgr.Extractor = nil
+	defer func() { mgr.Extractor = prev }()
+	_, err := mgr.RememberExtracted(ctx, memory.ExtractionInput{
 		SourceSessionID:     string(current.Metadata.ID),
 		WorkDir:             current.Metadata.WorkDir,
 		PreviousSummary:     previousSummary,
@@ -1769,7 +2000,7 @@ func (a *App) rememberCompactedSession(ctx context.Context, current *session.Ses
 		CompactedTranscript: result.CompactedTranscript,
 		RetainedTranscript:  result.RetainedTranscript,
 		DiscardedTranscript: result.DiscardedTranscript,
-		TriggerReason:       "compaction",
+		TriggerReason:       "compaction+organizer",
 		EstimatedTokens:     estimatedTokens,
 	})
 	return err
@@ -2065,17 +2296,9 @@ func sanitizeCompactionModification(part string) string {
 	if part == "" {
 		return ""
 	}
-	// Legacy compaction summaries store file facts as "path: edited". Accept
-	// that narrow, normalized form before generic code/path detection rejects it.
-	if strings.Contains(strings.ToLower(part), ": edited") {
-		if idx := strings.Index(part, " ("); idx >= 0 {
-			part = part[:idx]
-		}
-		return summaryExcerpt(part, 140)
-	}
-	if looksLikeSummaryCodeLine(part) || isAssistantMetaSummaryLine(part) || isTrivialContinuationSummaryLine(part) {
-		return ""
-	}
+	// Normalize legacy free-form edit notes into stable suffixes first, so
+	// "path: edited (replaced …)" becomes "path: edited (targeted replacement)"
+	// instead of being stripped to a bare ": edited".
 	replacements := []struct {
 		old string
 		new string
@@ -2094,6 +2317,17 @@ func sanitizeCompactionModification(part string) string {
 		if strings.HasSuffix(part, suffix) {
 			return summaryExcerpt(part, 140)
 		}
+	}
+	// Legacy compaction summaries store bare "path: edited". Keep that form,
+	// dropping any remaining unknown parenthetical noise.
+	if strings.Contains(strings.ToLower(part), ": edited") {
+		if idx := strings.Index(part, " ("); idx >= 0 {
+			part = part[:idx]
+		}
+		return summaryExcerpt(part, 140)
+	}
+	if looksLikeSummaryCodeLine(part) || isAssistantMetaSummaryLine(part) || isTrivialContinuationSummaryLine(part) {
+		return ""
 	}
 	if idx := strings.Index(part, " ("); idx >= 0 {
 		part = part[:idx]
@@ -2408,6 +2642,11 @@ func isDiscardablePriorSummaryLine(line string) bool {
 	if line == "" {
 		return true
 	}
+	// Durable compaction facts and source paths must survive prior-summary
+	// cleanup; they are the main reason prior context exists.
+	if isKeepableSummaryFactLine(line) {
+		return false
+	}
 	if isTrivialContinuationCandidateLine(line) {
 		return true
 	}
@@ -2462,6 +2701,9 @@ func isDiscardableTranscriptSummaryLine(line string) bool {
 	line = strings.TrimSpace(line)
 	if line == "" {
 		return true
+	}
+	if isKeepableSummaryFactLine(line) {
+		return false
 	}
 	if isBareTrivialContinuationSummaryLine(line) {
 		return true
@@ -2618,6 +2860,10 @@ func looksLikeSummaryCodeLine(line string) bool {
 	if line == "" {
 		return false
 	}
+	// Keepable facts (source paths, file-mod / validation lines) are not code.
+	if isKeepableSummaryFactLine(line) {
+		return false
+	}
 	if summaryLineNumberPattern.MatchString(line) || summaryNamedLineNumberPattern.MatchString(line) || summaryDiffLinePattern.MatchString(line) || strings.HasPrefix(line, "```") {
 		return true
 	}
@@ -2681,10 +2927,71 @@ func isSafeLegacySourcePath(line string) bool {
 	return false
 }
 
+// isKeepableSummaryFactLine reports durable summary facts that must not be
+// dropped by path/code noise filters: source paths under the repo tree, and
+// normalized compaction file-mod / validation lines.
+func isKeepableSummaryFactLine(line string) bool {
+	line = strings.TrimSpace(stripSummaryBulletPrefix(line))
+	if line == "" {
+		return false
+	}
+	if isSafeLegacySourcePath(line) {
+		return true
+	}
+	lower := strings.ToLower(line)
+	if strings.HasPrefix(lower, "compacted session file modifications:") {
+		// Bare placeholder without any path is not useful.
+		return strings.Contains(line, "/") || strings.Contains(strings.ToLower(line), ": edited")
+	}
+	if strings.HasPrefix(lower, "compacted session validation/build commands run:") {
+		rest := strings.TrimSpace(line[len("Compacted session validation/build commands run:"):])
+		rest = strings.TrimSuffix(rest, ".")
+		return isLikelyValidationCommand(rest) || strings.Contains(lower, "go test") || strings.Contains(lower, "go build")
+	}
+	// "path: edited …" file facts produced by memory items / legacy summaries.
+	if strings.Contains(lower, ": edited") && (strings.Contains(line, "/") || strings.Contains(line, `\`)) {
+		if looksLikeSummaryCodeLineWithoutPath(line) {
+			return false
+		}
+		return true
+	}
+	return false
+}
+
+// looksLikeSummaryCodeLineWithoutPath is the code-noise check used while
+// deciding keepable file facts, so we do not recurse through path detection.
+func looksLikeSummaryCodeLineWithoutPath(line string) bool {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return false
+	}
+	if summaryLineNumberPattern.MatchString(line) || summaryNamedLineNumberPattern.MatchString(line) || summaryDiffLinePattern.MatchString(line) || strings.HasPrefix(line, "```") {
+		return true
+	}
+	if summaryCodeLinePattern.MatchString(line) {
+		return true
+	}
+	codeMarkers := []string{
+		":=", " = ", "strings.", "sdk.", "append(", "func(", "for _,", "return ",
+		"t.Fatalf(", "json.", "fmt.", "[]string{", "map[string]any{",
+	}
+	lower := strings.ToLower(line)
+	for _, marker := range codeMarkers {
+		if strings.Contains(lower, strings.ToLower(marker)) {
+			return true
+		}
+	}
+	return false
+}
+
 func looksLikeSummaryPathLine(line string) bool {
 	line = strings.TrimSpace(strings.TrimSuffix(line, ":"))
 	line = strings.Trim(line, "`\"'")
 	if line == "" {
+		return false
+	}
+	// Keepable facts are paths/file-mods we intentionally retain.
+	if isKeepableSummaryFactLine(line) {
 		return false
 	}
 	lower := strings.ToLower(line)
@@ -2692,6 +2999,8 @@ func looksLikeSummaryPathLine(line string) bool {
 		if !strings.Contains(line, " ") {
 			return true
 		}
+		// Multi-token lines that merely mention a path (e.g. prose + .go) are
+		// only path-noise when they are not already keepable facts.
 		for _, ext := range []string{".go", ".txt", ".json", ".md", ".yaml", ".yml"} {
 			if strings.Contains(lower, ext) {
 				return true
@@ -2764,6 +3073,13 @@ func sanitizeSummaryOutputLine(line string, allowUserMessages bool, allowBareCom
 	}
 	if strings.HasPrefix(lower, "user: ") {
 		if !allowUserMessages {
+			return ""
+		}
+		return line
+	}
+	// Keep durable file/validation facts before path/code noise filters.
+	if isKeepableSummaryFactLine(line) {
+		if !allowBareCompaction && (line == "Compacted session file modifications." || line == "Compacted session validation/build commands run.") {
 			return ""
 		}
 		return line

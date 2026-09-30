@@ -66,22 +66,30 @@ func (f *fakeGenerator) requestCount() int {
 	return len(f.requests)
 }
 
-const validResponse = `{
-  "session_summary": "Implemented the local organizer and wired it into config.",
-  "keywords": ["organizer", "llama.cpp", "config"],
-  "importance": 0.7,
-  "candidate_memories": [
-    {
-      "kind": "preference",
-      "scope": "project",
-      "suggested_tier": "M4",
-      "confidence": 0.9,
-      "canonical_text": "The project keeps the memory organizer fully local with no remote fallback.",
-      "tags": ["memory"],
-      "reason": "stated as a hard project rule"
-    }
-  ]
-}`
+const validResponse = `<result>
+  <session_summary>Implemented the local organizer and wired it into config.</session_summary>
+  <keywords>
+    <k>organizer</k>
+    <k>llama.cpp</k>
+    <k>config</k>
+  </keywords>
+  <importance>0.7</importance>
+  <candidate_memories>
+    <candidate>
+      <kind>preference</kind>
+      <scope>project</scope>
+      <suggested_tier>M4</suggested_tier>
+      <confidence>0.9</confidence>
+      <canonical_text>The project keeps the memory organizer fully local with no remote fallback.</canonical_text>
+      <tags>
+        <t>memory</t>
+      </tags>
+      <reason>stated as a hard project rule</reason>
+      <status>active</status>
+      <supersedes></supersedes>
+    </candidate>
+  </candidate_memories>
+</result>`
 
 func TestOrganizeParsesValidResponse(t *testing.T) {
 	gen := &fakeGenerator{ready: true, raw: validResponse}
@@ -132,6 +140,9 @@ func TestOrganizePassesGrammarAndBounds(t *testing.T) {
 	if req.Grammar == "" {
 		t.Fatal("expected a grammar to be supplied for constrained decoding")
 	}
+	if !strings.Contains(req.Grammar, "<result>") {
+		t.Fatalf("grammar = %q, want XML result root", req.Grammar)
+	}
 	if req.MaxTokens != 900 {
 		t.Fatalf("max tokens = %d, want 900", req.MaxTokens)
 	}
@@ -140,6 +151,38 @@ func TestOrganizePassesGrammarAndBounds(t *testing.T) {
 	}
 	if !strings.Contains(req.User, "transcript") {
 		t.Fatalf("user payload = %q, want JSON with a transcript field", req.User)
+	}
+	if !strings.Contains(req.System, "XML") {
+		t.Fatalf("system prompt = %q, want XML instructions", req.System)
+	}
+}
+
+func TestBuildUserPayloadIncludesSideContext(t *testing.T) {
+	payload := buildUserPayload(Input{
+		SessionID:       "s1",
+		WorkDir:         "/tmp/proj",
+		PreviousSummary: "old summary",
+		NextSummary:     "new summary",
+		Trigger:         "turn",
+		ChangedFiles:    []string{"internal/app/organizer_bridge.go"},
+		Todos:           []string{"[→] Enrich context"},
+		ToolFacts:       []string{"Edited organizer_bridge.go"},
+		RelatedMemories: []string{"[preference] mem_x: keep local"},
+	}, "user: hi\nassistant: done")
+	for _, want := range []string{
+		`"trigger":"turn"`,
+		"previous_summary",
+		"next_summary",
+		"changed_files",
+		"organizer_bridge.go",
+		"todos",
+		"tool_facts",
+		"related_memories",
+		"mem_x",
+	} {
+		if !strings.Contains(payload, want) {
+			t.Fatalf("payload missing %q: %s", want, payload)
+		}
 	}
 }
 
@@ -197,9 +240,19 @@ func TestOrganizeHonorsTimeout(t *testing.T) {
 func TestOrganizeCapsCandidates(t *testing.T) {
 	var items []string
 	for i := 0; i < 30; i++ {
-		items = append(items, `{"kind":"fact","scope":"project","suggested_tier":"M3","confidence":0.8,"canonical_text":"distinct durable fact number `+string(rune('a'+i))+`","tags":[],"reason":"r"}`)
+		items = append(items, `<candidate>
+      <kind>fact</kind>
+      <scope>project</scope>
+      <suggested_tier>M3</suggested_tier>
+      <confidence>0.8</confidence>
+      <canonical_text>distinct durable fact number `+string(rune('a'+i))+`</canonical_text>
+      <tags></tags>
+      <reason>r</reason>
+      <status>active</status>
+      <supersedes></supersedes>
+    </candidate>`)
 	}
-	raw := `{"session_summary":"s","keywords":[],"importance":0.5,"candidate_memories":[` + strings.Join(items, ",") + `]}`
+	raw := `<result><session_summary>s</session_summary><keywords></keywords><importance>0.5</importance><candidate_memories>` + strings.Join(items, "") + `</candidate_memories></result>`
 	gen := &fakeGenerator{ready: true, raw: raw}
 	org := New(gen, Options{MaxCandidates: 5})
 
@@ -212,8 +265,8 @@ func TestOrganizeCapsCandidates(t *testing.T) {
 	}
 }
 
-func TestParseResultAcceptsFencedJSON(t *testing.T) {
-	fenced := "Here is the result:\n```json\n" + validResponse + "\n```\nDone."
+func TestParseResultAcceptsFencedXML(t *testing.T) {
+	fenced := "Here is the result:\n```xml\n" + validResponse + "\n```\nDone."
 	result, err := ParseResult(fenced)
 	if err != nil {
 		t.Fatalf("ParseResult() error = %v", err)
@@ -240,32 +293,72 @@ func TestParseResultRejectsEmptyResponse(t *testing.T) {
 	}
 }
 
-func TestParseResultRejectsResponseWithoutJSON(t *testing.T) {
+func TestParseResultRejectsResponseWithoutXML(t *testing.T) {
 	if _, err := ParseResult("I could not summarize this session."); err == nil {
-		t.Fatal("expected an error when no JSON object is present")
+		t.Fatal("expected an error when no XML result is present")
 	}
 }
 
 func TestParseResultRejectsMissingSummary(t *testing.T) {
-	raw := `{"keywords":["a"],"importance":0.5,"candidate_memories":[]}`
+	raw := `<result><keywords><k>a</k></keywords><importance>0.5</importance><candidate_memories></candidate_memories></result>`
 	if _, err := ParseResult(raw); err == nil {
 		t.Fatal("expected an error when the summary is missing")
 	}
 }
 
 func TestParseResultDropsInvalidAndSensitiveCandidates(t *testing.T) {
-	raw := `{
-      "session_summary": "did work",
-      "keywords": [],
-      "importance": 0.5,
-      "candidate_memories": [
-        {"kind":"fact","scope":"project","suggested_tier":"M3","confidence":0.9,"canonical_text":"A perfectly valid durable fact about the build.","tags":[],"reason":"ok"},
-        {"kind":"nonsense","scope":"project","suggested_tier":"M3","confidence":0.9,"canonical_text":"Valid text but an unknown kind.","tags":[],"reason":"bad kind"},
-        {"kind":"fact","scope":"project","suggested_tier":"M9","confidence":0.9,"canonical_text":"Valid text but an unknown tier.","tags":[],"reason":"bad tier"},
-        {"kind":"fact","scope":"project","suggested_tier":"M3","confidence":0.9,"canonical_text":"x","tags":[],"reason":"too short"},
-        {"kind":"fact","scope":"project","suggested_tier":"M3","confidence":0.9,"canonical_text":"The deploy token is sk-abcdefghijklmnopqrstuvwxyz0123456789.","tags":[],"reason":"secret"}
-      ]
-    }`
+	raw := `<result>
+      <session_summary>did work</session_summary>
+      <keywords></keywords>
+      <importance>0.5</importance>
+      <candidate_memories>
+        <candidate>
+          <kind>fact</kind>
+          <scope>project</scope>
+          <suggested_tier>M3</suggested_tier>
+          <confidence>0.9</confidence>
+          <canonical_text>A perfectly valid durable fact about the build.</canonical_text>
+          <tags></tags>
+          <reason>ok</reason>
+        </candidate>
+        <candidate>
+          <kind>nonsense</kind>
+          <scope>project</scope>
+          <suggested_tier>M3</suggested_tier>
+          <confidence>0.9</confidence>
+          <canonical_text>Valid text but an unknown kind.</canonical_text>
+          <tags></tags>
+          <reason>bad kind</reason>
+        </candidate>
+        <candidate>
+          <kind>fact</kind>
+          <scope>project</scope>
+          <suggested_tier>M9</suggested_tier>
+          <confidence>0.9</confidence>
+          <canonical_text>Valid text but an unknown tier.</canonical_text>
+          <tags></tags>
+          <reason>bad tier</reason>
+        </candidate>
+        <candidate>
+          <kind>fact</kind>
+          <scope>project</scope>
+          <suggested_tier>M3</suggested_tier>
+          <confidence>0.9</confidence>
+          <canonical_text>x</canonical_text>
+          <tags></tags>
+          <reason>too short</reason>
+        </candidate>
+        <candidate>
+          <kind>fact</kind>
+          <scope>project</scope>
+          <suggested_tier>M3</suggested_tier>
+          <confidence>0.9</confidence>
+          <canonical_text>The deploy token is sk-abcdefghijklmnopqrstuvwxyz0123456789.</canonical_text>
+          <tags></tags>
+          <reason>secret</reason>
+        </candidate>
+      </candidate_memories>
+    </result>`
 	result, err := ParseResult(raw)
 	if err != nil {
 		t.Fatalf("ParseResult() error = %v", err)
@@ -278,24 +371,85 @@ func TestParseResultDropsInvalidAndSensitiveCandidates(t *testing.T) {
 	}
 }
 
-func TestParseResultEmptyCandidatesIsSuccess(t *testing.T) {
-	raw := `{"session_summary":"routine session with nothing durable","keywords":["routine"],"importance":0.3,"candidate_memories":[]}`
+func TestParseResultReadsStatusAndSupersedes(t *testing.T) {
+	raw := `<result>
+  <session_summary>Updated the local organizer governance fields.</session_summary>
+  <keywords><k>governance</k></keywords>
+  <importance>0.6</importance>
+  <candidate_memories>
+    <candidate>
+      <kind>constraint</kind>
+      <scope>project</scope>
+      <suggested_tier>M4</suggested_tier>
+      <confidence>0.95</confidence>
+      <canonical_text>Never load the organizer model inside the solcode process.</canonical_text>
+      <tags><t>organizer</t></tags>
+      <reason>settled architecture</reason>
+      <status>active</status>
+      <supersedes>old-inprocess-rule</supersedes>
+    </candidate>
+  </candidate_memories>
+</result>`
 	result, err := ParseResult(raw)
 	if err != nil {
-		t.Fatalf("ParseResult() error = %v", err)
+		t.Fatalf("ParseResult: %v", err)
 	}
-	if len(result.Candidates) != 0 {
-		t.Fatalf("candidates = %#v, want none", result.Candidates)
+	if len(result.Candidates) != 1 {
+		t.Fatalf("candidates = %#v", result.Candidates)
+	}
+	c := result.Candidates[0]
+	if c.Status != "active" {
+		t.Fatalf("status = %q", c.Status)
+	}
+	if c.Supersedes != "old-inprocess-rule" {
+		t.Fatalf("supersedes = %q", c.Supersedes)
+	}
+}
+
+func TestParseResultDefaultsMissingStatusToActive(t *testing.T) {
+	raw := `<result>
+  <session_summary>Legacy organizer output without governance tags.</session_summary>
+  <keywords></keywords>
+  <importance>0.4</importance>
+  <candidate_memories>
+    <candidate>
+      <kind>fact</kind>
+      <scope>project</scope>
+      <suggested_tier>M3</suggested_tier>
+      <confidence>0.8</confidence>
+      <canonical_text>Legacy candidate without status still parses cleanly.</canonical_text>
+      <tags></tags>
+      <reason>compat</reason>
+    </candidate>
+  </candidate_memories>
+</result>`
+	result, err := ParseResult(raw)
+	if err != nil {
+		t.Fatalf("ParseResult: %v", err)
+	}
+	if len(result.Candidates) != 1 || result.Candidates[0].Status != "active" {
+		t.Fatalf("expected default active status, got %#v", result.Candidates)
+	}
+}
+
+func TestOrganizeGrammarMentionsStatus(t *testing.T) {
+	g := OrganizeGrammar()
+	for _, want := range []string{"status", "supersedes", "active", "contradicted"} {
+		if !strings.Contains(g, want) {
+			t.Fatalf("grammar missing %q", want)
+		}
 	}
 }
 
 func TestParseResultDefaultsOmittedCandidateFields(t *testing.T) {
-	raw := `{
-      "session_summary": "did work",
-      "candidate_memories": [
-        {"canonical_text":"A durable fact with no declared kind, scope, or tier."}
-      ]
-    }`
+	raw := `<result>
+      <session_summary>did work</session_summary>
+      <candidate_memories>
+        <candidate>
+          <canonical_text>A durable fact with no declared kind, scope, or tier.</canonical_text>
+        </candidate>
+      </candidate_memories>
+    </result>`
 	result, err := ParseResult(raw)
 	if err != nil {
 		t.Fatalf("ParseResult() error = %v", err)
@@ -319,7 +473,13 @@ func TestParseResultDefaultsOmittedCandidateFields(t *testing.T) {
 }
 
 func TestParseResultStripsRolePrefixesFromSummary(t *testing.T) {
-	raw := `{"session_summary":"user: fix the build\nassistant: fixed the build\n[tool use: Edit]\nVerified with go test.","candidate_memories":[]}`
+	raw := `<result>
+  <session_summary>user: fix the build
+assistant: fixed the build
+[tool use: Edit]
+Verified with go test.</session_summary>
+  <candidate_memories></candidate_memories>
+</result>`
 	result, err := ParseResult(raw)
 	if err != nil {
 		t.Fatalf("ParseResult() error = %v", err)
@@ -336,9 +496,19 @@ func TestParseResultStripsRolePrefixesFromSummary(t *testing.T) {
 }
 
 func TestParseResultClampsConfidence(t *testing.T) {
-	raw := `{"session_summary":"s","candidate_memories":[
-      {"kind":"fact","scope":"project","suggested_tier":"M3","confidence":5,"canonical_text":"A durable fact with an out of range confidence value.","tags":[]}
-    ]}`
+	raw := `<result>
+  <session_summary>s</session_summary>
+  <candidate_memories>
+    <candidate>
+      <kind>fact</kind>
+      <scope>project</scope>
+      <suggested_tier>M3</suggested_tier>
+      <confidence>5</confidence>
+      <canonical_text>A durable fact with an out of range confidence value.</canonical_text>
+      <tags></tags>
+    </candidate>
+  </candidate_memories>
+</result>`
 	result, err := ParseResult(raw)
 	if err != nil {
 		t.Fatalf("ParseResult() error = %v", err)
@@ -400,5 +570,22 @@ func TestGrammarIsPresentAndNotEmpty(t *testing.T) {
 	}
 	if !strings.Contains(OrganizeGrammar(), "root ::=") {
 		t.Fatal("grammar must declare a root rule")
+	}
+	if !strings.Contains(OrganizeGrammar(), "<result>") {
+		t.Fatal("grammar must constrain the XML result root")
+	}
+	if strings.Contains(OrganizeGrammar(), "session_summary\"") {
+		t.Fatal("grammar still looks like the old JSON shape")
+	}
+	// Unbounded free text is what let MiniCPM-1B loop inside <session_summary>
+	// without ever emitting a closing tag. The grammar must keep finite bounds.
+	if strings.Contains(OrganizeGrammar(), "text ::= char*") {
+		t.Fatal("grammar must not use unbounded text ::= char*")
+	}
+	if !strings.Contains(OrganizeGrammar(), "summary-text") {
+		t.Fatal("grammar must declare a bounded summary-text rule")
+	}
+	if !strings.Contains(OrganizeGrammar(), "char{") {
+		t.Fatal("grammar must bound free text with char{m,n} repetitions")
 	}
 }
