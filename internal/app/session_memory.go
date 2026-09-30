@@ -165,12 +165,20 @@ func (a *App) recordTurnSessionMemory(ctx context.Context, sessionID, workDir, p
 	}
 }
 
+// turnSessionMemoryMaxRunes bounds one per-turn recall entry. Keep enough room
+// for problem + status + outcome; the old 400-rune hard cut truncated mid-word
+// (e.g. "embed_long_c…") and dropped the closing status.
+const turnSessionMemoryMaxRunes = 1200
+
 // turnSessionMemorySummary builds the recall-layer turn text.
 //
 // Prefer the model outcome (assistant final output / compact-style summary)
 // over the raw user prompt: prompts are often short, noisy, or off-task, while
 // the assistant reply usually states what actually happened. Fall back to the
 // prompt only when no usable model text exists.
+//
+// When truncated, keep both head (problem / intent) and tail (status / outcome)
+// so a long fix write-up still ends with what is done vs unfinished.
 func turnSessionMemorySummary(prompt, modelSummary string) string {
 	text := strings.TrimSpace(modelSummary)
 	if text == "" {
@@ -197,12 +205,37 @@ func turnSessionMemorySummary(prompt, modelSummary string) string {
 		return ""
 	}
 	text = strings.Join(cleaned, "\n")
-	const maxRunes = 400
+	return truncateSessionSummaryHeadTail(text, turnSessionMemoryMaxRunes)
+}
+
+// truncateSessionSummaryHeadTail keeps the start (problem) and end (status) of
+// a long summary. maxRunes includes room for the " … " ellipsis when split.
+func truncateSessionSummaryHeadTail(text string, maxRunes int) string {
+	text = strings.TrimSpace(text)
+	if maxRunes <= 0 {
+		return text
+	}
 	runes := []rune(text)
-	if len(runes) > maxRunes {
+	if len(runes) <= maxRunes {
+		return text
+	}
+	if maxRunes < 32 {
 		return string(runes[:maxRunes]) + "…"
 	}
-	return text
+	// Prefer head (problem/intent) slightly over tail (status/outcome).
+	ellipsis := []rune(" … ")
+	budget := maxRunes - len(ellipsis)
+	head := budget * 2 / 3
+	tail := budget - head
+	if head < 16 {
+		head = 16
+		tail = budget - head
+	}
+	if tail < 16 {
+		tail = 16
+		head = budget - tail
+	}
+	return string(runes[:head]) + string(ellipsis) + string(runes[len(runes)-tail:])
 }
 
 // recordTodoSessionMemory writes a todolist snapshot after each successful

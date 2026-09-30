@@ -221,6 +221,42 @@ func TestRunNativeWorkerUnknownOp(t *testing.T) {
 	}
 }
 
+func TestDecodeTokensInBatchesRejectsEmpty(t *testing.T) {
+	err := DecodeTokensInBatches(0, nil, 256)
+	if err == nil {
+		t.Fatal("empty tokens must error without calling native decode")
+	}
+	if !strings.Contains(err.Error(), "empty decode batch") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestWorkerChildEnvPrependsLibDir(t *testing.T) {
+	t.Setenv("Path", "C:\\windows\\system32")
+	env := workerChildEnv(`C:\libs\llama`)
+	foundYZMA := false
+	foundPath := false
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "YZMA_LIB=") {
+			foundYZMA = true
+			if !strings.Contains(kv, "llama") {
+				t.Fatalf("YZMA_LIB = %q", kv)
+			}
+		}
+		eq := strings.IndexByte(kv, '=')
+		if eq > 0 && strings.EqualFold(kv[:eq], "Path") {
+			foundPath = true
+			val := kv[eq+1:]
+			if !strings.HasPrefix(strings.ToLower(val), strings.ToLower(`C:\libs\llama`)) {
+				t.Fatalf("Path should start with lib dir, got %q", val)
+			}
+		}
+	}
+	if !foundYZMA || !foundPath {
+		t.Fatalf("missing env keys yzma=%v path=%v env=%v", foundYZMA, foundPath, env)
+	}
+}
+
 func TestWorkerFailurePrefersJSONDetail(t *testing.T) {
 	// Simulate parent-side preference: when child wrote a JSON error and also
 	// exited non-zero, callers must see the JSON text, not only "exit status 1".

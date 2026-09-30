@@ -655,3 +655,49 @@ Turn memory: {"pid":3664,"role":"child","stage":"worker_start","time":"2026-09-3
 {"ctx":0,"gpu_layers":0,"model_path":"","op":"nope","pid":3664,"stage":"worker_request","time":"2026-09-30T19:20:39.4489366+08:00"}
 {"had_ctx":false,"had_model":false,"pid":3664,"stage":"organizer_free_begin","time":"2026-09-30T19:20:39.4547016+08:00"}
 {"pid":3664,"stage":"organizer_free_ok","time":"2026-…
+
+## 2026-09-30 20:41:49 · session acp-1790490873374625600-1 · turn 82 · importance 0.40
+- keywords: turn, todolist
+- files: _check_proc.py, _copy_bin.py, _t.py, _t_embed_api.py, cmd/solcode/main.go, examples/settings/settings.memory.organizer.example.json, internal/app/app.go, internal/app/memory_writer.go, internal/app/mode_switch_test.go, internal/app/organizer_bridge.go, internal/app/organizer_bridge_test.go, internal/app/session_memory.go, internal/app/session_memory_test.go, internal/app/turn_core_memory_test.go, internal/config/config.go, internal/config/organizer_test.go, internal/embedding/embedding.go, internal/embedding/embedding_test.go, internal/embedding/gguf.go, internal/embedding/local.go, internal/embedding/local_test.go, internal/engine/context_builder.go, internal/engine/context_builder_test.go, internal/engine/engine.go, internal/engine/mode_switch_context_test.go, internal/engine/prefix_share_test.go, internal/engine/tool_executor.go, internal/engine/tool_executor_test.go, internal/engine/tool_selector.go, internal/engine/tool_selector_test.go, internal/memory/conflict_judge.go, internal/memory/conflict_judge_test.go, internal/memory/core.go, internal/memory/embedding.go, internal/memory/governance.go, internal/memory/governance_test.go, internal/memory/graph.go, internal/memory/graph_test.go, internal/memory/manager.go, internal/memory/memory.go
+
+Turn memory: 从日志看，Embedding 模型（embeddinggemma-300m）已经正常回退到 CPU 并跑通了，真正崩的是 Qwen3.5-0.8B 的 generate 阶段。
+**根因很明确：**
+```
+GGML_ASSERT(n_tokens_all <= cparams.n_batch) failed
+```
+这是 llama.cpp 的经典断言失败——实际传入的 token 数量超过了配置的 `n_batch` 上限。结合日志里 `ctx:16384` 但 `gpu_layers:-1`（即 GPU 未启用，纯 CPU 运行），大概率是 solcode 在组织（organizer）阶段构造了一个超长 prompt，而底层的 batch size 配置跟不上。
+退出码 `0xc0000409` 是 Windows 的 `STATUS_STACK_BUFFER_OVERRUN`，这里…
+
+## 2026-09-30 20:47:55 · session acp-1790490873374625600-1 · turn 83 · importance 0.40
+- keywords: todolist, todo-write, turn
+- files: _check_proc.py, _copy_bin.py, _stage.py, _t.py, _t_embed_api.py, cmd/solcode/main.go, examples/settings/settings.memory.organizer.example.json, internal/app/app.go, internal/app/memory_writer.go, internal/app/mode_switch_test.go, internal/app/organizer_bridge.go, internal/app/organizer_bridge_test.go, internal/app/session_memory.go, internal/app/session_memory_test.go, internal/app/turn_core_memory_test.go, internal/config/config.go, internal/config/organizer_test.go, internal/embedding/embedding.go, internal/embedding/embedding_test.go, internal/embedding/gguf.go, internal/embedding/local.go, internal/embedding/local_test.go, internal/engine/context_builder.go, internal/engine/context_builder_test.go, internal/engine/engine.go, internal/engine/mode_switch_context_test.go, internal/engine/prefix_share_test.go, internal/engine/tool_executor.go, internal/engine/tool_executor_test.go, internal/engine/tool_selector.go, internal/engine/tool_selector_test.go, internal/memory/conflict_judge.go, internal/memory/conflict_judge_test.go, internal/memory/core.go, internal/memory/embedding.go, internal/memory/governance.go, internal/memory/governance_test.go, internal/memory/graph.go, internal/memory/graph_test.go, internal/memory/manager.go
+
+Turn memory: 根因和修复都对上了。
+### 根因
+`n_batch` 默认 **256**，organizer 的长 prompt 一次 `BatchGetOne(tokens)` 整包 decode，触发：
+```text
+GGML_ASSERT(n_tokens_all <= cparams.n_batch)
+exit 0xC0000409
+```
+agent 本身没挂（worker 隔离有效）；挂的是 generate worker。
+### 修复
+prompt / embed 都改成 **`DecodeTokensInBatches`**，按 `n_batch` 分块 decode，再逐 token 生成。
+烟雾测试（新 binary）已过：
+- `generate_long_cpu` ok
+- `generate_long_gpu_or_fallback` ok
+- `embed_long_c…
+
+## 2026-09-30 21:03:46 · session acp-1790490873374625600-1 · turn 84 · importance 0.40
+- keywords: todolist, todo-write, turn
+- files: internal/app/organizer_bridge.go, internal/embedding/embedding.go, internal/embedding/gguf.go, internal/embedding/local.go, internal/engine/engine.go, internal/engine/mode_switch_context_test.go, internal/engine/prefix_share_test.go, internal/engine/tool_executor.go, internal/engine/tool_executor_test.go, internal/engine/tool_selector.go, internal/engine/tool_selector_test.go, internal/memory/conflict_judge.go, internal/memory/conflict_judge_test.go, internal/memory/core.go, internal/memory/embedding.go, internal/memory/governance.go, internal/memory/governance_test.go, internal/memory/graph.go, internal/memory/graph_test.go, internal/memory/manager.go, internal/memory/memory.go, internal/memory/retriever.go, internal/memory/sanitize.go, internal/memory/tool_trace.go, internal/organizer/grammar.go, internal/organizer/organizer.go, internal/organizer/organizer_test.go, internal/organizer/schema.go, internal/organizer/yzma/diag.go, internal/organizer/yzma/library.go, internal/organizer/yzma/live_speed_test.go, internal/organizer/yzma/live_test.go, internal/organizer/yzma/native_worker.go, internal/organizer/yzma/runtime_lock.go, internal/organizer/yzma/yzma.go, internal/organizer/yzma/yzma_test.go, internal/permission/plan.go, internal/session/compactor.go, internal/tool/read_memory.go, internal/tool/subagent.go
+
+Turn memory: ### 结论
+会话记忆被截断，主要不是 organizer 写回，而是 **turn 自动摘要** 在 `turnSessionMemorySummary` 里硬砍到 **400 runes**，所以会出现 `embed_long_c…` 这种半截字。
+### 提示词原先缺什么
+- **Organizer** `session_summary`：只说 “concise factual summary”，**没有**强制「问题 + 状态」
+- **WriteSessionMemory**：summary 只说 “what was done/learned”
+- **系统 prompt Memory 段**：只说 session end 写一条，没有 problem/status 结构
+### 已改
+| 位置 | 改动 |
+|------|------|
+| `internal/app/ses…

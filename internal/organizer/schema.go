@@ -30,7 +30,7 @@ Return ONLY one XML document. No prose, no markdown fences, no commentary, no JS
 
 Required shape:
 <result>
-  <session_summary>concise factual summary of what the session did</session_summary>
+  <session_summary>problem + status summary (see rules)</session_summary>
   <keywords>
     <k>short</k>
     <k>retrieval</k>
@@ -55,9 +55,14 @@ Required shape:
 </result>
 
 Rules:
-- session_summary: preserve the user's actual request, decisions, exact file
-  paths and symbols when they matter, validation results, errors, and any
-  unfinished work. No role prefixes, no tool-call JSON, no code listings.
+- session_summary MUST cover both of these, in plain prose (2-6 short
+  sentences; keep the ending complete — never stop mid-word):
+  1) Problem: the user's actual request / bug / goal that this turn or compact
+     was about.
+  2) Status: what was fixed or decided, how it was verified (tests/build when
+     present), and what is still unfinished or blocked.
+  Also preserve exact file paths and symbols when they matter, validation
+  results, and errors. No role prefixes, no tool-call JSON, no code listings.
 - Ground truth when present: changed_files, todos, tool_facts, and
   related_memories beat vague chat prose. Prefer exact paths and commands from
   those fields. Use todos for unfinished work.

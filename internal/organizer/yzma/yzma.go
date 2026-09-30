@@ -564,24 +564,35 @@ func (g *generator) generateInProcess(ctx context.Context, req organizer.Generat
 	var out strings.Builder
 	pieceBuf := make([]byte, pieceBufferSize)
 
-	// The first batch carries the whole prompt; every later batch carries the
-	// single token just sampled. decoded bounds the generated tokens, so a bogus
-	// (empty) batch cannot spin forever.
+	// Prompt must be decoded in chunks of size <= n_batch. Feeding the whole
+	// prompt via one BatchGetOne when len(tokens) > n_batch triggers
+	// GGML_ASSERT(n_tokens_all <= cparams.n_batch) and aborts the process
+	// (Windows 0xC0000409). n_batch stays small (default 256) for RAM.
 	//
 	// Do NOT call SamplerAccept after SamplerSample: llama_sampler_sample already
 	// accepts into the chain, and a second Accept crashes the grammar sampler
 	// (see .solcode/step.log). The official yzma chat/hello examples never call it.
-	batch := llama.BatchGetOne(tokens)
-	if batch.NTokens <= 0 {
-		return "", fmt.Errorf("yzma: empty decode batch for a non-empty prompt")
+	nBatch := g.batchSize()
+	if nBatch <= 0 {
+		nBatch = defaultBatchSize
 	}
+	LogNative("generate_prompt_decode", map[string]any{
+		"prompt_tokens": len(tokens),
+		"n_batch":       nBatch,
+		"n_ctx":         ctxSize,
+	})
+	if err := DecodeTokensInBatches(g.ctx, tokens, nBatch); err != nil {
+		LogNativeErr("organizer_prompt_decode", err, map[string]any{
+			"prompt_tokens": len(tokens),
+			"n_batch":       nBatch,
+		})
+		return "", err
+	}
+
+	// Generation: one sampled token per batch.
 	for decoded := 0; decoded < maxTokens; decoded++ {
 		if err := ctx.Err(); err != nil {
 			return out.String(), err
-		}
-		if _, err := llama.Decode(g.ctx, batch); err != nil {
-			LogNativeErr("organizer_decode", err, map[string]any{"decoded": decoded})
-			return out.String(), fmt.Errorf("yzma: decode: %w", err)
 		}
 		next := llama.SamplerSample(smpl, g.ctx, -1)
 		if next == llama.TokenNull || llama.VocabIsEOG(g.vocab, next) {
@@ -593,13 +604,45 @@ func (g *generator) generateInProcess(ctx context.Context, req organizer.Generat
 			}
 			out.Write(pieceBuf[:n])
 		}
-		batch = llama.BatchGetOne([]llama.Token{next})
+		batch := llama.BatchGetOne([]llama.Token{next})
 		if batch.NTokens <= 0 {
 			break
 		}
+		if _, err := llama.Decode(g.ctx, batch); err != nil {
+			LogNativeErr("organizer_decode", err, map[string]any{"decoded": decoded})
+			return out.String(), fmt.Errorf("yzma: decode: %w", err)
+		}
 	}
-	LogNative("generate_ok", map[string]any{"chars": out.Len()})
+	LogNative("generate_ok", map[string]any{"chars": out.Len(), "prompt_tokens": len(tokens)})
 	return out.String(), nil
+}
+
+// DecodeTokensInBatches runs llama.Decode over tokens in slices of at most
+// nBatch. BatchGetOne tracks positions across calls on a cleared KV cache, so
+// chunking is safe and required whenever prompt length exceeds n_batch.
+// Used by organizer generate and GGUF embedding (in-process and worker).
+func DecodeTokensInBatches(modelCtx llama.Context, tokens []llama.Token, nBatch int) error {
+	if len(tokens) == 0 {
+		return fmt.Errorf("yzma: empty decode batch for a non-empty prompt")
+	}
+	if nBatch <= 0 {
+		nBatch = defaultBatchSize
+	}
+	for i := 0; i < len(tokens); i += nBatch {
+		end := i + nBatch
+		if end > len(tokens) {
+			end = len(tokens)
+		}
+		chunk := tokens[i:end]
+		batch := llama.BatchGetOne(chunk)
+		if batch.NTokens <= 0 {
+			return fmt.Errorf("yzma: empty decode batch at offset %d", i)
+		}
+		if _, err := llama.Decode(modelCtx, batch); err != nil {
+			return fmt.Errorf("yzma: decode prompt chunk [%d:%d] of %d: %w", i, end, len(tokens), err)
+		}
+	}
+	return nil
 }
 
 // buildSampler assembles the sampling chain: optional grammar constraint,

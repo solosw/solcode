@@ -226,8 +226,11 @@ func workerEmbed(ctx context.Context, req WorkerRequest) ([]float32, error) {
 	if len(tokens) > ctxSz {
 		tokens = tokens[:ctxSz]
 	}
-	batchTok := llama.BatchGetOne(tokens)
-	if _, err := llama.Decode(modelCtx, batchTok); err != nil {
+	nBatch := 512
+	if nBatch > ctxSz {
+		nBatch = ctxSz
+	}
+	if err := DecodeTokensInBatches(modelCtx, tokens, nBatch); err != nil {
 		return nil, fmt.Errorf("worker embed decode: %w", err)
 	}
 	vec, err := llama.GetEmbeddingsSeq(modelCtx, 0, nEmbd)
