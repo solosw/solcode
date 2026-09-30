@@ -231,7 +231,7 @@ func TestJevLocalNormalizesAndRequiresArtifacts(t *testing.T) {
 
 func TestEmbeddingNormalizesAndEnabled(t *testing.T) {
 	cfg := config.Default()
-	cfg.Embedding = config.EmbeddingConfig{
+	cfg.Memory.Embedding = config.EmbeddingConfig{
 		Enabled: true,
 		Type:    "API",
 		Model:   "text-embedding-3-small",
@@ -241,51 +241,57 @@ func TestEmbeddingNormalizesAndEnabled(t *testing.T) {
 	if err := cfg.Normalize(); err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Embedding.Type != config.EmbeddingBackendAPI {
-		t.Fatalf("Type = %q", cfg.Embedding.Type)
+	if cfg.Memory.Embedding.Type != config.EmbeddingBackendAPI {
+		t.Fatalf("Type = %q", cfg.Memory.Embedding.Type)
 	}
-	if cfg.Embedding.BaseURL != "https://api.openai.com/v1" {
-		t.Fatalf("BaseURL = %q", cfg.Embedding.BaseURL)
+	if cfg.Memory.Embedding.BaseURL != "https://api.openai.com/v1" {
+		t.Fatalf("BaseURL = %q", cfg.Memory.Embedding.BaseURL)
 	}
 	wantDir := config.DefaultEmbeddingDir(cfg.WorkDir)
-	if cfg.Embedding.Dir != wantDir {
-		t.Fatalf("Dir = %q, want fixed %q", cfg.Embedding.Dir, wantDir)
+	if cfg.Memory.Embedding.Dir != wantDir {
+		t.Fatalf("Dir = %q, want fixed %q", cfg.Memory.Embedding.Dir, wantDir)
 	}
-	if cfg.Embedding.TimeoutSec != 30 {
-		t.Fatalf("TimeoutSec = %d", cfg.Embedding.TimeoutSec)
+	if cfg.Memory.Embedding.TimeoutSec != 30 {
+		t.Fatalf("TimeoutSec = %d", cfg.Memory.Embedding.TimeoutSec)
 	}
 	if !cfg.EmbeddingEnabled() {
 		t.Fatal("api embedding with key+model should enable")
 	}
 
-	local := config.Default()
-	local.Embedding = config.EmbeddingConfig{
+	gguf := config.Default()
+	gguf.Memory.Embedding = config.EmbeddingConfig{
 		Enabled: true,
-		Type:    config.EmbeddingBackendLocal,
-		Model:   "local-emb",
+		Type:    config.EmbeddingBackendLocal, // legacy alias -> gguf
+		Model:   "embeddinggemma-300m",
 		Dir:     "ignored",
 	}
-	if err := local.Normalize(); err != nil {
+	if err := gguf.Normalize(); err != nil {
 		t.Fatal(err)
 	}
-	if local.Embedding.Dir != config.DefaultEmbeddingDir(local.WorkDir) {
-		t.Fatalf("local Dir = %q", local.Embedding.Dir)
+	if gguf.Memory.Embedding.Type != config.EmbeddingBackendGGUF {
+		t.Fatalf("Type = %q, want gguf", gguf.Memory.Embedding.Type)
 	}
-	if !local.EmbeddingEnabled() {
-		t.Fatal("local embedding with model should enable")
+	if gguf.Memory.Embedding.Dir != config.DefaultEmbeddingDir(gguf.WorkDir) {
+		t.Fatalf("gguf Dir = %q", gguf.Memory.Embedding.Dir)
+	}
+	if !strings.HasSuffix(filepath.ToSlash(gguf.Memory.Embedding.ModelPath), "embeddinggemma-300m_Q4_k_m.gguf") {
+		t.Fatalf("ModelPath = %q", gguf.Memory.Embedding.ModelPath)
+	}
+	if !gguf.EmbeddingEnabled() {
+		t.Fatal("gguf embedding with model should enable")
 	}
 
 	noModel := config.Default()
-	noModel.Embedding = config.EmbeddingConfig{Enabled: true, Type: config.EmbeddingBackendLocal}
+	noModel.Memory.Embedding = config.EmbeddingConfig{Enabled: true, Type: config.EmbeddingBackendAPI}
 	if err := noModel.Normalize(); err != nil {
 		t.Fatal(err)
 	}
 	if noModel.EmbeddingEnabled() {
-		t.Fatal("local without model must stay disabled")
+		t.Fatal("api without model must stay disabled")
 	}
 
 	noKey := config.Default()
-	noKey.Embedding = config.EmbeddingConfig{
+	noKey.Memory.Embedding = config.EmbeddingConfig{
 		Enabled: true,
 		Type:    config.EmbeddingBackendAPI,
 		Model:   "text-embedding-3-small",

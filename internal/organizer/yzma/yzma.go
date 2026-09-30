@@ -201,29 +201,8 @@ func (g *generator) ensureLoaded() {
 		return
 	}
 	libDir := ResolveLibraryDir(g.cfg.LibDir)
-	var bindErr error
-	libBindOnce.Do(func() {
-		bindErr = loadLibrary(libDir)
-	})
-	if bindErr != nil {
-		g.setLoadErr(bindErr)
-		return
-	}
-	if !LibraryPresent(libDir) {
-		g.setLoadErr(fmt.Errorf("yzma: llama.cpp shared library not available in %s", libDir))
-		return
-	}
-
-	backendOnce.Do(func() {
-		// Silence llama.cpp / ggml stdout (model load dumps, CUDA graph spam).
-		llama.LogSet(llama.LogSilent())
-		llama.BackendInit()
-		if err := llama.GGMLBackendLoadAllFromPath(libDir); err != nil {
-			backendErr = fmt.Errorf("yzma: load ggml backends from %s: %w", libDir, err)
-		}
-	})
-	if backendErr != nil {
-		g.setLoadErr(backendErr)
+	if err := EnsureRuntime(libDir); err != nil {
+		g.setLoadErr(err)
 		return
 	}
 

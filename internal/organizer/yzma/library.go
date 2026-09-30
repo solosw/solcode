@@ -49,6 +49,33 @@ func LibraryPresent(dir string) bool {
 	return err == nil && !info.IsDir()
 }
 
+// EnsureRuntime binds llama.cpp and registers ggml backends for dir.
+//
+// Safe to call from organizer and embedding: llama.Load / backend registration
+// are process-global and serialized. Two different lib dirs in one process are
+// not supported.
+func EnsureRuntime(dir string) error {
+	dir = ResolveLibraryDir(dir)
+	var bindErr error
+	libBindOnce.Do(func() {
+		bindErr = loadLibrary(dir)
+	})
+	if bindErr != nil {
+		return bindErr
+	}
+	if !LibraryPresent(dir) {
+		return fmt.Errorf("yzma: llama.cpp shared library not available in %s", LibraryPath(dir))
+	}
+	backendOnce.Do(func() {
+		llama.LogSet(llama.LogSilent())
+		llama.BackendInit()
+		if err := llama.GGMLBackendLoadAllFromPath(dir); err != nil {
+			backendErr = fmt.Errorf("yzma: load ggml backends from %s: %w", dir, err)
+		}
+	})
+	return backendErr
+}
+
 // loadLibrary binds the shared library at dir.
 //
 // llama.Load is process-global: it dlopens once and binds the C symbols. Calling

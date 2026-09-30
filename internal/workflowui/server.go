@@ -327,9 +327,9 @@ type settingsResponse struct {
 	ComputerUse computerUseSettings `json:"computer_use"`
 	// Jev configures the TypeSafe System One decision layer.
 	Jev jevSettings `json:"jev"`
-	// ORT is shared ONNX Runtime settings for local Jev and local embeddings.
+	// ORT is shared ONNX Runtime settings for local Jev only.
 	ORT ortSettings `json:"ort"`
-	// Embedding configures optional vector embeddings for semantic search.
+	// Embedding configures optional vector embeddings (memory.embedding).
 	Embedding embeddingSettings `json:"embedding"`
 	// MemoryOrganizer configures the fully local memory-organizer model.
 	MemoryOrganizer memoryOrganizerSettings `json:"memory_organizer"`
@@ -375,15 +375,21 @@ type jevSettings struct {
 // APIKeySet reports whether a key is resolvable without ever sending the key
 // itself to the browser. Dir is the project-scoped ProjectStateDir/embeddings path.
 type embeddingSettings struct {
-	Enabled    bool   `json:"enabled"`
-	Type       string `json:"type"`
-	BaseURL    string `json:"base_url"`
-	APIKeyEnv  string `json:"api_key_env"`
-	APIKeySet  bool   `json:"api_key_set"`
-	Model      string `json:"model"`
-	Dir        string `json:"dir"`
-	TimeoutSec int    `json:"timeout_sec"`
-	Dimensions int    `json:"dimensions"`
+	Enabled       bool   `json:"enabled"`
+	Type          string `json:"type"`
+	BaseURL       string `json:"base_url"`
+	APIKeyEnv     string `json:"api_key_env"`
+	APIKeySet     bool   `json:"api_key_set"`
+	Model         string `json:"model"`
+	ModelPath     string `json:"model_path"`
+	LibDir        string `json:"lib_dir"`
+	ContextSize   int    `json:"context_size"`
+	Threads       int    `json:"threads"`
+	GPULayers     int    `json:"gpu_layers"`
+	IdleUnloadSec int    `json:"idle_unload_sec"`
+	Dir           string `json:"dir"`
+	TimeoutSec    int    `json:"timeout_sec"`
+	Dimensions    int    `json:"dimensions"`
 }
 
 // memoryOrganizerSettings is the UI-facing view of the local memory organizer.
@@ -631,15 +637,21 @@ func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
 			CudaDeviceID: cfg.ORT.CudaDeviceID,
 		},
 		Embedding: embeddingSettings{
-			Enabled:    cfg.Embedding.Enabled,
-			Type:       cfg.EmbeddingType(),
-			BaseURL:    cfg.Embedding.BaseURL,
-			APIKeyEnv:  cfg.Embedding.APIKeyEnv,
-			APIKeySet:  strings.TrimSpace(cfg.Embedding.APIKey) != "",
-			Model:      cfg.Embedding.Model,
-			Dir:        cfg.Embedding.Dir,
-			TimeoutSec: cfg.Embedding.TimeoutSec,
-			Dimensions: cfg.Embedding.Dimensions,
+			Enabled:       cfg.Memory.Embedding.Enabled,
+			Type:          cfg.EmbeddingType(),
+			BaseURL:       cfg.Memory.Embedding.BaseURL,
+			APIKeyEnv:     cfg.Memory.Embedding.APIKeyEnv,
+			APIKeySet:     strings.TrimSpace(cfg.Memory.Embedding.APIKey) != "",
+			Model:         cfg.Memory.Embedding.Model,
+			ModelPath:     cfg.Memory.Embedding.ModelPath,
+			LibDir:        cfg.Memory.Embedding.LibDir,
+			ContextSize:   cfg.Memory.Embedding.ContextSize,
+			Threads:       cfg.Memory.Embedding.Threads,
+			GPULayers:     cfg.Memory.Embedding.GPULayers,
+			IdleUnloadSec: cfg.Memory.Embedding.IdleUnloadSec,
+			Dir:           cfg.Memory.Embedding.Dir,
+			TimeoutSec:    cfg.Memory.Embedding.TimeoutSec,
+			Dimensions:    cfg.Memory.Embedding.Dimensions,
 		},
 		MemoryOrganizer: buildMemoryOrganizerSettings(cfg),
 	}
@@ -791,15 +803,21 @@ type settingsUpdate struct {
 	ORTGPU          *bool `json:"ort_gpu,omitempty"`
 	ORTCudaDeviceID *int  `json:"ort_cuda_device_id,omitempty"`
 
-	// Embedding fields. Absent fields leave the current value untouched.
-	EmbeddingEnabled    *bool   `json:"embedding_enabled,omitempty"`
-	EmbeddingType       *string `json:"embedding_type,omitempty"`
-	EmbeddingBaseURL    *string `json:"embedding_base_url,omitempty"`
-	EmbeddingAPIKey     *string `json:"embedding_api_key,omitempty"`
-	EmbeddingAPIKeyEnv  *string `json:"embedding_api_key_env,omitempty"`
-	EmbeddingModel      *string `json:"embedding_model,omitempty"`
-	EmbeddingTimeoutSec *int    `json:"embedding_timeout_sec,omitempty"`
-	EmbeddingDimensions *int    `json:"embedding_dimensions,omitempty"`
+	// Embedding fields (memory.embedding). Absent fields leave current values.
+	EmbeddingEnabled       *bool   `json:"embedding_enabled,omitempty"`
+	EmbeddingType          *string `json:"embedding_type,omitempty"`
+	EmbeddingBaseURL       *string `json:"embedding_base_url,omitempty"`
+	EmbeddingAPIKey        *string `json:"embedding_api_key,omitempty"`
+	EmbeddingAPIKeyEnv     *string `json:"embedding_api_key_env,omitempty"`
+	EmbeddingModel         *string `json:"embedding_model,omitempty"`
+	EmbeddingModelPath     *string `json:"embedding_model_path,omitempty"`
+	EmbeddingLibDir        *string `json:"embedding_lib_dir,omitempty"`
+	EmbeddingContextSize   *int    `json:"embedding_context_size,omitempty"`
+	EmbeddingThreads       *int    `json:"embedding_threads,omitempty"`
+	EmbeddingGPULayers     *int    `json:"embedding_gpu_layers,omitempty"`
+	EmbeddingIdleUnloadSec *int    `json:"embedding_idle_unload_sec,omitempty"`
+	EmbeddingTimeoutSec    *int    `json:"embedding_timeout_sec,omitempty"`
+	EmbeddingDimensions    *int    `json:"embedding_dimensions,omitempty"`
 
 	// Memory organizer fields. Absent fields leave the current value untouched,
 	// so a partial update cannot silently reset the local model configuration.
@@ -977,28 +995,46 @@ func applyEmbeddingSettings(cfg *config.Config, req settingsUpdate) {
 		return
 	}
 	if req.EmbeddingEnabled != nil {
-		cfg.Embedding.Enabled = *req.EmbeddingEnabled
+		cfg.Memory.Embedding.Enabled = *req.EmbeddingEnabled
 	}
 	if req.EmbeddingType != nil {
-		cfg.Embedding.Type = strings.ToLower(strings.TrimSpace(*req.EmbeddingType))
+		cfg.Memory.Embedding.Type = strings.ToLower(strings.TrimSpace(*req.EmbeddingType))
 	}
 	if req.EmbeddingBaseURL != nil {
-		cfg.Embedding.BaseURL = strings.TrimSpace(*req.EmbeddingBaseURL)
+		cfg.Memory.Embedding.BaseURL = strings.TrimSpace(*req.EmbeddingBaseURL)
 	}
 	if req.EmbeddingAPIKey != nil {
-		cfg.Embedding.APIKey = strings.TrimSpace(*req.EmbeddingAPIKey)
+		cfg.Memory.Embedding.APIKey = strings.TrimSpace(*req.EmbeddingAPIKey)
 	}
 	if req.EmbeddingAPIKeyEnv != nil {
-		cfg.Embedding.APIKeyEnv = strings.TrimSpace(*req.EmbeddingAPIKeyEnv)
+		cfg.Memory.Embedding.APIKeyEnv = strings.TrimSpace(*req.EmbeddingAPIKeyEnv)
 	}
 	if req.EmbeddingModel != nil {
-		cfg.Embedding.Model = strings.TrimSpace(*req.EmbeddingModel)
+		cfg.Memory.Embedding.Model = strings.TrimSpace(*req.EmbeddingModel)
+	}
+	if req.EmbeddingModelPath != nil {
+		cfg.Memory.Embedding.ModelPath = strings.TrimSpace(*req.EmbeddingModelPath)
+	}
+	if req.EmbeddingLibDir != nil {
+		cfg.Memory.Embedding.LibDir = strings.TrimSpace(*req.EmbeddingLibDir)
+	}
+	if req.EmbeddingContextSize != nil {
+		cfg.Memory.Embedding.ContextSize = *req.EmbeddingContextSize
+	}
+	if req.EmbeddingThreads != nil {
+		cfg.Memory.Embedding.Threads = *req.EmbeddingThreads
+	}
+	if req.EmbeddingGPULayers != nil {
+		cfg.Memory.Embedding.GPULayers = *req.EmbeddingGPULayers
+	}
+	if req.EmbeddingIdleUnloadSec != nil {
+		cfg.Memory.Embedding.IdleUnloadSec = *req.EmbeddingIdleUnloadSec
 	}
 	if req.EmbeddingTimeoutSec != nil {
-		cfg.Embedding.TimeoutSec = *req.EmbeddingTimeoutSec
+		cfg.Memory.Embedding.TimeoutSec = *req.EmbeddingTimeoutSec
 	}
 	if req.EmbeddingDimensions != nil {
-		cfg.Embedding.Dimensions = *req.EmbeddingDimensions
+		cfg.Memory.Embedding.Dimensions = *req.EmbeddingDimensions
 	}
 }
 

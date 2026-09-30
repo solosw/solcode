@@ -3,16 +3,26 @@
     "organizer": {
       "enabled": true,
       "runtime": "yzma",
-      "model_path": "~/.solcode/models/qwen2.5-3b-instruct-q4_k_m.gguf",
+      "model_path": "~/.solcode/models/Qwen3.5-0.8B-Q5_K_S.gguf",
       "lib_dir": "",
-      "processor": "cpu",
+      "processor": "cuda",
       "context_size": 16384,
       "threads": 0,
-      "gpu_layers": 0,
+      "gpu_layers": -1,
       "max_output_tokens": 800,
       "temperature": 0.2,
       "timeout_sec": 180,
       "idle_unload_sec": 30
+    },
+    "embedding": {
+      "enabled": true,
+      "type": "gguf",
+      "model": "embeddinggemma-300m",
+      "model_path": "~/.solcode/embeddings/embeddinggemma-300m_Q4_k_m.gguf",
+      "gpu_layers": -1,
+      "context_size": 2048,
+      "idle_unload_sec": 30,
+      "dimensions": 768
     }
   }
 }
