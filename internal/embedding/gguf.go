@@ -162,56 +162,21 @@ func (p *ggufProvider) ensureLoaded() {
 		p.setLoadErr(err)
 		return
 	}
-	useGPU := p.gpuLayers != 0
-	if useGPU {
+	wantGPU := p.gpuLayers != 0
+	if wantGPU {
 		// Organizer often still holds its GGUF after a successful write; loading
 		// embedding on CUDA beside it is the 0xC0000005 path. Evict first.
 		yzma.ReleaseOtherGPUHolders(p)
 	}
 	yzma.LogNative("embed_load_begin", map[string]any{
 		"model_path": p.modelPath,
-		"gpu":        useGPU,
+		"gpu":        wantGPU,
 		"gpu_layers": p.gpuLayers,
 		"ctx":        p.contextSz,
 	})
-	modelParams := llama.ModelDefaultParams()
-	modelParams.LoadMode = llama.LoadModeMmap
-	modelParams.LazyMode = llama.LazyModeOn
-	if !useGPU {
-		modelParams.SetCPUOnly()
-	} else {
-		modelParams.NGpuLayers = int32(p.gpuLayers)
-	}
-	model, err := llama.ModelLoadFromFile(p.modelPath, modelParams)
+	model, modelCtx, usedGPU, err := loadEmbeddingModel(p.modelPath, p.gpuLayers, p.contextSz, p.threads)
 	if err != nil {
-		yzma.LogNativeErr("embed_load_model", err, map[string]any{"model_path": p.modelPath})
-		p.setLoadErr(fmt.Errorf("embedding gguf: load %s: %w", p.modelPath, err))
-		return
-	}
-	ctxParams := llama.ContextDefaultParams()
-	ctxParams.NCtx = uint32(p.contextSz)
-	batch := uint32(defaultGGUFBatchSize)
-	if batch > ctxParams.NCtx {
-		batch = ctxParams.NCtx
-	}
-	ctxParams.NBatch = batch
-	ctxParams.NUbatch = batch
-	ctxParams.Embeddings = 1
-	ctxParams.PoolingType = llama.PoolingTypeMean
-	ctxParams.TypeK = llama.GGMLTypeQ8_0
-	ctxParams.TypeV = llama.GGMLTypeQ8_0
-	if useGPU {
-		ctxParams.FlashAttentionType = llama.FlashAttentionTypeDisabled
-	}
-	if p.threads > 0 {
-		ctxParams.NThreads = int32(p.threads)
-		ctxParams.NThreadsBatch = int32(p.threads)
-	}
-	modelCtx, err := llama.InitFromModel(model, ctxParams)
-	if err != nil {
-		yzma.LogNativeErr("embed_init_ctx", err, map[string]any{"model_path": p.modelPath})
-		_ = llama.ModelFree(model)
-		p.setLoadErr(fmt.Errorf("embedding gguf: create context: %w", err))
+		p.setLoadErr(err)
 		return
 	}
 	llama.SetEmbeddings(modelCtx, true)
@@ -229,11 +194,77 @@ func (p *ggufProvider) ensureLoaded() {
 	p.nEmbd = llama.ModelNEmbd(model)
 	p.ready = true
 	p.lastUsed = time.Now()
-	if useGPU {
+	if usedGPU {
 		yzma.RegisterGPUHolder(p, p.unloadForPeer)
 	}
 	p.armIdleUnloadLocked()
-	yzma.LogNative("embed_load_ok", map[string]any{"model_path": p.modelPath, "gpu": useGPU, "n_embd": p.nEmbd})
+	yzma.LogNative("embed_load_ok", map[string]any{
+		"model_path":   p.modelPath,
+		"gpu":          usedGPU,
+		"gpu_fallback": wantGPU && !usedGPU,
+		"n_embd":       p.nEmbd,
+	})
+}
+
+// loadEmbeddingModel tries GPU first when gpuLayers != 0, then falls back to CPU.
+func loadEmbeddingModel(modelPath string, gpuLayers, contextSz, threads int) (llama.Model, llama.Context, bool, error) {
+	tryGPU := gpuLayers != 0
+	model, modelCtx, err := initEmbeddingHandles(modelPath, tryGPU, gpuLayers, contextSz, threads)
+	if err == nil {
+		return model, modelCtx, tryGPU, nil
+	}
+	if !tryGPU {
+		return 0, 0, false, err
+	}
+	yzma.LogNativeErr("embed_gpu_fail_fallback_cpu", err, map[string]any{"model_path": modelPath})
+	model, modelCtx, err = initEmbeddingHandles(modelPath, false, 0, contextSz, threads)
+	if err != nil {
+		return 0, 0, false, err
+	}
+	yzma.LogNative("embed_cpu_fallback_ok", map[string]any{"model_path": modelPath})
+	return model, modelCtx, false, nil
+}
+
+func initEmbeddingHandles(modelPath string, useGPU bool, gpuLayers, contextSz, threads int) (llama.Model, llama.Context, error) {
+	modelParams := llama.ModelDefaultParams()
+	modelParams.LoadMode = llama.LoadModeMmap
+	modelParams.LazyMode = llama.LazyModeOn
+	if !useGPU {
+		modelParams.SetCPUOnly()
+	} else {
+		modelParams.NGpuLayers = int32(gpuLayers)
+	}
+	model, err := llama.ModelLoadFromFile(modelPath, modelParams)
+	if err != nil {
+		yzma.LogNativeErr("embed_load_model", err, map[string]any{"model_path": modelPath, "gpu": useGPU})
+		return 0, 0, fmt.Errorf("embedding gguf: load %s: %w", modelPath, err)
+	}
+	ctxParams := llama.ContextDefaultParams()
+	ctxParams.NCtx = uint32(contextSz)
+	batch := uint32(defaultGGUFBatchSize)
+	if batch > ctxParams.NCtx {
+		batch = ctxParams.NCtx
+	}
+	ctxParams.NBatch = batch
+	ctxParams.NUbatch = batch
+	ctxParams.Embeddings = 1
+	ctxParams.PoolingType = llama.PoolingTypeMean
+	ctxParams.TypeK = llama.GGMLTypeQ8_0
+	ctxParams.TypeV = llama.GGMLTypeQ8_0
+	if useGPU {
+		ctxParams.FlashAttentionType = llama.FlashAttentionTypeDisabled
+	}
+	if threads > 0 {
+		ctxParams.NThreads = int32(threads)
+		ctxParams.NThreadsBatch = int32(threads)
+	}
+	modelCtx, err := llama.InitFromModel(model, ctxParams)
+	if err != nil {
+		yzma.LogNativeErr("embed_init_ctx", err, map[string]any{"model_path": modelPath, "gpu": useGPU})
+		_ = llama.ModelFree(model)
+		return 0, 0, fmt.Errorf("embedding gguf: create context: %w", err)
+	}
+	return model, modelCtx, nil
 }
 
 func (p *ggufProvider) setLoadErr(err error) {

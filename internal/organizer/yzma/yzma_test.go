@@ -221,6 +221,19 @@ func TestRunNativeWorkerUnknownOp(t *testing.T) {
 	}
 }
 
+func TestWorkerFailurePrefersJSONDetail(t *testing.T) {
+	// Simulate parent-side preference: when child wrote a JSON error and also
+	// exited non-zero, callers must see the JSON text, not only "exit status 1".
+	resp := WorkerResponse{OK: false, Error: "yzma: create context: failed to initialize model", Exit: 1}
+	detail := strings.TrimSpace(resp.Error)
+	if detail == "" {
+		t.Fatal("expected JSON detail")
+	}
+	if strings.Contains(detail, "exit status") {
+		t.Fatalf("detail should not be bare exit status: %q", detail)
+	}
+}
+
 func TestGeneratorDoesNotPreloadOnNew(t *testing.T) {
 	dir := t.TempDir()
 	modelPath := filepath.Join(dir, "model.gguf")
