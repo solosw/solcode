@@ -604,3 +604,27 @@ Turn memory: Agent exited with code 3221226505  执行结束会报错，退出�
 - files: README.md, _t.py, _t_embed_api.py, cmd/solcode/main.go, examples/settings/settings.memory.organizer.example.json, internal/app/app.go, internal/app/app_compaction_test.go, internal/app/memory_writer.go, internal/app/mode_switch_test.go, internal/app/organizer_bridge.go, internal/app/organizer_bridge_test.go, internal/app/session_memory.go, internal/app/session_memory_test.go, internal/app/turn_core_memory_test.go, internal/config/config.go, internal/config/organizer_test.go, internal/embedding/embedding.go, internal/embedding/embedding_test.go, internal/embedding/gguf.go, internal/embedding/local.go, internal/embedding/local_test.go, internal/engine/context_builder.go, internal/engine/context_builder_test.go, internal/engine/engine.go, internal/engine/mode_switch_context_test.go, internal/engine/prefix_share_test.go, internal/engine/tool_executor.go, internal/engine/tool_executor_test.go, internal/engine/tool_selector.go, internal/engine/tool_selector_test.go, internal/memory/conflict_judge.go, internal/memory/conflict_judge_test.go, internal/memory/core.go, internal/memory/core_test.go, internal/memory/embedding.go, internal/memory/governance.go, internal/memory/governance_test.go, internal/memory/graph.go, internal/memory/graph_test.go, internal/memory/manager.go
 
 Turn memory: 现在是写入成功，但是会报错退出
+
+## 2026-09-30 17:59:55 · session acp-1790762347597444100-1 · turn 0 · importance 0.40
+- keywords: turn, todolist
+
+Turn memory: M[555;52;34M[555;56;32M[555;60;30M[555;65;28M[555;70;26M[555;74;24M[555;78;22M
+
+所在位置 行:1 字符: 2
+                     + [555;38;41M[555;38;40M[555;39;40M[555;40;39M[555;42;38M[555;45;37M[55 ...
+                  +  ~
+                      "[" 后面缺少类型名称。
+                                                + CategoryInfo          : ParserError: (:) [], ParentContainsErrorRecord
+                     …
+
+## 2026-09-30 18:26:34 · session acp-1790490873374625600-1 · turn 76 · importance 0.40
+- keywords: turn, todolist
+- files: README.md, _t.py, _t_embed_api.py, cmd/solcode/main.go, examples/settings/settings.memory.organizer.example.json, internal/app/app.go, internal/app/app_compaction_test.go, internal/app/memory_writer.go, internal/app/mode_switch_test.go, internal/app/organizer_bridge.go, internal/app/organizer_bridge_test.go, internal/app/session_memory.go, internal/app/session_memory_test.go, internal/app/turn_core_memory_test.go, internal/config/config.go, internal/config/organizer_test.go, internal/embedding/embedding.go, internal/embedding/embedding_test.go, internal/embedding/gguf.go, internal/embedding/local.go, internal/embedding/local_test.go, internal/engine/context_builder.go, internal/engine/context_builder_test.go, internal/engine/engine.go, internal/engine/mode_switch_context_test.go, internal/engine/prefix_share_test.go, internal/engine/tool_executor.go, internal/engine/tool_executor_test.go, internal/engine/tool_selector.go, internal/engine/tool_selector_test.go, internal/memory/conflict_judge.go, internal/memory/conflict_judge_test.go, internal/memory/core.go, internal/memory/core_test.go, internal/memory/embedding.go, internal/memory/governance.go, internal/memory/governance_test.go, internal/memory/graph.go, internal/memory/graph_test.go, internal/memory/manager.go
+
+Turn memory: 就是GPU有问题
+
+## 2026-09-30 18:35:12 · session acp-1790490873374625600-1 · turn 77 · importance 0.40
+- keywords: todolist, todo-write, turn
+- files: _t.py, _t_embed_api.py, cmd/solcode/main.go, examples/settings/settings.memory.organizer.example.json, internal/app/app.go, internal/app/memory_writer.go, internal/app/mode_switch_test.go, internal/app/organizer_bridge.go, internal/app/organizer_bridge_test.go, internal/app/session_memory.go, internal/app/session_memory_test.go, internal/app/turn_core_memory_test.go, internal/config/config.go, internal/config/organizer_test.go, internal/embedding/embedding.go, internal/embedding/embedding_test.go, internal/embedding/gguf.go, internal/embedding/local.go, internal/embedding/local_test.go, internal/engine/context_builder.go, internal/engine/context_builder_test.go, internal/engine/engine.go, internal/engine/mode_switch_context_test.go, internal/engine/prefix_share_test.go, internal/engine/tool_executor.go, internal/engine/tool_executor_test.go, internal/engine/tool_selector.go, internal/engine/tool_selector_test.go, internal/memory/conflict_judge.go, internal/memory/conflict_judge_test.go, internal/memory/core.go, internal/memory/embedding.go, internal/memory/governance.go, internal/memory/governance_test.go, internal/memory/graph.go, internal/memory/graph_test.go, internal/memory/manager.go, internal/memory/memory.go, internal/memory/organizer_vector_merge_test.go, internal/memory/retriever.go
+
+Turn memory: 继续修复问题

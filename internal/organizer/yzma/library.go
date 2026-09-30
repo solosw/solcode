@@ -52,9 +52,18 @@ func LibraryPresent(dir string) bool {
 // EnsureRuntime binds llama.cpp and registers ggml backends for dir.
 //
 // Safe to call from organizer and embedding: llama.Load / backend registration
-// are process-global and serialized. Two different lib dirs in one process are
-// not supported.
+// are process-global and serialized under the runtime lock. Two different lib
+// dirs in one process are not supported.
 func EnsureRuntime(dir string) error {
+	LockRuntime()
+	defer UnlockRuntime()
+	return EnsureRuntimeLocked(dir)
+}
+
+// EnsureRuntimeLocked is EnsureRuntime for callers that already hold
+// LockRuntime. Embedding and organizer use this inside their load paths so the
+// whole ModelLoad/InitFromModel sequence stays under one critical section.
+func EnsureRuntimeLocked(dir string) error {
 	dir = ResolveLibraryDir(dir)
 	var bindErr error
 	libBindOnce.Do(func() {

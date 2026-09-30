@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -97,6 +98,42 @@ func TestReleaseAfterGenerateHonorsDisable(t *testing.T) {
 	g.mu.Unlock()
 	if g.ready {
 		t.Fatal("empty generator should stay not-ready")
+	}
+}
+
+func TestRuntimeLockSerializes(t *testing.T) {
+	var mu sync.Mutex
+	var order []int
+	appendOrder := func(n int) {
+		mu.Lock()
+		order = append(order, n)
+		mu.Unlock()
+	}
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		WithRuntime(func() {
+			appendOrder(1)
+			time.Sleep(20 * time.Millisecond)
+			appendOrder(2)
+		})
+	}()
+	go func() {
+		defer wg.Done()
+		time.Sleep(5 * time.Millisecond)
+		WithRuntime(func() {
+			appendOrder(3)
+			appendOrder(4)
+		})
+	}()
+	wg.Wait()
+	if len(order) != 4 {
+		t.Fatalf("order = %v", order)
+	}
+	// Second critical section must not interleave into the first.
+	if !(order[0] == 1 && order[1] == 2 && order[2] == 3 && order[3] == 4) {
+		t.Fatalf("runtime lock interleaved: %v", order)
 	}
 }
 
