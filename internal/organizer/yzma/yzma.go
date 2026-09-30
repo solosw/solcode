@@ -33,7 +33,7 @@ const (
 	// defaultContextSize is the KV window when config leaves ContextSize unset.
 	// 16k holds system + side-context + a long compact transcript + generation
 	// headroom. Physical RAM is kept down by mmap weights, Q8 KV, small n_batch,
-	// and releasing the model after each Generate (see releaseAfterGenerate).
+	// and idle unload after silence.
 	defaultContextSize = 16384
 	// maxContextSize caps misconfigured huge windows so a typo cannot OOM the host.
 	maxContextSize = 16384
@@ -43,8 +43,9 @@ const (
 	defaultBatchSize = 256
 	// maxBatchSize hard-caps n_batch regardless of context size.
 	maxBatchSize = 256
-	// idleUnloadAfter is a safety net if release-after-generate is disabled.
-	// Multi-workspace solcode processes must not pin GGUF for minutes.
+	// idleUnloadAfter frees the GGUF after silence. Unload is delayed (not immediate)
+	// so the Windows CUDA backend can finish deferred work first; multi-workspace
+	// processes still must not pin models forever.
 	idleUnloadAfter = 30 * time.Second
 	// pieceBufferSize is the scratch buffer for one detokenized piece.
 	pieceBufferSize = 512
@@ -157,6 +158,9 @@ func (g *generator) Ready() bool {
 // ensureLoaded loads the GGUF on demand. Concurrent callers share one attempt.
 // Unlike the old startup preload, this only runs when Organize/Generate needs
 // the model, so idle solcode does not hold multi-GB RSS.
+//
+// Native load/free run under the process-wide runtime lock so organizer and
+// embedding cannot touch CUDA backends concurrently.
 func (g *generator) ensureLoaded() {
 	if g == nil {
 		return
@@ -200,8 +204,14 @@ func (g *generator) ensureLoaded() {
 		g.setLoadErr(fmt.Errorf("yzma: GGUF model not found at %s", modelPath))
 		return
 	}
+
+	// Lock order: runtimeMu first, then g.mu. Holds the process-wide CUDA lock
+	// for the entire native load so embedding cannot free/decode mid-load.
+	LockRuntime()
+	defer UnlockRuntime()
+
 	libDir := ResolveLibraryDir(g.cfg.LibDir)
-	if err := EnsureRuntime(libDir); err != nil {
+	if err := EnsureRuntimeLocked(libDir); err != nil {
 		g.setLoadErr(err)
 		return
 	}
@@ -260,7 +270,6 @@ func (g *generator) ensureLoaded() {
 	g.vocab = llama.ModelGetVocab(model)
 	g.ready = true
 	g.lastUsed = time.Now()
-	// Only arm the safety-net timer; Generate releases immediately by default.
 	g.armIdleUnloadLocked()
 }
 
@@ -271,7 +280,6 @@ func (g *generator) setLoadErr(err error) {
 }
 
 // armIdleUnloadLocked schedules unload after idle. Caller holds g.mu.
-// With release-after-generate this is only a safety net for abandoned loads.
 func (g *generator) armIdleUnloadLocked() {
 	after := g.idleAfter()
 	if after <= 0 {
@@ -289,7 +297,8 @@ func (g *generator) armIdleUnloadLocked() {
 	})
 }
 
-// freeModelLocked drops the llama context + GGUF. Caller holds g.mu.
+// freeModelLocked drops the llama context + GGUF.
+// Caller must hold runtimeMu then g.mu (see LockRuntime / UnlockRuntime).
 func (g *generator) freeModelLocked() {
 	if g.unloadTimer != nil {
 		g.unloadTimer.Stop()
@@ -315,6 +324,8 @@ func (g *generator) unloadIfIdle() {
 	if g == nil {
 		return
 	}
+	LockRuntime()
+	defer UnlockRuntime()
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.closed || !g.ready || g.loading {
@@ -347,13 +358,12 @@ func (g *generator) LoadError() error {
 	return g.loadErr
 }
 
-// Generate runs one completion with the model held under a mutex.
+// Generate runs one completion under the process-wide llama.cpp lock.
 //
-// A single llama.cpp context is not safe for concurrent decoding, and the
-// organizer deliberately runs one worker, so serializing here is both correct
-// and sufficient. The GGUF is loaded on demand on the first call and, by
-// default, freed again when the completion finishes so idle workspaces do not
-// each pin multi-hundred-MB RSS.
+// A single llama.cpp context is not safe for concurrent decoding. Organizer and
+// GGUF embedding also share one CUDA backend in-process, so every native call
+// serializes on runtimeMu. The GGUF loads on demand and stays resident until the
+// idle timer unloads it.
 func (g *generator) Generate(ctx context.Context, req organizer.GenerateRequest) (string, error) {
 	if g == nil {
 		return "", organizer.ErrUnavailable
@@ -361,10 +371,12 @@ func (g *generator) Generate(ctx context.Context, req organizer.GenerateRequest)
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	// Load outside the generate lock path first so concurrent callers share one
-	// load attempt without holding the decode mutex for the whole mmap.
+	// Load outside the decode section so concurrent callers share one attempt.
 	g.ensureLoaded()
 
+	// Lock order: runtimeMu first, then g.mu.
+	LockRuntime()
+	defer UnlockRuntime()
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.closed {
@@ -377,13 +389,7 @@ func (g *generator) Generate(ctx context.Context, req organizer.GenerateRequest)
 		return "", fmt.Errorf("%w: still loading", organizer.ErrUnavailable)
 	}
 	g.lastUsed = time.Now()
-	// Default path: free after this call. Only arm an idle timer when the
-	// caller explicitly disabled release-after-generate (IdleUnloadAfter < 0
-	// keeps the model resident; positive still releases immediately below,
-	// with the timer as a safety net if release is skipped).
-	if g.idleAfter() <= 0 {
-		// keep resident — no releaseAfterGenerate
-	} else {
+	if g.idleAfter() > 0 {
 		defer g.releaseAfterGenerate()
 	}
 
@@ -596,6 +602,9 @@ func (g *generator) Close() error {
 	if g == nil {
 		return nil
 	}
+	// Lock order: runtimeMu first, then g.mu.
+	LockRuntime()
+	defer UnlockRuntime()
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.closed {

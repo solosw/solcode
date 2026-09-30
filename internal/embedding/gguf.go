@@ -153,7 +153,12 @@ func (p *ggufProvider) ensureLoaded() {
 		p.mu.Unlock()
 	}()
 
-	if err := yzma.EnsureRuntime(p.libDir); err != nil {
+	// Lock order: runtimeMu first, then p.mu. Organizer and embedding share one
+	// CUDA backend; concurrent load/decode/free has crashed Windows builds.
+	yzma.LockRuntime()
+	defer yzma.UnlockRuntime()
+
+	if err := yzma.EnsureRuntimeLocked(p.libDir); err != nil {
 		p.setLoadErr(err)
 		return
 	}
@@ -232,6 +237,8 @@ func (p *ggufProvider) armIdleUnloadLocked() {
 	})
 }
 
+// freeModelLocked drops the llama context + GGUF.
+// Caller must hold runtimeMu then p.mu.
 func (p *ggufProvider) freeModelLocked() {
 	if p.unloadTimer != nil {
 		p.unloadTimer.Stop()
@@ -254,6 +261,8 @@ func (p *ggufProvider) freeModelLocked() {
 }
 
 func (p *ggufProvider) unloadIfIdle() {
+	yzma.LockRuntime()
+	defer yzma.UnlockRuntime()
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.closed || !p.ready || p.loading || p.idleAfter <= 0 {
@@ -320,6 +329,9 @@ func (p *ggufProvider) embedPrefixed(ctx context.Context, prefixed string) ([]fl
 	if err := p.waitReady(ctx); err != nil {
 		return nil, err
 	}
+	// Lock order: runtimeMu first, then p.mu.
+	yzma.LockRuntime()
+	defer yzma.UnlockRuntime()
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.closed || !p.ready {
@@ -368,6 +380,8 @@ func (p *ggufProvider) embedPrefixed(ctx context.Context, prefixed string) ([]fl
 }
 
 func (p *ggufProvider) Close() error {
+	yzma.LockRuntime()
+	defer yzma.UnlockRuntime()
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.closed {
