@@ -186,11 +186,19 @@ func TestBuildUserPayloadIncludesSideContext(t *testing.T) {
 	}
 }
 
-func TestOrganizeUnavailableWithoutReadyGenerator(t *testing.T) {
-	org := New(&fakeGenerator{ready: false}, Options{})
-	_, err := org.Organize(context.Background(), Input{Transcript: "user: hi"})
-	if !errors.Is(err, ErrUnavailable) {
-		t.Fatalf("Organize() error = %v, want ErrUnavailable", err)
+func TestOrganizeAllowsColdGenerator(t *testing.T) {
+	// Demand-loaded runtimes start with Ready()==false; Organize must still
+	// call Generate so the first use (and post-idle-unload reuse) can load.
+	gen := &fakeGenerator{ready: false, raw: validResponse}
+	org := New(gen, Options{})
+	if !org.Available() {
+		t.Fatal("a configured cold generator must still report Available")
+	}
+	if _, err := org.Organize(context.Background(), Input{Transcript: "user: hi"}); err != nil {
+		t.Fatalf("Organize() error = %v, want success via Generate", err)
+	}
+	if gen.requestCount() != 1 {
+		t.Fatalf("generate calls = %d, want 1", gen.requestCount())
 	}
 }
 

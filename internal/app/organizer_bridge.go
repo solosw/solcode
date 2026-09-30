@@ -28,12 +28,28 @@ func newOrganizerRuntime(cfg config.Config) *organizerRuntime {
 	if !cfg.OrganizerEnabled() {
 		return nil
 	}
+	contextSize := cfg.Memory.Organizer.ContextSize
+	if contextSize <= 0 {
+		contextSize = 16384
+	}
+	if contextSize > 16384 {
+		contextSize = 16384
+	}
+	idle := time.Duration(cfg.Memory.Organizer.IdleUnloadSec) * time.Second
+	if cfg.Memory.Organizer.IdleUnloadSec == 0 {
+		// Match yzma default: release promptly so multi-workspace RSS stays low.
+		idle = 30 * time.Second
+	}
+	if cfg.Memory.Organizer.IdleUnloadSec < 0 {
+		idle = -1
+	}
 	gen := yzma.New(yzma.Config{
-		ModelPath:   cfg.Memory.Organizer.ModelPath,
-		LibDir:      cfg.OrganizerLibDir(),
-		ContextSize: cfg.Memory.Organizer.ContextSize,
-		Threads:     cfg.Memory.Organizer.Threads,
-		GPULayers:   cfg.Memory.Organizer.GPULayers,
+		ModelPath:       cfg.Memory.Organizer.ModelPath,
+		LibDir:          cfg.OrganizerLibDir(),
+		ContextSize:     contextSize,
+		Threads:         cfg.Memory.Organizer.Threads,
+		GPULayers:       cfg.Memory.Organizer.GPULayers,
+		IdleUnloadAfter: idle,
 	})
 	org := organizer.New(gen, organizer.Options{
 		MaxOutputTokens: cfg.Memory.Organizer.MaxOutputTokens,

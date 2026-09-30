@@ -44,18 +44,9 @@ func livePaths(t *testing.T) (modelPath, libDir string) {
 
 func waitReady(t *testing.T, gen *generator, timeout time.Duration) {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for {
-		if gen.Ready() {
-			return
-		}
-		if err := gen.LoadError(); err != nil {
-			t.Fatalf("model load failed: %v", err)
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("model still loading after %s", timeout)
-		}
-		time.Sleep(100 * time.Millisecond)
+	// New no longer preloads; kick the demand-load path explicitly.
+	if err := gen.waitForReady(context.Background(), timeout); err != nil {
+		t.Fatalf("model load failed: %v", err)
 	}
 }
 
@@ -73,7 +64,7 @@ func TestLiveMiniCPMOrganize(t *testing.T) {
 	gen := New(Config{
 		ModelPath:   modelPath,
 		LibDir:      libDir,
-		ContextSize: 4096,
+		ContextSize: 16384,
 		GPULayers:   gpuLayers,
 	})
 	t.Cleanup(func() { _ = gen.Close() })

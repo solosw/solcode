@@ -20,11 +20,11 @@ func TestNormalizeOrganizerDefaults(t *testing.T) {
 	if org.GPULayers != 0 {
 		t.Fatalf("gpu layers = %d, want 0 on cpu", org.GPULayers)
 	}
-	if org.ContextSize != 8192 {
-		t.Fatalf("context size = %d, want 8192", org.ContextSize)
+	if org.ContextSize != 16384 {
+		t.Fatalf("context size = %d, want 16384", org.ContextSize)
 	}
-	if org.MaxOutputTokens != 1500 {
-		t.Fatalf("max output tokens = %d, want 1500", org.MaxOutputTokens)
+	if org.MaxOutputTokens != 800 {
+		t.Fatalf("max output tokens = %d, want 800", org.MaxOutputTokens)
 	}
 	if org.TimeoutSec != 180 {
 		t.Fatalf("timeout = %d, want 180", org.TimeoutSec)
@@ -59,11 +59,11 @@ func TestNormalizeOrganizerBoundsValues(t *testing.T) {
 	cfg.Normalize()
 
 	org := cfg.Memory.Organizer
-	if org.ContextSize != 131072 {
-		t.Fatalf("context size = %d, want clamped to 131072", org.ContextSize)
+	if org.ContextSize != 16384 {
+		t.Fatalf("context size = %d, want clamped to 16384", org.ContextSize)
 	}
-	if org.MaxOutputTokens != 8192 {
-		t.Fatalf("max output tokens = %d, want clamped to 8192", org.MaxOutputTokens)
+	if org.MaxOutputTokens != 2048 {
+		t.Fatalf("max output tokens = %d, want clamped to 2048", org.MaxOutputTokens)
 	}
 	if org.Temperature != 2 {
 		t.Fatalf("temperature = %v, want clamped to 2", org.Temperature)

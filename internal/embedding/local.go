@@ -67,7 +67,9 @@ func newLocalProvider(opts Options) (*localProvider, error) {
 		gpu:          opts.GPU,
 		cudaDeviceID: opts.CudaDeviceID,
 	}
-	go p.ensureLoaded()
+	// Do NOT preload ONNX/ORT at construction. EmbeddingGemma + ORT is hundreds
+	// of MB of RSS; multi-workspace solcode was pinning that on every cold start
+	// even when no memory retrieval ran yet. First Embed/EmbedDocument loads.
 	return p, nil
 }
 

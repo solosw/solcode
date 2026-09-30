@@ -24,42 +24,112 @@ type Config struct {
 	Threads int
 	// GPULayers offloads that many layers to the GPU. Negative means all.
 	GPULayers int
+	// IdleUnloadAfter frees the model after this idle duration.
+	// Zero uses idleUnloadAfter default; negative disables unload.
+	IdleUnloadAfter time.Duration
 }
 
 const (
-	defaultContextSize = 8192
+	// defaultContextSize is the KV window when config leaves ContextSize unset.
+	// 16k holds system + side-context + a long compact transcript + generation
+	// headroom. Physical RAM is kept down by mmap weights, Q8 KV, small n_batch,
+	// and releasing the model after each Generate (see releaseAfterGenerate).
+	defaultContextSize = 16384
+	// maxContextSize caps misconfigured huge windows so a typo cannot OOM the host.
+	maxContextSize = 16384
+	// defaultBatchSize is the decode batch. It must stay << context size: llama.cpp
+	// allocates scratch proportional to n_batch, and setting n_batch == n_ctx is
+	// the main reason a 1B Q4 model still sits at multi-gigabyte RSS.
+	defaultBatchSize = 256
+	// maxBatchSize hard-caps n_batch regardless of context size.
+	maxBatchSize = 256
+	// idleUnloadAfter is a safety net if release-after-generate is disabled.
+	// Multi-workspace solcode processes must not pin GGUF for minutes.
+	idleUnloadAfter = 30 * time.Second
 	// pieceBufferSize is the scratch buffer for one detokenized piece.
 	pieceBufferSize = 512
 )
 
 // generator implements organizer.LocalGenerator on top of llama.cpp.
 //
-// Loading is deferred to a background goroutine: a multi-gigabyte GGUF can take
-// many seconds to map, and solcode must not block startup on it. Until loading
-// finishes, Ready reports false and Generate returns an unavailable error, which
-// the worker treats as retryable.
+// The GGUF is loaded on first Generate (or an explicit waitForReady), not at
+// construction: mapping a multi-hundred-MB model at process start was the
+// dominant reason solcode jumped from tens of MB to multi-GB RSS. After idle
+// silence the model is unloaded again.
 type generator struct {
 	cfg Config
 
-	mu      sync.Mutex
-	model   llama.Model
-	ctx     llama.Context
-	vocab   llama.Vocab
-	ready   bool
-	loadErr error
-	closed  bool
-	once    sync.Once
+	mu         sync.Mutex
+	model      llama.Model
+	ctx        llama.Context
+	vocab      llama.Vocab
+	ready      bool
+	loadErr    error
+	closed     bool
+	loading    bool
+	lastUsed   time.Time
+	unloadTimer *time.Timer
+	loadDone   chan struct{} // closed when a load attempt finishes; recreated per load
 }
 
-// New builds a generator and starts loading in the background.
+// New builds a generator without loading the GGUF yet.
 //
-// It returns a generator that reports unavailability through Ready when the
-// model or library cannot be loaded, rather than failing at construction, so
-// solcode keeps running and the caller can retry.
+// Ready stays false until the first Generate (or waitForReady) triggers a load.
+// Construction never fails on a missing library so solcode keeps running; the
+// failure surfaces when Organize actually needs the model.
 func New(cfg Config) organizer.LocalGenerator {
-	g := &generator{cfg: cfg}
-	go g.ensureLoaded()
-	return g
+	return &generator{cfg: normalizeConfig(cfg)}
+}
+
+func normalizeConfig(cfg Config) Config {
+	if cfg.ContextSize <= 0 {
+		cfg.ContextSize = defaultContextSize
+	}
+	if cfg.ContextSize > maxContextSize {
+		cfg.ContextSize = maxContextSize
+	}
+	if cfg.IdleUnloadAfter == 0 {
+		cfg.IdleUnloadAfter = idleUnloadAfter
+	}
+	return cfg
+}
+
+func (g *generator) idleAfter() time.Duration {
+	if g == nil {
+		return idleUnloadAfter
+	}
+	if g.cfg.IdleUnloadAfter < 0 {
+		return 0 // disabled
+	}
+	if g.cfg.IdleUnloadAfter > 0 {
+		return g.cfg.IdleUnloadAfter
+	}
+	return idleUnloadAfter
+}
+
+func (g *generator) contextSize() int {
+	if g == nil {
+		return defaultContextSize
+	}
+	if g.cfg.ContextSize > 0 {
+		return g.cfg.ContextSize
+	}
+	return defaultContextSize
+}
+
+func (g *generator) batchSize() int {
+	ctxSize := g.contextSize()
+	batch := defaultBatchSize
+	if batch > ctxSize {
+		batch = ctxSize
+	}
+	if batch > maxBatchSize {
+		batch = maxBatchSize
+	}
+	if batch < 64 {
+		batch = 64
+	}
+	return batch
 }
 
 // libBindOnce serializes llama.Load across generators in the process. The binding
@@ -84,105 +154,217 @@ func (g *generator) Ready() bool {
 	return g.ready && !g.closed
 }
 
+// ensureLoaded loads the GGUF on demand. Concurrent callers share one attempt.
+// Unlike the old startup preload, this only runs when Organize/Generate needs
+// the model, so idle solcode does not hold multi-GB RSS.
 func (g *generator) ensureLoaded() {
-	g.once.Do(func() {
-		modelPath := strings.TrimSpace(g.cfg.ModelPath)
-		if modelPath == "" {
-			g.setLoadErr(fmt.Errorf("yzma: model path is empty"))
-			return
+	if g == nil {
+		return
+	}
+	g.mu.Lock()
+	if g.closed {
+		g.mu.Unlock()
+		return
+	}
+	if g.ready {
+		g.mu.Unlock()
+		return
+	}
+	if g.loading {
+		done := g.loadDone
+		g.mu.Unlock()
+		if done != nil {
+			<-done
 		}
-		if !ModelPresent(modelPath) {
-			g.setLoadErr(fmt.Errorf("yzma: GGUF model not found at %s", modelPath))
-			return
-		}
-		libDir := ResolveLibraryDir(g.cfg.LibDir)
-		var bindErr error
-		libBindOnce.Do(func() {
-			bindErr = loadLibrary(libDir)
-		})
-		if bindErr != nil {
-			g.setLoadErr(bindErr)
-			return
-		}
-		if !LibraryPresent(libDir) {
-			// Another generator already bound a different dir, or the library
-			// disappeared. Report rather than proceed into a nil-symbol call.
-			g.setLoadErr(fmt.Errorf("yzma: llama.cpp shared library not available in %s", libDir))
-			return
-		}
+		return
+	}
+	g.loading = true
+	g.loadErr = nil
+	g.loadDone = make(chan struct{})
+	done := g.loadDone
+	g.mu.Unlock()
 
-		// Backends must be registered before any model is loaded. llama.Load
-		// only binds symbols; without this call ModelLoadFromFile fails with
-		// "no backends are loaded". Loading is process-global, so it runs once.
-		backendOnce.Do(func() {
-			// Silence llama.cpp / ggml stdout (model load dumps, CUDA graph
-			// "id N reused" spam). The organizer runs inside solcode's process;
-			// those lines otherwise flood the TUI and live-test output. Match
-			// the official yzma chat example's non-verbose path.
-			llama.LogSet(llama.LogSilent())
-			llama.BackendInit()
-			// Register the ggml backends shipped next to llama.dll. The
-			// default search path does not cover the install directory, so the
-			// explicit path form is required.
-			if err := llama.GGMLBackendLoadAllFromPath(libDir); err != nil {
-				backendErr = fmt.Errorf("yzma: load ggml backends from %s: %w", libDir, err)
-			}
-		})
-		if backendErr != nil {
-			g.setLoadErr(backendErr)
-			return
-		}
-
-		modelParams := llama.ModelDefaultParams()
-		if g.cfg.GPULayers == 0 {
-			modelParams.SetCPUOnly()
-		} else {
-			modelParams.NGpuLayers = int32(g.cfg.GPULayers)
-		}
-		model, err := llama.ModelLoadFromFile(modelPath, modelParams)
-		if err != nil {
-			g.setLoadErr(fmt.Errorf("yzma: load GGUF %s: %w", modelPath, err))
-			return
-		}
-
-		ctxParams := llama.ContextDefaultParams()
-		contextSize := g.cfg.ContextSize
-		if contextSize <= 0 {
-			contextSize = defaultContextSize
-		}
-		ctxParams.NCtx = uint32(contextSize)
-		ctxParams.NBatch = uint32(contextSize)
-		if g.cfg.Threads > 0 {
-			ctxParams.NThreads = int32(g.cfg.Threads)
-			ctxParams.NThreadsBatch = int32(g.cfg.Threads)
-		}
-		modelCtx, err := llama.InitFromModel(model, ctxParams)
-		if err != nil {
-			_ = llama.ModelFree(model)
-			g.setLoadErr(fmt.Errorf("yzma: create context: %w", err))
-			return
-		}
-
+	defer func() {
 		g.mu.Lock()
-		defer g.mu.Unlock()
-		if g.closed {
-			_ = llama.Free(modelCtx)
-			_ = llama.ModelFree(model)
-			return
-		}
-		g.model = model
-		g.ctx = modelCtx
-		g.vocab = llama.ModelGetVocab(model)
-		g.ready = true
+		g.loading = false
+		close(done)
+		g.mu.Unlock()
+	}()
+
+	modelPath := strings.TrimSpace(g.cfg.ModelPath)
+	if modelPath == "" {
+		g.setLoadErr(fmt.Errorf("yzma: model path is empty"))
+		return
+	}
+	if !ModelPresent(modelPath) {
+		g.setLoadErr(fmt.Errorf("yzma: GGUF model not found at %s", modelPath))
+		return
+	}
+	libDir := ResolveLibraryDir(g.cfg.LibDir)
+	var bindErr error
+	libBindOnce.Do(func() {
+		bindErr = loadLibrary(libDir)
 	})
+	if bindErr != nil {
+		g.setLoadErr(bindErr)
+		return
+	}
+	if !LibraryPresent(libDir) {
+		g.setLoadErr(fmt.Errorf("yzma: llama.cpp shared library not available in %s", libDir))
+		return
+	}
+
+	backendOnce.Do(func() {
+		// Silence llama.cpp / ggml stdout (model load dumps, CUDA graph spam).
+		llama.LogSet(llama.LogSilent())
+		llama.BackendInit()
+		if err := llama.GGMLBackendLoadAllFromPath(libDir); err != nil {
+			backendErr = fmt.Errorf("yzma: load ggml backends from %s: %w", libDir, err)
+		}
+	})
+	if backendErr != nil {
+		g.setLoadErr(backendErr)
+		return
+	}
+
+	modelParams := llama.ModelDefaultParams()
+	// mmap keeps weights file-backed so the OS can share the same GGUF pages
+	// across multiple solcode workspaces instead of each process private-copying.
+	// Never mlock: that would pin RSS and defeat multi-workspace.
+	modelParams.LoadMode = llama.LoadModeMmap
+	modelParams.LazyMode = llama.LazyModeOn
+	if g.cfg.GPULayers == 0 {
+		modelParams.SetCPUOnly()
+	} else {
+		modelParams.NGpuLayers = int32(g.cfg.GPULayers)
+	}
+	model, err := llama.ModelLoadFromFile(modelPath, modelParams)
+	if err != nil {
+		g.setLoadErr(fmt.Errorf("yzma: load GGUF %s: %w", modelPath, err))
+		return
+	}
+
+	ctxParams := llama.ContextDefaultParams()
+	contextSize := g.contextSize()
+	batchSize := g.batchSize()
+	ctxParams.NCtx = uint32(contextSize)
+	// Keep n_batch << n_ctx. Setting them equal was the main multi-GB RSS cause:
+	// llama.cpp scratch/KV scales with batch*ctx, not just model weights.
+	ctxParams.NBatch = uint32(batchSize)
+	if ctxParams.NUbatch == 0 || ctxParams.NUbatch > ctxParams.NBatch {
+		ctxParams.NUbatch = ctxParams.NBatch
+	}
+	// Q8 KV is ~2x smaller than F16 and is the main lever once n_ctx is 16k.
+	ctxParams.TypeK = llama.GGMLTypeQ8_0
+	ctxParams.TypeV = llama.GGMLTypeQ8_0
+	ctxParams.FlashAttentionType = llama.FlashAttentionTypeAuto
+	if g.cfg.Threads > 0 {
+		ctxParams.NThreads = int32(g.cfg.Threads)
+		ctxParams.NThreadsBatch = int32(g.cfg.Threads)
+	}
+	modelCtx, err := llama.InitFromModel(model, ctxParams)
+	if err != nil {
+		_ = llama.ModelFree(model)
+		g.setLoadErr(fmt.Errorf("yzma: create context: %w", err))
+		return
+	}
+
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.closed {
+		_ = llama.Free(modelCtx)
+		_ = llama.ModelFree(model)
+		return
+	}
+	g.model = model
+	g.ctx = modelCtx
+	g.vocab = llama.ModelGetVocab(model)
+	g.ready = true
+	g.lastUsed = time.Now()
+	// Only arm the safety-net timer; Generate releases immediately by default.
+	g.armIdleUnloadLocked()
 }
 
 func (g *generator) setLoadErr(err error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if g.loadErr == nil {
-		g.loadErr = err
+	g.loadErr = err
+}
+
+// armIdleUnloadLocked schedules unload after idle. Caller holds g.mu.
+// With release-after-generate this is only a safety net for abandoned loads.
+func (g *generator) armIdleUnloadLocked() {
+	after := g.idleAfter()
+	if after <= 0 {
+		if g.unloadTimer != nil {
+			g.unloadTimer.Stop()
+			g.unloadTimer = nil
+		}
+		return
 	}
+	if g.unloadTimer != nil {
+		g.unloadTimer.Stop()
+	}
+	g.unloadTimer = time.AfterFunc(after, func() {
+		g.unloadIfIdle()
+	})
+}
+
+// freeModelLocked drops the llama context + GGUF. Caller holds g.mu.
+func (g *generator) freeModelLocked() {
+	if g.unloadTimer != nil {
+		g.unloadTimer.Stop()
+		g.unloadTimer = nil
+	}
+	modelCtx := g.ctx
+	model := g.model
+	g.ctx = 0
+	g.model = 0
+	g.vocab = 0
+	g.ready = false
+	// Allow a later ensureLoaded to try again after free.
+	g.loadErr = nil
+	if modelCtx != 0 {
+		_ = llama.Free(modelCtx)
+	}
+	if model != 0 {
+		_ = llama.ModelFree(model)
+	}
+}
+
+func (g *generator) unloadIfIdle() {
+	if g == nil {
+		return
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.closed || !g.ready || g.loading {
+		return
+	}
+	after := g.idleAfter()
+	if after <= 0 {
+		return
+	}
+	if time.Since(g.lastUsed) < after {
+		g.armIdleUnloadLocked()
+		return
+	}
+	g.freeModelLocked()
+}
+
+// releaseAfterGenerate drops the model as soon as one completion finishes.
+// Organizer runs are rare relative to chat turns; keeping a 16k KV + GGUF
+// mapped in every open workspace is what OOM'd multi-solcode setups.
+// IdleUnloadAfter < 0 disables this and keeps the model resident.
+func (g *generator) releaseAfterGenerate() {
+	if g == nil {
+		return
+	}
+	if g.idleAfter() <= 0 {
+		// Explicitly disabled: keep resident and do not arm a timer.
+		return
+	}
+	g.freeModelLocked()
 }
 
 // LoadError returns the deferred load failure, if any.
@@ -196,7 +378,9 @@ func (g *generator) LoadError() error {
 //
 // A single llama.cpp context is not safe for concurrent decoding, and the
 // organizer deliberately runs one worker, so serializing here is both correct
-// and sufficient.
+// and sufficient. The GGUF is loaded on demand on the first call and, by
+// default, freed again when the completion finishes so idle workspaces do not
+// each pin multi-hundred-MB RSS.
 func (g *generator) Generate(ctx context.Context, req organizer.GenerateRequest) (string, error) {
 	if g == nil {
 		return "", organizer.ErrUnavailable
@@ -204,6 +388,10 @@ func (g *generator) Generate(ctx context.Context, req organizer.GenerateRequest)
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
+	// Load outside the generate lock path first so concurrent callers share one
+	// load attempt without holding the decode mutex for the whole mmap.
+	g.ensureLoaded()
+
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.closed {
@@ -214,6 +402,16 @@ func (g *generator) Generate(ctx context.Context, req organizer.GenerateRequest)
 			return "", fmt.Errorf("%w: %v", organizer.ErrUnavailable, g.loadErr)
 		}
 		return "", fmt.Errorf("%w: still loading", organizer.ErrUnavailable)
+	}
+	g.lastUsed = time.Now()
+	// Default path: free after this call. Only arm an idle timer when the
+	// caller explicitly disabled release-after-generate (IdleUnloadAfter < 0
+	// keeps the model resident; positive still releases immediately below,
+	// with the timer as a safety net if release is skipped).
+	if g.idleAfter() <= 0 {
+		// keep resident — no releaseAfterGenerate
+	} else {
+		defer g.releaseAfterGenerate()
 	}
 
 	// Each Generate is an independent completion on a shared context, so the
@@ -240,9 +438,36 @@ func (g *generator) Generate(ctx context.Context, req organizer.GenerateRequest)
 	if len(tokens) == 0 {
 		return "", fmt.Errorf("yzma: prompt tokenized to nothing")
 	}
+	// Cap prompt to context - generation headroom so Decode cannot OOM the KV.
 	maxTokens := req.MaxTokens
 	if maxTokens <= 0 {
 		maxTokens = 512
+	}
+	ctxSize := g.contextSize()
+	// Generation must fit in the window, but never steal more than half the
+	// context from the prompt — otherwise a large MaxTokens leaves almost no
+	// room for system+user and the tail-trim drops the instructions.
+	if maxTokens > ctxSize/2 {
+		maxTokens = ctxSize / 2
+		if maxTokens < 256 {
+			maxTokens = 256
+		}
+	}
+	headroom := maxTokens + 64
+	if headroom >= ctxSize {
+		headroom = ctxSize / 4
+		if headroom < 64 {
+			headroom = 64
+		}
+	}
+	maxPrompt := ctxSize - headroom
+	if maxPrompt < 64 {
+		maxPrompt = 64
+	}
+	if len(tokens) > maxPrompt {
+		// Keep the tail (user payload / transcript end) which usually carries
+		// the durable facts; drop the leading system preamble tokens first.
+		tokens = tokens[len(tokens)-maxPrompt:]
 	}
 
 	smpl := g.buildSampler(req)
@@ -399,37 +624,22 @@ func (g *generator) Close() error {
 		return nil
 	}
 	g.mu.Lock()
+	defer g.mu.Unlock()
 	if g.closed {
-		g.mu.Unlock()
 		return nil
 	}
 	g.closed = true
-	modelCtx := g.ctx
-	model := g.model
-	g.ctx = 0
-	g.model = 0
-	g.vocab = 0
-	g.ready = false
-	g.mu.Unlock()
-
-	var firstErr error
-	if modelCtx != 0 {
-		if err := llama.Free(modelCtx); err != nil {
-			firstErr = err
-		}
-	}
-	if model != 0 {
-		if err := llama.ModelFree(model); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
-	return firstErr
+	g.freeModelLocked()
+	return nil
 }
 
-// waitForReady polls until the generator is ready, failed, or the deadline
-// passes. It exists for callers that need a synchronous answer, such as tests
-// and an explicit preflight from the settings UI.
+// waitForReady triggers a load if needed and polls until ready, failed, or the
+// deadline passes. Used by tests and settings preflight — not by process start.
 func (g *generator) waitForReady(ctx context.Context, timeout time.Duration) error {
+	if g == nil {
+		return organizer.ErrUnavailable
+	}
+	go g.ensureLoaded()
 	deadline := time.Now().Add(timeout)
 	for {
 		if err := ctx.Err(); err != nil {
@@ -439,7 +649,13 @@ func (g *generator) waitForReady(ctx context.Context, timeout time.Duration) err
 			return nil
 		}
 		if err := g.LoadError(); err != nil {
-			return err
+			// Still loading may leave loadErr nil; only fail when load finished bad.
+			g.mu.Lock()
+			loading := g.loading
+			g.mu.Unlock()
+			if !loading {
+				return err
+			}
 		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf("yzma: model still loading after %s", timeout)

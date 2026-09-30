@@ -440,6 +440,9 @@ type OrganizerConfig struct {
 	// cpu, cuda, metal, or vulkan.
 	Processor string `json:"processor,omitempty"`
 	// ContextSize is the llama.cpp context window in tokens.
+	// 0 uses the runtime default (16384). Values above 16384 are capped.
+	// Keep n_batch << n_ctx (yzma caps batch at 512); large windows alone are
+	// fine, pairing them with n_batch==n_ctx is what blew RSS previously.
 	ContextSize int `json:"context_size,omitempty"`
 	// Threads bounds inference threads. Zero lets llama.cpp decide.
 	Threads int `json:"threads,omitempty"`
@@ -452,6 +455,11 @@ type OrganizerConfig struct {
 	Temperature float64 `json:"temperature,omitempty"`
 	// TimeoutSec bounds one organizer request (default 180, max 900).
 	TimeoutSec int `json:"timeout_sec,omitempty"`
+	// IdleUnloadSec controls how long a loaded GGUF may stay resident.
+	// 0 uses the runtime default (release after each Generate, with a short
+	// safety-net timer). Negative keeps the model loaded between calls
+	// (higher RAM, lower reload latency).
+	IdleUnloadSec int `json:"idle_unload_sec,omitempty"`
 }
 
 type MCPServerConfig struct {
@@ -1852,11 +1860,13 @@ func (cfg *Config) normalizeOrganizer() {
 	}
 	org.ModelPath = expandPath(org.ModelPath)
 	org.LibDir = expandPath(org.LibDir)
+	// Default / hard-cap 16k. The multi-GB RSS bug was n_batch==n_ctx, not a
+	// large window by itself; yzma keeps n_batch <= 512 regardless.
 	if org.ContextSize <= 0 {
-		org.ContextSize = 8192
+		org.ContextSize = 16384
 	}
-	if org.ContextSize > 131072 {
-		org.ContextSize = 131072
+	if org.ContextSize > 16384 {
+		org.ContextSize = 16384
 	}
 	if org.Threads < 0 {
 		org.Threads = 0
@@ -1869,11 +1879,13 @@ func (cfg *Config) normalizeOrganizer() {
 	if org.GPULayers == 0 && org.Processor != "cpu" {
 		org.GPULayers = -1
 	}
+	// ~800 tokens covers summary + a few XML candidates. Cap at 2048 so MaxOutput
+	// cannot starve the prompt headroom inside a 16k window.
 	if org.MaxOutputTokens <= 0 {
-		org.MaxOutputTokens = 1500
+		org.MaxOutputTokens = 800
 	}
-	if org.MaxOutputTokens > 8192 {
-		org.MaxOutputTokens = 8192
+	if org.MaxOutputTokens > 2048 {
+		org.MaxOutputTokens = 2048
 	}
 	if org.Temperature < 0 {
 		org.Temperature = 0
@@ -1887,6 +1899,8 @@ func (cfg *Config) normalizeOrganizer() {
 	if org.TimeoutSec > 900 {
 		org.TimeoutSec = 900
 	}
+	// IdleUnloadSec: 0 keeps the runtime default (release after Generate + short
+	// safety-net). Negative keeps the GGUF resident between calls.
 }
 
 // OrganizerType returns the normalized organizer runtime. Empty means "yzma".

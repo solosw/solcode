@@ -12,6 +12,54 @@ import (
 	"github.com/solosw/solcode/internal/jevlocal"
 )
 
+func TestLocalProviderDoesNotPreloadOnNew(t *testing.T) {
+	// Construction must not spin up ORT/ONNX. Multi-workspace RSS stayed high
+	// because every App start did `go ensureLoaded()` even with no retrieval.
+	shared := config.SharedEmbeddingModelDir()
+	if _, err := os.Stat(filepath.Join(shared, "model_q4f16.onnx")); err != nil {
+		// Still exercise the constructor when only the layout probe is needed:
+		// missing shared model should fail Resolve before any load goroutine.
+		_, err := NewProvider(Options{
+			Config: config.EmbeddingConfig{
+				Type:  config.EmbeddingBackendLocal,
+				Model: "missing-model",
+				Dir:   t.TempDir(),
+			},
+			ModelDir: t.TempDir(),
+		})
+		if err == nil {
+			t.Fatal("expected resolve error for missing artifacts")
+		}
+		return
+	}
+	p, err := NewProvider(Options{
+		Config: config.EmbeddingConfig{
+			Type:  config.EmbeddingBackendLocal,
+			Model: "embeddinggemma-300m",
+			Dir:   t.TempDir(),
+		},
+		ModelDir: shared,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+	lp, ok := p.(*localProvider)
+	if !ok {
+		t.Fatalf("got %T", p)
+	}
+	// Give a hypothetical background loader time to race; none should run.
+	time.Sleep(50 * time.Millisecond)
+	lp.mu.Lock()
+	defer lp.mu.Unlock()
+	if lp.ready || lp.eng != nil || lp.tok != nil {
+		t.Fatal("NewProvider must not preload the ORT session")
+	}
+	if lp.loadErr != nil {
+		t.Fatalf("load should not have started: %v", lp.loadErr)
+	}
+}
+
 func TestLocalProviderEmbedEndToEnd(t *testing.T) {
 	shared := config.SharedEmbeddingModelDir()
 	if _, err := os.Stat(filepath.Join(shared, "model_q4f16.onnx")); err != nil {
