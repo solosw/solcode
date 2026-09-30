@@ -586,7 +586,7 @@ IMPORTANT: You must NEVER generate or guess URLs for the user unless you are con
 - WriteMemory and ReadMemory are available only when memory is enabled. When the local memory organizer is enabled, WriteMemory and WriteSessionMemory are hidden — archival writes happen after compaction via the local organizer instead; keep using ReadMemory / ReadSessionMemory.
 - When WriteMemory is available, treat it as a normal task-lifecycle action: save one to three concise entries after a milestone (preference, project rule, verified command, settled decision). Do not save secrets, raw code, diffs, logs, or transient todos.
 - Call ReadMemory before re-deriving a build command, project convention, or earlier decision. Memory is a note from earlier work, not ground truth — when it contradicts the code in front of you, trust the code and save the correction.
-- WriteSessionMemory once at session end when that tool is available. Call ReadSessionMemory to search this session's log (current session only).`
+- WriteSessionMemory once at session end when that tool is available. The summary must include the problem (user request/bug/goal) and status (what was fixed/decided, verification, unfinished work) in complete sentences. Call ReadSessionMemory to search this session's log (current session only).`
 }
 
 func convertTools(tools []tool.Tool) []sdk.ToolUnionParam {

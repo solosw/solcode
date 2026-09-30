@@ -135,9 +135,45 @@ func TestTurnSessionMemorySummaryPrefersModelOutcome(t *testing.T) {
 	if got := turnSessionMemorySummary("only prompt left", "  "); got != "only prompt left" {
 		t.Fatalf("fallback = %q", got)
 	}
-	long := strings.Repeat("字", 500)
-	if got := turnSessionMemorySummary("", long); !strings.HasSuffix(got, "…") || len([]rune(got)) != 401 {
-		t.Fatalf("truncation = %d runes, %q", len([]rune(got)), got[len(got)-3:])
+	// Under the per-turn cap, text is kept whole.
+	short := strings.Repeat("字", turnSessionMemoryMaxRunes)
+	if got := turnSessionMemorySummary("", short); got != short {
+		t.Fatalf("under-cap should stay whole, got %d runes", len([]rune(got)))
+	}
+	// Over the cap: keep problem head + status tail (not a mid-word head-only cut).
+	head := "Problem: n_batch assert killed the generate worker after long organizer prompts. "
+	tail := " Status: DecodeTokensInBatches fixed generate_long_cpu and generate_long_gpu; staged solcode.new.exe pending swap."
+	mid := strings.Repeat("detail filler about intermediate debug steps. ", 80)
+	long := head + mid + tail
+	got = turnSessionMemorySummary("", long)
+	if !strings.Contains(got, " … ") {
+		t.Fatalf("expected head/tail ellipsis, got %q", got)
+	}
+	if n := len([]rune(got)); n > turnSessionMemoryMaxRunes {
+		t.Fatalf("truncation length = %d, want <= %d", n, turnSessionMemoryMaxRunes)
+	}
+	if !strings.HasPrefix(got, "Problem:") {
+		t.Fatalf("head (problem) missing: %q", got[:min(80, len(got))])
+	}
+	if !strings.Contains(got, "staged solcode.new.exe pending swap") {
+		t.Fatalf("tail (status) missing: %q", got)
+	}
+}
+
+func TestTruncateSessionSummaryHeadTail(t *testing.T) {
+	if got := truncateSessionSummaryHeadTail("short", 100); got != "short" {
+		t.Fatalf("got %q", got)
+	}
+	in := strings.Repeat("a", 50) + "MID" + strings.Repeat("z", 50)
+	got := truncateSessionSummaryHeadTail(in, 40)
+	if !strings.Contains(got, " … ") {
+		t.Fatalf("got %q", got)
+	}
+	if !strings.HasPrefix(got, "aaa") || !strings.HasSuffix(got, "zzz") {
+		t.Fatalf("head/tail lost: %q", got)
+	}
+	if n := len([]rune(got)); n > 40 {
+		t.Fatalf("len=%d", n)
 	}
 }
 

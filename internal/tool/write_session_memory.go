@@ -61,15 +61,15 @@ func (t *writeSessionMemoryTool) Name() string { return WriteSessionMemoryToolNa
 
 func (t *writeSessionMemoryTool) Description() string {
 	return `Append a session memory to this project's solcode.md (.solcode/solcode.md) when a
-session ends. This is the session log: what this session set out to do, what it
-actually did, and anything still unfinished in this session.
+session ends. This is the session log: the problem this session set out to solve,
+the status of that work, and anything still unfinished.
 
 When to use this vs WriteMemory:
 - WriteSessionMemory (this tool) — one entry per session, written at the end, as a
-  chronological record: the work done, decisions made, dead ends, and what remains.
-  It is scoped to this session and stores the checkpoint turn, the files that
-  changed, the timestamp, and the session id. ReadSessionMemory only returns this
-  session's entries.
+  chronological record: the problem, what was fixed/decided, validation, dead ends,
+  and what remains. It is scoped to this session and stores the checkpoint turn,
+  the files that changed, the timestamp, and the session id. ReadSessionMemory only
+  returns this session's entries.
 - WriteMemory — a single durable fact that stays true across sessions: a user
   preference, a project rule, a verified command, a settled decision. It is not a
   log; it is knowledge, and relevant entries are injected automatically in later
@@ -81,7 +81,9 @@ sessions produce one session memory and zero to three WriteMemory entries.
 
 The entry stores:
 - keywords: short retrieval terms for later ReadSessionMemory calls in this session
-- summary: what was done, decided, or learned, and anything still unfinished
+- summary: MUST include (1) Problem — the user's request/bug/goal, and (2) Status —
+  what was fixed or decided, how verified, and what is still unfinished. Keep the
+  ending complete; do not stop mid-sentence. Prefer outcomes over narration.
 - importance: 0-1, how much this should stand out later
 
 The runtime appends what you do not provide: the checkpoint turn, the files changed
@@ -89,9 +91,7 @@ this session, the timestamp, and the session id. Every session memory for this
 project lives in that one file, newest last, but reads are filtered to the current
 session id.
 
-Prefer outcomes over narration: a verified command, a settled decision and its
-reason, a gotcha and its fix. Do not record secrets, and do not duplicate facts
-already saved with WriteMemory.`
+Do not record secrets, and do not duplicate facts already saved with WriteMemory.`
 }
 
 func (t *writeSessionMemoryTool) InputSchema() map[string]any {
@@ -104,8 +104,9 @@ func (t *writeSessionMemoryTool) InputSchema() map[string]any {
 				"description": "Short retrieval keywords, e.g. [\"checkpoint\", \"rewind\"].",
 			},
 			"summary": map[string]any{
-				"type":        "string",
-				"description": "What this session did or learned, in a few sentences.",
+				"type": "string",
+				"description": "Problem + status: the user's request/bug/goal, what was fixed or decided, " +
+					"how it was verified, and anything still unfinished. A few complete sentences; do not truncate mid-word.",
 			},
 			"importance": map[string]any{
 				"type":        "number",

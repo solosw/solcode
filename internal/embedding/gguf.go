@@ -469,9 +469,14 @@ func (p *ggufProvider) embedInProcess(ctx context.Context, prefixed string) ([]f
 	if len(tokens) > p.contextSz {
 		tokens = tokens[:p.contextSz]
 	}
-	batch := llama.BatchGetOne(tokens)
-	if _, err := llama.Decode(p.ctx, batch); err != nil {
-		yzma.LogNativeErr("embed_decode", err, nil)
+	// n_batch is capped (default 512); long docs must be decoded in chunks or
+	// llama.cpp aborts with GGML_ASSERT(n_tokens_all <= cparams.n_batch).
+	nBatch := int(defaultGGUFBatchSize)
+	if nBatch > p.contextSz {
+		nBatch = p.contextSz
+	}
+	if err := yzma.DecodeTokensInBatches(p.ctx, tokens, nBatch); err != nil {
+		yzma.LogNativeErr("embed_decode", err, map[string]any{"tokens": len(tokens), "n_batch": nBatch})
 		return nil, fmt.Errorf("embedding gguf: decode: %w", err)
 	}
 	vec, err := llama.GetEmbeddingsSeq(p.ctx, 0, p.nEmbd)
