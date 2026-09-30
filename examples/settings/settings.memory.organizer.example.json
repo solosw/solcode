@@ -6,12 +6,13 @@
       "model_path": "~/.solcode/models/qwen2.5-3b-instruct-q4_k_m.gguf",
       "lib_dir": "",
       "processor": "cpu",
-      "context_size": 8192,
+      "context_size": 16384,
       "threads": 0,
       "gpu_layers": 0,
-      "max_output_tokens": 1500,
+      "max_output_tokens": 800,
       "temperature": 0.2,
-      "timeout_sec": 180
+      "timeout_sec": 180,
+      "idle_unload_sec": 30
     }
   }
 }

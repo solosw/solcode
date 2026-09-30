@@ -172,7 +172,9 @@ func New(gen LocalGenerator, opts Options) *Organizer {
 		maxCandidates:   opts.MaxCandidates,
 	}
 	if o.maxOutputTokens <= 0 {
-		o.maxOutputTokens = 1500
+		// ~800 tokens is enough for summary + a handful of XML candidates
+		// without eating most of a 4k context window.
+		o.maxOutputTokens = 800
 	}
 	if o.maxCandidates <= 0 {
 		o.maxCandidates = 12
@@ -183,12 +185,10 @@ func New(gen LocalGenerator, opts Options) *Organizer {
 	return o
 }
 
-// Available reports whether the organizer can currently produce results.
+// Available reports whether a generator is configured. Ready() is not required:
+// yzma loads the GGUF on first Generate, so a cold organizer is still usable.
 func (o *Organizer) Available() bool {
-	if o == nil || o.gen == nil {
-		return false
-	}
-	return o.gen.Ready()
+	return o != nil && o.gen != nil
 }
 
 // Generator returns the underlying generator, or nil when disabled.
@@ -213,9 +213,8 @@ func (o *Organizer) Organize(ctx context.Context, input Input) (Result, error) {
 	if o == nil || o.gen == nil {
 		return Result{}, ErrUnavailable
 	}
-	if !o.gen.Ready() {
-		return Result{}, fmt.Errorf("%w: %s not ready", ErrUnavailable, o.gen.Name())
-	}
+	// Do not gate on Ready(): demand-loaded generators start cold and load inside
+	// Generate. A hard Ready check made every first Organize fail after idle unload.
 	transcript := strings.TrimSpace(input.Transcript)
 	if transcript == "" {
 		return Result{}, fmt.Errorf("organizer: transcript is empty")

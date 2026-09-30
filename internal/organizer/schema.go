@@ -10,16 +10,17 @@ import (
 )
 
 const (
-	// maxTranscriptRunes bounds what is sent to the model. A local 3B model on
-	// CPU degrades badly past its context window, so the transcript is
-	// truncated from the middle-forward rather than the tail: the head carries
-	// the intent, the tail carries the outcome.
+	// maxTranscriptRunes bounds what is sent to the model. With a 16k context
+	// window there is room for a long compact transcript after system +
+	// side-context + ~800 generation headroom. Truncation keeps head (intent)
+	// and tail (outcome).
 	maxTranscriptRunes = 24000
 	// maxCandidateRunes bounds one stored candidate text.
 	maxCandidateRunes = 600
 	// maxKeywords caps returned session keywords.
 	maxKeywords = 12
-	// maxSummaryRunes bounds the returned session summary.
+	// maxSummaryRunes bounds the returned session summary and the previous/
+	// next summary fields stuffed into the user payload.
 	maxSummaryRunes = 4000
 )
 

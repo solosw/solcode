@@ -105,12 +105,13 @@ func TestSettingsMemoryOrganizerAppliesAllFields(t *testing.T) {
 		"memory_organizer_model_path":        "~/models/local.gguf",
 		"memory_organizer_lib_dir":           "~/libs",
 		"memory_organizer_processor":         "vulkan",
-		"memory_organizer_context_size":      16384,
+		"memory_organizer_context_size":      4096,
 		"memory_organizer_threads":           6,
 		"memory_organizer_gpu_layers":        -1,
 		"memory_organizer_max_output_tokens": 2048,
 		"memory_organizer_temperature":       0.4,
 		"memory_organizer_timeout_sec":       300,
+		"memory_organizer_idle_unload_sec":   120,
 	})
 	defer res.Body.Close()
 	if res.StatusCode != 200 {
@@ -127,8 +128,8 @@ func TestSettingsMemoryOrganizerAppliesAllFields(t *testing.T) {
 	if org.Processor != "vulkan" {
 		t.Fatalf("processor = %q, want vulkan", org.Processor)
 	}
-	if org.ContextSize != 16384 {
-		t.Fatalf("context size = %d, want 16384", org.ContextSize)
+	if org.ContextSize != 4096 {
+		t.Fatalf("context size = %d, want 4096", org.ContextSize)
 	}
 	if org.Threads != 6 {
 		t.Fatalf("threads = %d, want 6", org.Threads)
@@ -144,6 +145,9 @@ func TestSettingsMemoryOrganizerAppliesAllFields(t *testing.T) {
 	}
 	if org.TimeoutSec != 300 {
 		t.Fatalf("timeout = %d, want 300", org.TimeoutSec)
+	}
+	if org.IdleUnloadSec != 120 {
+		t.Fatalf("idle unload = %d, want 120", org.IdleUnloadSec)
 	}
 	if org.Runtime != config.OrganizerRuntimeYzma {
 		t.Fatalf("runtime = %q, want yzma", org.Runtime)

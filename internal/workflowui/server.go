@@ -410,6 +410,9 @@ type memoryOrganizerSettings struct {
 	MaxOutputTokens int     `json:"max_output_tokens"`
 	Temperature     float64 `json:"temperature"`
 	TimeoutSec      int     `json:"timeout_sec"`
+	// IdleUnloadSec unloads the GGUF after this many idle seconds.
+	// 0 means the runtime default (180); negative disables unload.
+	IdleUnloadSec int `json:"idle_unload_sec"`
 }
 
 type providerSummary struct {
@@ -679,6 +682,7 @@ func buildMemoryOrganizerSettings(cfg config.Config) memoryOrganizerSettings {
 		MaxOutputTokens: org.MaxOutputTokens,
 		Temperature:     org.Temperature,
 		TimeoutSec:      org.TimeoutSec,
+		IdleUnloadSec:   org.IdleUnloadSec,
 	}
 }
 
@@ -808,8 +812,9 @@ type settingsUpdate struct {
 	MemoryOrganizerThreads   *int     `json:"memory_organizer_threads,omitempty"`
 	MemoryOrganizerGPULayers *int     `json:"memory_organizer_gpu_layers,omitempty"`
 	MemoryOrganizerMaxOut    *int     `json:"memory_organizer_max_output_tokens,omitempty"`
-	MemoryOrganizerTemp      *float64 `json:"memory_organizer_temperature,omitempty"`
-	MemoryOrganizerTimeout   *int     `json:"memory_organizer_timeout_sec,omitempty"`
+	MemoryOrganizerTemp         *float64 `json:"memory_organizer_temperature,omitempty"`
+	MemoryOrganizerTimeout      *int     `json:"memory_organizer_timeout_sec,omitempty"`
+	MemoryOrganizerIdleUnload   *int     `json:"memory_organizer_idle_unload_sec,omitempty"`
 }
 
 func (s *Server) postSettings(w http.ResponseWriter, r *http.Request) {
@@ -1040,6 +1045,9 @@ func applyMemoryOrganizerSettings(cfg *config.Config, req settingsUpdate) {
 	}
 	if req.MemoryOrganizerTimeout != nil {
 		org.TimeoutSec = *req.MemoryOrganizerTimeout
+	}
+	if req.MemoryOrganizerIdleUnload != nil {
+		org.IdleUnloadSec = *req.MemoryOrganizerIdleUnload
 	}
 }
 

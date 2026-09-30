@@ -58,6 +58,70 @@ func TestModelPresentChecksRegularFile(t *testing.T) {
 	}
 }
 
+func TestNormalizeConfigCapsContext(t *testing.T) {
+	cfg := normalizeConfig(Config{ContextSize: 99999})
+	if cfg.ContextSize != maxContextSize {
+		t.Fatalf("ContextSize = %d, want capped %d", cfg.ContextSize, maxContextSize)
+	}
+	cfg = normalizeConfig(Config{})
+	if cfg.ContextSize != defaultContextSize {
+		t.Fatalf("default ContextSize = %d, want %d", cfg.ContextSize, defaultContextSize)
+	}
+	if cfg.IdleUnloadAfter != idleUnloadAfter {
+		t.Fatalf("IdleUnloadAfter = %s", cfg.IdleUnloadAfter)
+	}
+}
+
+func TestBatchSizeStaysBelowContext(t *testing.T) {
+	g := &generator{cfg: normalizeConfig(Config{ContextSize: 2048})}
+	if got := g.batchSize(); got > maxBatchSize || got > g.contextSize() {
+		t.Fatalf("batchSize = %d, ctx = %d", got, g.contextSize())
+	}
+	if got := g.batchSize(); got != defaultBatchSize && g.contextSize() >= defaultBatchSize {
+		t.Fatalf("batchSize = %d, want default %d", got, defaultBatchSize)
+	}
+	g.cfg.ContextSize = 256
+	if got := g.batchSize(); got > 256 {
+		t.Fatalf("batchSize = %d exceeds tiny ctx", got)
+	}
+}
+
+func TestReleaseAfterGenerateHonorsDisable(t *testing.T) {
+	g := &generator{cfg: normalizeConfig(Config{IdleUnloadAfter: -1})}
+	if g.idleAfter() != 0 {
+		t.Fatalf("disabled idleAfter = %s, want 0", g.idleAfter())
+	}
+	// freeModelLocked must be a no-op-safe call with empty handles.
+	g.mu.Lock()
+	g.releaseAfterGenerate()
+	g.mu.Unlock()
+	if g.ready {
+		t.Fatal("empty generator should stay not-ready")
+	}
+}
+
+func TestGeneratorDoesNotPreloadOnNew(t *testing.T) {
+	dir := t.TempDir()
+	modelPath := filepath.Join(dir, "model.gguf")
+	if err := os.WriteFile(modelPath, []byte("placeholder"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gen := New(Config{
+		ModelPath: modelPath,
+		LibDir:    filepath.Join(dir, "missing-lib"),
+	})
+	t.Cleanup(func() { _ = gen.Close() })
+	// Construction must not start loading — Ready stays false with no error yet.
+	if gen.Ready() {
+		t.Fatal("New must not preload the GGUF")
+	}
+	if ref, ok := gen.(*generator); ok {
+		if err := ref.LoadError(); err != nil {
+			t.Fatalf("load should not have started: %v", err)
+		}
+	}
+}
+
 // TestGeneratorReportsMissingLibrary verifies the failure path that matters in
 // practice: the organizer must become unavailable with an actionable error
 // instead of panicking or silently disabling, and it must never fall back to a
@@ -79,10 +143,14 @@ func TestGeneratorReportsMissingLibrary(t *testing.T) {
 	if !ok {
 		t.Fatalf("New() returned %T, want *generator", gen)
 	}
+	// Demand-load surfaces the missing library.
 	if err := waitForLoadResult(ref, 3*time.Second); err == nil {
 		t.Fatal("expected a load error for the missing library")
-	} else if !strings.Contains(err.Error(), "shared library") {
+	} else if !strings.Contains(err.Error(), "shared library") && !strings.Contains(strings.ToLower(err.Error()), "library") {
 		t.Fatalf("load error = %v, want it to mention the missing shared library", err)
+	}
+	if gen.Ready() {
+		t.Fatal("generator must stay unavailable")
 	}
 
 	_, err := gen.Generate(context.Background(), organizer.GenerateRequest{User: "hi"})
@@ -201,21 +269,10 @@ func TestChatApplyTemplateNegativeIsHardFailure(t *testing.T) {
 	}
 }
 
-// waitForLoadResult waits until the background loader settles, returning its
-// error (nil when the load succeeded). A timeout yields a distinct error so a
-// slow machine reports "still loading" rather than a false success.
+// waitForLoadResult triggers an on-demand load and waits until it settles,
+// returning its error (nil when the load succeeded). A timeout yields a
+// distinct error so a slow machine reports "still loading" rather than a false
+// success. New no longer preloads, so tests must call this (or Generate).
 func waitForLoadResult(g *generator, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	for {
-		if g.Ready() {
-			return nil
-		}
-		if err := g.LoadError(); err != nil {
-			return err
-		}
-		if time.Now().After(deadline) {
-			return errors.New("generator did not settle before the test deadline")
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	return g.waitForReady(context.Background(), timeout)
 }

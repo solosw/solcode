@@ -188,18 +188,24 @@ func TestOrganizerMiniCPMLive(t *testing.T) {
 	gen := yzma.New(yzma.Config{
 		ModelPath:   model,
 		LibDir:      libDir,
-		ContextSize: 4096,
+		ContextSize: 16384,
 		// Offload all layers when CUDA backends are present (logged at load).
 		GPULayers: -1,
 	})
-	deadline := time.Now().Add(3 * time.Minute)
-	for !gen.Ready() && time.Now().Before(deadline) {
-		time.Sleep(500 * time.Millisecond)
+	t.Cleanup(func() { _ = gen.Close() })
+	// New no longer preloads; first Organize/Generate demand-loads. Kick a
+	// readiness probe so a missing lib/model fails the live test early.
+	probeCtx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	if _, err := gen.Generate(probeCtx, organizer.GenerateRequest{
+		User:      "ping",
+		MaxTokens: 1,
+	}); err != nil && !gen.Ready() {
+		t.Skipf("organizer model did not become ready: %v", err)
 	}
 	if !gen.Ready() {
 		t.Skip("organizer model did not become ready in time")
 	}
-	t.Cleanup(func() { _ = gen.Close() })
 
 	org := organizer.New(gen, organizer.Options{
 		MaxOutputTokens: 800,
