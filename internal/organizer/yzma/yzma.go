@@ -216,66 +216,22 @@ func (g *generator) ensureLoaded() {
 		return
 	}
 
-	useGPU := g.cfg.GPULayers != 0
-	if useGPU {
+	wantGPU := g.cfg.GPULayers != 0
+	if wantGPU {
 		// Windows CUDA cannot safely keep organizer + embedding GGUFs resident
 		// together; free the other GPU holder before loading this one.
 		ReleaseOtherGPUHolders(g)
 	}
 	LogNative("organizer_load_begin", map[string]any{
 		"model_path": modelPath,
-		"gpu":        useGPU,
+		"gpu":        wantGPU,
 		"gpu_layers": g.cfg.GPULayers,
 		"ctx":        g.contextSize(),
 	})
 
-	modelParams := llama.ModelDefaultParams()
-	// mmap keeps weights file-backed so the OS can share the same GGUF pages
-	// across multiple solcode workspaces instead of each process private-copying.
-	// Never mlock: that would pin RSS and defeat multi-workspace.
-	modelParams.LoadMode = llama.LoadModeMmap
-	modelParams.LazyMode = llama.LazyModeOn
-	if !useGPU {
-		modelParams.SetCPUOnly()
-	} else {
-		modelParams.NGpuLayers = int32(g.cfg.GPULayers)
-	}
-	model, err := llama.ModelLoadFromFile(modelPath, modelParams)
+	model, modelCtx, usedGPU, err := loadOrganizerModel(modelPath, g.cfg.GPULayers, g.contextSize(), g.batchSize(), g.cfg.Threads)
 	if err != nil {
-		LogNativeErr("organizer_load_model", err, map[string]any{"model_path": modelPath})
-		g.setLoadErr(fmt.Errorf("yzma: load GGUF %s: %w", modelPath, err))
-		return
-	}
-
-	ctxParams := llama.ContextDefaultParams()
-	contextSize := g.contextSize()
-	batchSize := g.batchSize()
-	ctxParams.NCtx = uint32(contextSize)
-	// Keep n_batch << n_ctx. Setting them equal was the main multi-GB RSS cause:
-	// llama.cpp scratch/KV scales with batch*ctx, not just model weights.
-	ctxParams.NBatch = uint32(batchSize)
-	if ctxParams.NUbatch == 0 || ctxParams.NUbatch > ctxParams.NBatch {
-		ctxParams.NUbatch = ctxParams.NBatch
-	}
-	// Q8 KV is ~2x smaller than F16 and is the main lever once n_ctx is 16k.
-	ctxParams.TypeK = llama.GGMLTypeQ8_0
-	ctxParams.TypeV = llama.GGMLTypeQ8_0
-	// Disable flash-attn/CUDA graphs on GPU: dual-model and graph-reuse paths
-	// have produced 0xC0000005 on Windows after successful writes.
-	if useGPU {
-		ctxParams.FlashAttentionType = llama.FlashAttentionTypeDisabled
-	} else {
-		ctxParams.FlashAttentionType = llama.FlashAttentionTypeAuto
-	}
-	if g.cfg.Threads > 0 {
-		ctxParams.NThreads = int32(g.cfg.Threads)
-		ctxParams.NThreadsBatch = int32(g.cfg.Threads)
-	}
-	modelCtx, err := llama.InitFromModel(model, ctxParams)
-	if err != nil {
-		LogNativeErr("organizer_init_ctx", err, map[string]any{"model_path": modelPath})
-		_ = llama.ModelFree(model)
-		g.setLoadErr(fmt.Errorf("yzma: create context: %w", err))
+		g.setLoadErr(err)
 		return
 	}
 
@@ -291,11 +247,76 @@ func (g *generator) ensureLoaded() {
 	g.vocab = llama.ModelGetVocab(model)
 	g.ready = true
 	g.lastUsed = time.Now()
-	if useGPU {
+	if usedGPU {
 		RegisterGPUHolder(g, g.unloadForPeer)
 	}
 	g.armIdleUnloadLocked()
-	LogNative("organizer_load_ok", map[string]any{"model_path": modelPath, "gpu": useGPU})
+	LogNative("organizer_load_ok", map[string]any{"model_path": modelPath, "gpu": usedGPU, "gpu_fallback": wantGPU && !usedGPU})
+}
+
+// loadOrganizerModel loads a GGUF + context. GPU is tried first when gpuLayers != 0;
+// InitFromModel / ModelLoad failures fall back to CPU-only so memory writes still work.
+func loadOrganizerModel(modelPath string, gpuLayers, contextSize, batchSize, threads int) (llama.Model, llama.Context, bool, error) {
+	tryGPU := gpuLayers != 0
+	model, modelCtx, err := initOrganizerHandles(modelPath, tryGPU, gpuLayers, contextSize, batchSize, threads)
+	if err == nil {
+		return model, modelCtx, tryGPU, nil
+	}
+	if !tryGPU {
+		return 0, 0, false, err
+	}
+	LogNativeErr("organizer_gpu_fail_fallback_cpu", err, map[string]any{"model_path": modelPath})
+	model, modelCtx, err = initOrganizerHandles(modelPath, false, 0, contextSize, batchSize, threads)
+	if err != nil {
+		return 0, 0, false, err
+	}
+	LogNative("organizer_cpu_fallback_ok", map[string]any{"model_path": modelPath})
+	return model, modelCtx, false, nil
+}
+
+func initOrganizerHandles(modelPath string, useGPU bool, gpuLayers, contextSize, batchSize, threads int) (llama.Model, llama.Context, error) {
+	modelParams := llama.ModelDefaultParams()
+	// mmap keeps weights file-backed so the OS can share the same GGUF pages
+	// across multiple solcode workspaces instead of each process private-copying.
+	modelParams.LoadMode = llama.LoadModeMmap
+	modelParams.LazyMode = llama.LazyModeOn
+	if !useGPU {
+		modelParams.SetCPUOnly()
+	} else {
+		modelParams.NGpuLayers = int32(gpuLayers)
+	}
+	model, err := llama.ModelLoadFromFile(modelPath, modelParams)
+	if err != nil {
+		LogNativeErr("organizer_load_model", err, map[string]any{"model_path": modelPath, "gpu": useGPU})
+		return 0, 0, fmt.Errorf("yzma: load GGUF %s: %w", modelPath, err)
+	}
+
+	ctxParams := llama.ContextDefaultParams()
+	ctxParams.NCtx = uint32(contextSize)
+	// Keep n_batch << n_ctx. Setting them equal was the main multi-GB RSS cause.
+	ctxParams.NBatch = uint32(batchSize)
+	if ctxParams.NUbatch == 0 || ctxParams.NUbatch > ctxParams.NBatch {
+		ctxParams.NUbatch = ctxParams.NBatch
+	}
+	ctxParams.TypeK = llama.GGMLTypeQ8_0
+	ctxParams.TypeV = llama.GGMLTypeQ8_0
+	// Disable flash-attn on GPU: dual-model / graph-reuse has crashed Windows.
+	if useGPU {
+		ctxParams.FlashAttentionType = llama.FlashAttentionTypeDisabled
+	} else {
+		ctxParams.FlashAttentionType = llama.FlashAttentionTypeAuto
+	}
+	if threads > 0 {
+		ctxParams.NThreads = int32(threads)
+		ctxParams.NThreadsBatch = int32(threads)
+	}
+	modelCtx, err := llama.InitFromModel(model, ctxParams)
+	if err != nil {
+		LogNativeErr("organizer_init_ctx", err, map[string]any{"model_path": modelPath, "gpu": useGPU})
+		_ = llama.ModelFree(model)
+		return 0, 0, fmt.Errorf("yzma: create context: %w", err)
+	}
+	return model, modelCtx, nil
 }
 
 func (g *generator) setLoadErr(err error) {

@@ -640,3 +640,18 @@ Turn memory: 还是不行，自己查看调试为什么
 - files: cmd/solcode/main.go, internal/app/organizer_bridge.go, internal/engine/tool_executor.go, internal/engine/tool_executor_test.go, internal/engine/tool_selector.go, internal/engine/tool_selector_test.go, internal/memory/conflict_judge.go, internal/memory/conflict_judge_test.go, internal/memory/core.go, internal/memory/embedding.go, internal/memory/governance.go, internal/memory/governance_test.go, internal/memory/graph.go, internal/memory/graph_test.go, internal/memory/manager.go, internal/memory/memory.go, internal/memory/retriever.go, internal/memory/sanitize.go, internal/memory/tool_trace.go, internal/organizer/grammar.go, internal/organizer/organizer.go, internal/organizer/organizer_test.go, internal/organizer/schema.go, internal/organizer/yzma/diag.go, internal/organizer/yzma/library.go, internal/organizer/yzma/live_speed_test.go, internal/organizer/yzma/live_test.go, internal/organizer/yzma/native_worker.go, internal/organizer/yzma/runtime_lock.go, internal/organizer/yzma/yzma.go, internal/organizer/yzma/yzma_test.go, internal/permission/plan.go, internal/session/compactor.go, internal/tool/read_memory.go, internal/tool/subagent.go, internal/tool/task.go, internal/workflowui/server.go, internal/workflowui/settings_features_persist_test.go, internal/workflowui/settings_features_test.go, internal/workflowui/settings_organizer_test.go
 
 Turn memory: 给我加日志，然后即使崩溃了agent也不能退出，错误写入日志里面
+
+## 2026-09-30 19:53:00 · session acp-1790490873374625600-1 · turn 80 · importance 0.35
+- keywords: todolist, todo-write
+- todos: 1|GPU InitFromModel fail → CPU retry|completed|valid|done; 2|Prefer worker JSON error over exit status|completed|valid|done; 3|Build/test and verify fallback logs|completed|valid|done; 4|Redeploy AppData solcode.exe after unlock|pending|valid|open
+
+Todolist update (4 items).
+
+## 2026-09-30 20:31:23 · session acp-1790490873374625600-1 · turn 81 · importance 0.40
+- keywords: todolist, todo-write, turn
+- files: _check_proc.py, _copy_bin.py, _t.py, _t_embed_api.py, cmd/solcode/main.go, examples/settings/settings.memory.organizer.example.json, internal/app/app.go, internal/app/memory_writer.go, internal/app/mode_switch_test.go, internal/app/organizer_bridge.go, internal/app/organizer_bridge_test.go, internal/app/session_memory.go, internal/app/session_memory_test.go, internal/app/turn_core_memory_test.go, internal/config/config.go, internal/config/organizer_test.go, internal/embedding/embedding.go, internal/embedding/embedding_test.go, internal/embedding/gguf.go, internal/embedding/local.go, internal/embedding/local_test.go, internal/engine/context_builder.go, internal/engine/context_builder_test.go, internal/engine/engine.go, internal/engine/mode_switch_context_test.go, internal/engine/prefix_share_test.go, internal/engine/tool_executor.go, internal/engine/tool_executor_test.go, internal/engine/tool_selector.go, internal/engine/tool_selector_test.go, internal/memory/conflict_judge.go, internal/memory/conflict_judge_test.go, internal/memory/core.go, internal/memory/embedding.go, internal/memory/governance.go, internal/memory/governance_test.go, internal/memory/graph.go, internal/memory/graph_test.go, internal/memory/manager.go, internal/memory/memory.go
+
+Turn memory: {"pid":3664,"role":"child","stage":"worker_start","time":"2026-09-30T19:20:39.4426225+08:00"}
+{"ctx":0,"gpu_layers":0,"model_path":"","op":"nope","pid":3664,"stage":"worker_request","time":"2026-09-30T19:20:39.4489366+08:00"}
+{"had_ctx":false,"had_model":false,"pid":3664,"stage":"organizer_free_begin","time":"2026-09-30T19:20:39.4547016+08:00"}
+{"pid":3664,"stage":"organizer_free_ok","time":"2026-…

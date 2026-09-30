@@ -137,6 +137,35 @@ func writeWorkerResp(out io.Writer, resp WorkerResponse) {
 	}
 }
 
+// workerChildEnv builds the child process environment so ggml/CUDA DLLs beside
+// llama.dll resolve even when the parent did not already have that dir on PATH.
+func workerChildEnv(libDir string) []string {
+	libDir = ResolveLibraryDir(libDir)
+	env := append([]string(nil), os.Environ()...)
+	env = append(env, workerEnvMarker+"=1")
+	if libDir == "" {
+		return env
+	}
+	env = append(env, "YZMA_LIB="+libDir)
+	pathUpdated := false
+	for i, kv := range env {
+		eq := strings.IndexByte(kv, '=')
+		if eq <= 0 {
+			continue
+		}
+		if !strings.EqualFold(kv[:eq], "Path") {
+			continue
+		}
+		env[i] = kv[:eq] + "=" + libDir + string(os.PathListSeparator) + kv[eq+1:]
+		pathUpdated = true
+		break
+	}
+	if !pathUpdated {
+		env = append(env, "Path="+libDir)
+	}
+	return env
+}
+
 func workerGenerate(ctx context.Context, req WorkerRequest) (string, error) {
 	gen := New(Config{
 		ModelPath:       req.ModelPath,
@@ -157,55 +186,28 @@ func workerGenerate(ctx context.Context, req WorkerRequest) (string, error) {
 }
 
 func workerEmbed(ctx context.Context, req WorkerRequest) ([]float32, error) {
-	LogNative("worker_embed_load", map[string]any{"model": req.ModelPath})
+	_ = ctx
+	LogNative("worker_embed_load", map[string]any{"model": req.ModelPath, "gpu_layers": req.GPULayers})
 	if err := EnsureRuntime(req.LibDir); err != nil {
 		return nil, err
 	}
-	useGPU := req.GPULayers != 0
-	modelParams := llama.ModelDefaultParams()
-	modelParams.LoadMode = llama.LoadModeMmap
-	modelParams.LazyMode = llama.LazyModeOn
-	if !useGPU {
-		modelParams.SetCPUOnly()
-	} else {
-		modelParams.NGpuLayers = int32(req.GPULayers)
-	}
-	LockRuntime()
-	defer UnlockRuntime()
-	model, err := llama.ModelLoadFromFile(req.ModelPath, modelParams)
-	if err != nil {
-		return nil, fmt.Errorf("worker embed load: %w", err)
-	}
-	defer func() { _ = llama.ModelFree(model) }()
-
 	ctxSz := req.ContextSize
 	if ctxSz <= 0 {
 		ctxSz = 2048
 	}
-	ctxParams := llama.ContextDefaultParams()
-	ctxParams.NCtx = uint32(ctxSz)
-	batch := uint32(512)
-	if batch > ctxParams.NCtx {
-		batch = ctxParams.NCtx
-	}
-	ctxParams.NBatch = batch
-	ctxParams.NUbatch = batch
-	ctxParams.Embeddings = 1
-	ctxParams.PoolingType = llama.PoolingTypeMean
-	ctxParams.TypeK = llama.GGMLTypeQ8_0
-	ctxParams.TypeV = llama.GGMLTypeQ8_0
-	if useGPU {
-		ctxParams.FlashAttentionType = llama.FlashAttentionTypeDisabled
-	}
-	if req.Threads > 0 {
-		ctxParams.NThreads = int32(req.Threads)
-		ctxParams.NThreadsBatch = int32(req.Threads)
-	}
-	modelCtx, err := llama.InitFromModel(model, ctxParams)
+	LockRuntime()
+	defer UnlockRuntime()
+
+	// Reuse the same GPU→CPU fallback path as in-process embedding.
+	model, modelCtx, usedGPU, err := loadEmbeddingModelForWorker(req.ModelPath, req.GPULayers, ctxSz, req.Threads)
 	if err != nil {
-		return nil, fmt.Errorf("worker embed context: %w", err)
+		return nil, err
 	}
-	defer func() { _ = llama.Free(modelCtx) }()
+	defer func() {
+		_ = llama.Free(modelCtx)
+		_ = llama.ModelFree(model)
+	}()
+	LogNative("worker_embed_loaded", map[string]any{"gpu": usedGPU, "n_embd": llama.ModelNEmbd(model)})
 	llama.SetEmbeddings(modelCtx, true)
 	vocab := llama.ModelGetVocab(model)
 	nEmbd := llama.ModelNEmbd(model)
@@ -244,7 +246,6 @@ func workerEmbed(ctx context.Context, req WorkerRequest) ([]float32, error) {
 	if req.Dimensions > 0 && req.Dimensions < len(out) {
 		out = out[:req.Dimensions]
 	}
-	// L2 normalize (match embedding package behaviour for unit vectors).
 	var sum float64
 	for _, x := range out {
 		sum += float64(x) * float64(x)
@@ -256,6 +257,66 @@ func workerEmbed(ctx context.Context, req WorkerRequest) ([]float32, error) {
 		}
 	}
 	return out, nil
+}
+
+// loadEmbeddingModelForWorker mirrors embedding.gguf GPU→CPU fallback without
+// importing the embedding package (would create a cycle through yzma).
+func loadEmbeddingModelForWorker(modelPath string, gpuLayers, contextSz, threads int) (llama.Model, llama.Context, bool, error) {
+	tryGPU := gpuLayers != 0
+	model, modelCtx, err := initWorkerEmbedHandles(modelPath, tryGPU, gpuLayers, contextSz, threads)
+	if err == nil {
+		return model, modelCtx, tryGPU, nil
+	}
+	if !tryGPU {
+		return 0, 0, false, err
+	}
+	LogNativeErr("worker_embed_gpu_fail_fallback_cpu", err, map[string]any{"model_path": modelPath})
+	model, modelCtx, err = initWorkerEmbedHandles(modelPath, false, 0, contextSz, threads)
+	if err != nil {
+		return 0, 0, false, err
+	}
+	LogNative("worker_embed_cpu_fallback_ok", map[string]any{"model_path": modelPath})
+	return model, modelCtx, false, nil
+}
+
+func initWorkerEmbedHandles(modelPath string, useGPU bool, gpuLayers, contextSz, threads int) (llama.Model, llama.Context, error) {
+	modelParams := llama.ModelDefaultParams()
+	modelParams.LoadMode = llama.LoadModeMmap
+	modelParams.LazyMode = llama.LazyModeOn
+	if !useGPU {
+		modelParams.SetCPUOnly()
+	} else {
+		modelParams.NGpuLayers = int32(gpuLayers)
+	}
+	model, err := llama.ModelLoadFromFile(modelPath, modelParams)
+	if err != nil {
+		return 0, 0, fmt.Errorf("worker embed load: %w", err)
+	}
+	ctxParams := llama.ContextDefaultParams()
+	ctxParams.NCtx = uint32(contextSz)
+	batch := uint32(512)
+	if batch > ctxParams.NCtx {
+		batch = ctxParams.NCtx
+	}
+	ctxParams.NBatch = batch
+	ctxParams.NUbatch = batch
+	ctxParams.Embeddings = 1
+	ctxParams.PoolingType = llama.PoolingTypeMean
+	ctxParams.TypeK = llama.GGMLTypeQ8_0
+	ctxParams.TypeV = llama.GGMLTypeQ8_0
+	if useGPU {
+		ctxParams.FlashAttentionType = llama.FlashAttentionTypeDisabled
+	}
+	if threads > 0 {
+		ctxParams.NThreads = int32(threads)
+		ctxParams.NThreadsBatch = int32(threads)
+	}
+	modelCtx, err := llama.InitFromModel(model, ctxParams)
+	if err != nil {
+		_ = llama.ModelFree(model)
+		return 0, 0, fmt.Errorf("worker embed context: %w", err)
+	}
+	return model, modelCtx, nil
 }
 
 // CallNativeWorker spawns this executable as a -native-worker child and runs req.
@@ -287,7 +348,7 @@ func CallNativeWorker(ctx context.Context, req WorkerRequest) (WorkerResponse, e
 	}
 
 	cmd := exec.CommandContext(cmdCtx, exe, "-native-worker")
-	cmd.Env = append(os.Environ(), workerEnvMarker+"=1")
+	cmd.Env = workerChildEnv(req.LibDir)
 	cmd.Stdin = bytes.NewReader(body)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -314,25 +375,31 @@ func CallNativeWorker(ctx context.Context, req WorkerRequest) (WorkerResponse, e
 	}
 
 	if runErr != nil {
-		// Windows STATUS_ACCESS_VIOLATION is 0xC0000005 → unsigned 3221225473.
-		msg := fmt.Sprintf("native worker exited: %v (exit=%d)", runErr, exitCode)
-		if exitCode == -1073741819 || exitCode == 3221225473 { // 0xC0000005
-			msg = fmt.Sprintf("native worker access violation 0xC0000005 (exit=%d); agent continues", exitCode)
-		}
-		if stderr.Len() > 0 {
-			msg += "; stderr=" + truncateDiag(stderr.String(), 400)
-		}
-		if resp.Error == "" {
-			resp.Error = msg
+		// Prefer the child's JSON error (e.g. "failed to initialize model") over
+		// a bare "exit status 1" so compact.log / callers see the real cause.
+		detail := strings.TrimSpace(resp.Error)
+		if detail == "" {
+			detail = fmt.Sprintf("native worker exited: %v (exit=%d)", runErr, exitCode)
+			if exitCode == -1073741819 || exitCode == 3221225473 { // 0xC0000005
+				detail = fmt.Sprintf("native worker access violation 0xC0000005 (exit=%d); agent continues", exitCode)
+			}
+			if stderr.Len() > 0 {
+				detail += "; stderr=" + truncateDiag(stderr.String(), 400)
+			}
+		} else if exitCode == -1073741819 || exitCode == 3221225473 {
+			detail = fmt.Sprintf("native worker access violation 0xC0000005 (exit=%d); %s", exitCode, detail)
 		}
 		resp.OK = false
 		resp.Exit = exitCode
-		LogNativeErr("worker_crash_or_fail", fmt.Errorf("%s", msg), map[string]any{
+		if resp.Error == "" {
+			resp.Error = detail
+		}
+		LogNativeErr("worker_crash_or_fail", fmt.Errorf("%s", detail), map[string]any{
 			"exit":   exitCode,
 			"op":     req.Op,
 			"stderr": truncateDiag(stderr.String(), 400),
 		})
-		return resp, fmt.Errorf("%s", msg)
+		return resp, fmt.Errorf("%s", detail)
 	}
 
 	if !resp.OK {
