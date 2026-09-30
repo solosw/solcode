@@ -193,7 +193,33 @@ func (a *App) scheduleOrganizer(ctx context.Context, current *session.Session, i
 			delete(a.organizer.inflight, key)
 			a.organizer.mu.Unlock()
 		}()
+		// Go panics must never kill the agent process. Native 0xC0000005 still
+		// needs the isolated -native-worker path; recover only covers Go panics.
+		defer func() {
+			if rec := recover(); rec != nil {
+				msg := fmt.Sprintf("organizer panic: %v", rec)
+				yzma.LogNative("organizer_panic", map[string]any{
+					"session_id": sessionID,
+					"trigger":    trigger,
+					"error":      msg,
+				})
+				a.recordCompactEvent("organizer_failed", map[string]any{
+					"session_id": sessionID,
+					"trigger":    trigger,
+					"error":      msg,
+					"recovered":  true,
+				})
+			}
+		}()
+		yzma.LogNative("organizer_run_begin", map[string]any{
+			"session_id": sessionID,
+			"trigger":    trigger,
+		})
 		if err := a.applyOrganizerResult(runCtx, runInput); err != nil {
+			yzma.LogNativeErr("organizer_run_fail", err, map[string]any{
+				"session_id": sessionID,
+				"trigger":    trigger,
+			})
 			a.recordCompactEvent("organizer_failed", map[string]any{
 				"session_id": sessionID,
 				"trigger":    trigger,
@@ -201,6 +227,10 @@ func (a *App) scheduleOrganizer(ctx context.Context, current *session.Session, i
 			})
 			return
 		}
+		yzma.LogNative("organizer_run_ok", map[string]any{
+			"session_id": sessionID,
+			"trigger":    trigger,
+		})
 	}
 
 	// Local GGUF inference can take minutes; do not block the agent turn.
@@ -260,10 +290,17 @@ func (a *App) applyOrganizerResult(ctx context.Context, input organizer.Input) e
 
 	sessionID := strings.TrimSpace(input.SessionID)
 	workDir := strings.TrimSpace(input.WorkDir)
+	yzma.LogNative("organize_generate_begin", map[string]any{"session_id": sessionID})
 	result, err := a.organizer.org.Organize(ctx, input)
 	if err != nil {
+		yzma.LogNativeErr("organize_generate_fail", err, map[string]any{"session_id": sessionID})
 		return err
 	}
+	yzma.LogNative("organize_generate_ok", map[string]any{
+		"session_id": sessionID,
+		"candidates": len(result.Candidates),
+		"elapsed_ms": result.Elapsed.Milliseconds(),
+	})
 
 	turn, files := a.checkpointTurnAndFiles(sessionID, workDir)
 	if len(input.ChangedFiles) > 0 {
@@ -279,7 +316,12 @@ func (a *App) applyOrganizerResult(ctx context.Context, input organizer.Input) e
 	storedIDs := make([]string, 0, len(result.Candidates))
 	stored := 0
 	if a.MemoryManager != nil && a.Config.Memory.Enabled {
-		for _, candidate := range result.Candidates {
+		for i, candidate := range result.Candidates {
+			yzma.LogNative("organize_store_begin", map[string]any{
+				"session_id": sessionID,
+				"index":      i,
+				"kind":       candidate.Kind,
+			})
 			outcome, err := a.MemoryManager.RememberOrganizerCandidate(ctx, memory.OrganizerCandidateInput{
 				Text:             candidate.Text,
 				Kind:             memory.Kind(candidate.Kind),
@@ -296,7 +338,19 @@ func (a *App) applyOrganizerResult(ctx context.Context, input organizer.Input) e
 				Supersedes:       candidate.Supersedes,
 			})
 			if err != nil {
-				return err
+				// One candidate failure must not abort the rest or the agent turn.
+				// Indexing may involve GGUF embed; native crashes are isolated in
+				// the worker, but Go errors still get logged here.
+				yzma.LogNativeErr("organize_store_fail", err, map[string]any{
+					"session_id": sessionID,
+					"index":      i,
+				})
+				a.recordCompactEvent("organizer_candidate_failed", map[string]any{
+					"session_id": sessionID,
+					"index":      i,
+					"error":      err.Error(),
+				})
+				continue
 			}
 			if outcome.Stored {
 				stored++
@@ -304,6 +358,13 @@ func (a *App) applyOrganizerResult(ctx context.Context, input organizer.Input) e
 					storedIDs = append(storedIDs, id)
 				}
 			}
+			yzma.LogNative("organize_store_ok", map[string]any{
+				"session_id": sessionID,
+				"index":      i,
+				"stored":     outcome.Stored,
+				"merged":     outcome.Merged,
+				"id":         outcome.Item.ID,
+			})
 		}
 	}
 

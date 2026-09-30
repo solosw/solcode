@@ -216,19 +216,33 @@ func (g *generator) ensureLoaded() {
 		return
 	}
 
+	useGPU := g.cfg.GPULayers != 0
+	if useGPU {
+		// Windows CUDA cannot safely keep organizer + embedding GGUFs resident
+		// together; free the other GPU holder before loading this one.
+		ReleaseOtherGPUHolders(g)
+	}
+	LogNative("organizer_load_begin", map[string]any{
+		"model_path": modelPath,
+		"gpu":        useGPU,
+		"gpu_layers": g.cfg.GPULayers,
+		"ctx":        g.contextSize(),
+	})
+
 	modelParams := llama.ModelDefaultParams()
 	// mmap keeps weights file-backed so the OS can share the same GGUF pages
 	// across multiple solcode workspaces instead of each process private-copying.
 	// Never mlock: that would pin RSS and defeat multi-workspace.
 	modelParams.LoadMode = llama.LoadModeMmap
 	modelParams.LazyMode = llama.LazyModeOn
-	if g.cfg.GPULayers == 0 {
+	if !useGPU {
 		modelParams.SetCPUOnly()
 	} else {
 		modelParams.NGpuLayers = int32(g.cfg.GPULayers)
 	}
 	model, err := llama.ModelLoadFromFile(modelPath, modelParams)
 	if err != nil {
+		LogNativeErr("organizer_load_model", err, map[string]any{"model_path": modelPath})
 		g.setLoadErr(fmt.Errorf("yzma: load GGUF %s: %w", modelPath, err))
 		return
 	}
@@ -246,13 +260,20 @@ func (g *generator) ensureLoaded() {
 	// Q8 KV is ~2x smaller than F16 and is the main lever once n_ctx is 16k.
 	ctxParams.TypeK = llama.GGMLTypeQ8_0
 	ctxParams.TypeV = llama.GGMLTypeQ8_0
-	ctxParams.FlashAttentionType = llama.FlashAttentionTypeAuto
+	// Disable flash-attn/CUDA graphs on GPU: dual-model and graph-reuse paths
+	// have produced 0xC0000005 on Windows after successful writes.
+	if useGPU {
+		ctxParams.FlashAttentionType = llama.FlashAttentionTypeDisabled
+	} else {
+		ctxParams.FlashAttentionType = llama.FlashAttentionTypeAuto
+	}
 	if g.cfg.Threads > 0 {
 		ctxParams.NThreads = int32(g.cfg.Threads)
 		ctxParams.NThreadsBatch = int32(g.cfg.Threads)
 	}
 	modelCtx, err := llama.InitFromModel(model, ctxParams)
 	if err != nil {
+		LogNativeErr("organizer_init_ctx", err, map[string]any{"model_path": modelPath})
 		_ = llama.ModelFree(model)
 		g.setLoadErr(fmt.Errorf("yzma: create context: %w", err))
 		return
@@ -270,7 +291,11 @@ func (g *generator) ensureLoaded() {
 	g.vocab = llama.ModelGetVocab(model)
 	g.ready = true
 	g.lastUsed = time.Now()
+	if useGPU {
+		RegisterGPUHolder(g, g.unloadForPeer)
+	}
 	g.armIdleUnloadLocked()
+	LogNative("organizer_load_ok", map[string]any{"model_path": modelPath, "gpu": useGPU})
 }
 
 func (g *generator) setLoadErr(err error) {
@@ -312,12 +337,30 @@ func (g *generator) freeModelLocked() {
 	g.ready = false
 	// Allow a later ensureLoaded to try again after free.
 	g.loadErr = nil
+	UnregisterGPUHolder(g)
+	LogNative("organizer_free_begin", map[string]any{"had_ctx": modelCtx != 0, "had_model": model != 0})
 	if modelCtx != 0 {
 		_ = llama.Free(modelCtx)
 	}
 	if model != 0 {
 		_ = llama.ModelFree(model)
 	}
+	LogNative("organizer_free_ok", nil)
+}
+
+// unloadForPeer frees this generator when another GPU model is about to load.
+// runtimeMu is already held by the peer; only take g.mu here.
+func (g *generator) unloadForPeer() {
+	if g == nil {
+		return
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if !g.ready || g.closed {
+		UnregisterGPUHolder(g)
+		return
+	}
+	g.freeModelLocked()
 }
 
 func (g *generator) unloadIfIdle() {
@@ -364,6 +407,10 @@ func (g *generator) LoadError() error {
 // GGUF embedding also share one CUDA backend in-process, so every native call
 // serializes on runtimeMu. The GGUF loads on demand and stays resident until the
 // idle timer unloads it.
+//
+// On Windows with GPU layers, Generate is delegated to an isolated -native-worker
+// child process so a CUDA access violation (0xC0000005) cannot tear down the
+// agent. Failures return as errors and are logged to native_gpu.log.
 func (g *generator) Generate(ctx context.Context, req organizer.GenerateRequest) (string, error) {
 	if g == nil {
 		return "", organizer.ErrUnavailable
@@ -371,6 +418,45 @@ func (g *generator) Generate(ctx context.Context, req organizer.GenerateRequest)
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
+	if ShouldIsolateNative(g.cfg.GPULayers) {
+		return g.generateIsolated(ctx, req)
+	}
+	return g.generateInProcess(ctx, req)
+}
+
+func (g *generator) generateIsolated(ctx context.Context, req organizer.GenerateRequest) (string, error) {
+	LogNative("generate_isolated_begin", map[string]any{
+		"model_path": g.cfg.ModelPath,
+		"gpu_layers": g.cfg.GPULayers,
+		"ctx":        g.contextSize(),
+	})
+	resp, err := CallNativeWorker(ctx, WorkerRequest{
+		Op:          "generate",
+		ModelPath:   g.cfg.ModelPath,
+		LibDir:      ResolveLibraryDir(g.cfg.LibDir),
+		ContextSize: g.contextSize(),
+		Threads:     g.cfg.Threads,
+		GPULayers:   g.cfg.GPULayers,
+		System:      req.System,
+		User:        req.User,
+		Grammar:     req.Grammar,
+		MaxTokens:   req.MaxTokens,
+		Temperature: req.Temperature,
+	})
+	if err != nil {
+		LogNativeErr("generate_isolated_fail", err, map[string]any{"exit": resp.Exit})
+		return "", fmt.Errorf("%w: isolated generate: %v", organizer.ErrUnavailable, err)
+	}
+	LogNative("generate_isolated_ok", map[string]any{"chars": len(resp.Text)})
+	return resp.Text, nil
+}
+
+func (g *generator) generateInProcess(ctx context.Context, req organizer.GenerateRequest) (string, error) {
+	LogNative("generate_begin", map[string]any{
+		"model_path": g.cfg.ModelPath,
+		"gpu_layers": g.cfg.GPULayers,
+		"isolated":   false,
+	})
 	// Load outside the decode section so concurrent callers share one attempt.
 	g.ensureLoaded()
 
@@ -473,6 +559,7 @@ func (g *generator) Generate(ctx context.Context, req organizer.GenerateRequest)
 			return out.String(), err
 		}
 		if _, err := llama.Decode(g.ctx, batch); err != nil {
+			LogNativeErr("organizer_decode", err, map[string]any{"decoded": decoded})
 			return out.String(), fmt.Errorf("yzma: decode: %w", err)
 		}
 		next := llama.SamplerSample(smpl, g.ctx, -1)
@@ -490,6 +577,7 @@ func (g *generator) Generate(ctx context.Context, req organizer.GenerateRequest)
 			break
 		}
 	}
+	LogNative("generate_ok", map[string]any{"chars": out.Len()})
 	return out.String(), nil
 }
 
