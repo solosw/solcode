@@ -59,17 +59,17 @@ const (
 type generator struct {
 	cfg Config
 
-	mu         sync.Mutex
-	model      llama.Model
-	ctx        llama.Context
-	vocab      llama.Vocab
-	ready      bool
-	loadErr    error
-	closed     bool
-	loading    bool
-	lastUsed   time.Time
+	mu          sync.Mutex
+	model       llama.Model
+	ctx         llama.Context
+	vocab       llama.Vocab
+	ready       bool
+	loadErr     error
+	closed      bool
+	loading     bool
+	lastUsed    time.Time
 	unloadTimer *time.Timer
-	loadDone   chan struct{} // closed when a load attempt finishes; recreated per load
+	loadDone    chan struct{} // closed when a load attempt finishes; recreated per load
 }
 
 // New builds a generator without loading the GGUF yet.
@@ -331,19 +331,13 @@ func (g *generator) unloadIfIdle() {
 	g.freeModelLocked()
 }
 
-// releaseAfterGenerate drops the model as soon as one completion finishes.
-// Organizer runs are rare relative to chat turns; keeping a 16k KV + GGUF
-// mapped in every open workspace is what OOM'd multi-solcode setups.
-// IdleUnloadAfter < 0 disables this and keeps the model resident.
+// releaseAfterGenerate schedules the idle unload instead of freeing native
+// CUDA resources synchronously on the inference return path.
 func (g *generator) releaseAfterGenerate() {
-	if g == nil {
+	if g == nil || g.idleAfter() <= 0 {
 		return
 	}
-	if g.idleAfter() <= 0 {
-		// Explicitly disabled: keep resident and do not arm a timer.
-		return
-	}
-	g.freeModelLocked()
+	g.armIdleUnloadLocked()
 }
 
 // LoadError returns the deferred load failure, if any.
