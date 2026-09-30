@@ -347,7 +347,7 @@ func TestPostSettingsKeepsJevAPIKeyWhenOmitted(t *testing.T) {
 func TestSettingsExposeEmbedding(t *testing.T) {
 	cfg := config.Default()
 	cfg.WorkDir = t.TempDir()
-	cfg.Embedding = config.EmbeddingConfig{
+	cfg.Memory.Embedding = config.EmbeddingConfig{
 		Enabled:    true,
 		Type:       config.EmbeddingBackendAPI,
 		BaseURL:    "https://api.openai.com/v1",
@@ -410,43 +410,50 @@ func TestPostSettingsAppliesEmbeddingAPIAndLocal(t *testing.T) {
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d", res.StatusCode)
 	}
-	if !applied.Embedding.Enabled || applied.Embedding.Type != config.EmbeddingBackendAPI {
-		t.Fatalf("embedding = %+v", applied.Embedding)
+	if !applied.Memory.Embedding.Enabled || applied.Memory.Embedding.Type != config.EmbeddingBackendAPI {
+		t.Fatalf("embedding = %+v", applied.Memory.Embedding)
 	}
-	if applied.Embedding.Model != "text-embedding-3-small" || applied.Embedding.APIKey != "emb_key" {
-		t.Fatalf("embedding = %+v", applied.Embedding)
+	if applied.Memory.Embedding.Model != "text-embedding-3-small" || applied.Memory.Embedding.APIKey != "emb_key" {
+		t.Fatalf("embedding = %+v", applied.Memory.Embedding)
 	}
-	if applied.Embedding.TimeoutSec != 40 || applied.Embedding.Dimensions != 1024 {
-		t.Fatalf("embedding = %+v", applied.Embedding)
+	if applied.Memory.Embedding.TimeoutSec != 40 || applied.Memory.Embedding.Dimensions != 1024 {
+		t.Fatalf("embedding = %+v", applied.Memory.Embedding)
 	}
 
 	res2 := postSettings(t, url, map[string]any{
-		"embedding_type":  "local",
-		"embedding_model": "local-emb",
+		"embedding_type":       "gguf",
+		"embedding_model":      "embeddinggemma-300m",
+		"embedding_model_path": "~/.solcode/embeddings/embeddinggemma-300m_Q4_k_m.gguf",
+		"embedding_gpu_layers": -1,
 	})
 	defer res2.Body.Close()
 	if res2.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d", res2.StatusCode)
 	}
-	if applied.Embedding.Type != config.EmbeddingBackendLocal {
-		t.Fatalf("type = %q", applied.Embedding.Type)
+	if applied.Memory.Embedding.Type != config.EmbeddingBackendGGUF {
+		t.Fatalf("type = %q", applied.Memory.Embedding.Type)
 	}
-	if applied.Embedding.Model != "local-emb" {
-		t.Fatalf("model = %q", applied.Embedding.Model)
+	if applied.Memory.Embedding.Model != "embeddinggemma-300m" {
+		t.Fatalf("model = %q", applied.Memory.Embedding.Model)
 	}
-	// Custom dirs from clients are ignored; normalize forces the fixed path.
+	if applied.Memory.Embedding.GPULayers != -1 {
+		t.Fatalf("gpu_layers = %d", applied.Memory.Embedding.GPULayers)
+	}
 	if err := applied.Normalize(); err != nil {
 		t.Fatal(err)
 	}
-	if applied.Embedding.Dir != config.DefaultEmbeddingDir(applied.WorkDir) {
-		t.Fatalf("dir = %q", applied.Embedding.Dir)
+	if applied.Memory.Embedding.Dir != config.DefaultEmbeddingDir(applied.WorkDir) {
+		t.Fatalf("dir = %q", applied.Memory.Embedding.Dir)
+	}
+	if !strings.Contains(filepath.ToSlash(applied.Memory.Embedding.ModelPath), "embeddinggemma-300m_Q4_k_m.gguf") {
+		t.Fatalf("model_path = %q", applied.Memory.Embedding.ModelPath)
 	}
 }
 
 func TestPostSettingsDoesNotResetUnmentionedEmbeddingFields(t *testing.T) {
 	cfg := config.Default()
 	cfg.WorkDir = t.TempDir()
-	cfg.Embedding = config.EmbeddingConfig{
+	cfg.Memory.Embedding = config.EmbeddingConfig{
 		Enabled:    true,
 		Type:       config.EmbeddingBackendAPI,
 		APIKey:     "keep-emb",
@@ -462,14 +469,14 @@ func TestPostSettingsDoesNotResetUnmentionedEmbeddingFields(t *testing.T) {
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d", res.StatusCode)
 	}
-	if applied.Embedding.Enabled {
+	if applied.Memory.Embedding.Enabled {
 		t.Fatal("embedding should be disabled")
 	}
-	if applied.Embedding.APIKey != "keep-emb" || applied.Embedding.Model != "text-embedding-3-small" {
-		t.Fatalf("embedding wiped: %+v", applied.Embedding)
+	if applied.Memory.Embedding.APIKey != "keep-emb" || applied.Memory.Embedding.Model != "text-embedding-3-small" {
+		t.Fatalf("embedding wiped: %+v", applied.Memory.Embedding)
 	}
-	if applied.Embedding.TimeoutSec != 30 || applied.Embedding.Dimensions != 512 {
-		t.Fatalf("embedding = %+v", applied.Embedding)
+	if applied.Memory.Embedding.TimeoutSec != 30 || applied.Memory.Embedding.Dimensions != 512 {
+		t.Fatalf("embedding = %+v", applied.Memory.Embedding)
 	}
 }
 

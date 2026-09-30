@@ -29,20 +29,14 @@ type Options struct {
 	Config config.EmbeddingConfig
 	// ModelDir overrides shared/project model discovery for local backends.
 	ModelDir string
-	// ORTLib overrides the default ~/.solcode/lib onnxruntime shared library.
-	ORTLib string
-	// GPU enables CUDA EP for the local ORT session (shared with Jev via ort{}).
-	GPU bool
-	// CudaDeviceID selects the CUDA device when GPU is true (default 0).
-	CudaDeviceID int
 }
 
-// NewProvider builds an API or local embedding backend from cfg.
+// NewProvider builds an API or GGUF embedding backend from cfg.
 func NewProvider(opts Options) (Provider, error) {
 	cfg := opts.Config
 	switch strings.ToLower(strings.TrimSpace(cfg.Type)) {
-	case config.EmbeddingBackendLocal:
-		return newLocalProvider(opts)
+	case config.EmbeddingBackendGGUF, config.EmbeddingBackendLocal:
+		return newGGUFProvider(opts)
 	default:
 		return newAPIProvider(opts)
 	}

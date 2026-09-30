@@ -160,15 +160,13 @@ type Config struct {
 	ComputerUse ComputerUseConfig `json:"computer_use,omitempty"`
 	// Jev configures the TypeSafe System One decision layer. Off by default.
 	Jev JevConfig `json:"jev,omitempty"`
-	// ORT is shared ONNX Runtime settings for local Jev and local embeddings.
-	// Default is CPU. gpu=true enables the CUDA execution provider (manual GPU
-	// ORT package required under ~/.solcode/lib or jev.ort_lib).
+	// ORT is shared ONNX Runtime settings for local Jev (CUDA EP optional).
+	// Embedding no longer uses ORT; local vectors go through memory.embedding
+	// with llama.cpp / GGUF.
 	ORT ORTConfig `json:"ort,omitempty"`
-	// Embedding configures optional vector embeddings for semantic search.
-	// Off by default. Project index lives under ProjectStateDir/embeddings
-	// (sibling of knowledge.db); shared ONNX weights fall back to
-	// ~/.solcode/embeddings. api uses an OpenAI-compatible embeddings endpoint.
-	Embedding EmbeddingConfig `json:"embedding,omitempty"`
+	// DeprecatedEmbedding is the legacy top-level embedding block.
+	// Normalize migrates it into Memory.Embedding when the nested field is empty.
+	DeprecatedEmbedding EmbeddingConfig `json:"embedding,omitempty"`
 
 	Provider  string           `json:"provider,omitempty"`
 	Providers []ProviderConfig `json:"providers,omitempty"`
@@ -181,7 +179,7 @@ type ComputerUseConfig struct {
 	Enabled bool `json:"enabled,omitempty"`
 }
 
-// ORTConfig is shared ONNX Runtime settings for local Jev and local embeddings.
+// ORTConfig is shared ONNX Runtime settings for local Jev only.
 //
 // Default is CPU (gpu=false). Enabling GPU requires a CUDA-capable ORT shared
 // library (not the CPU package auto-installed into ~/.solcode/lib).
@@ -193,14 +191,16 @@ type ORTConfig struct {
 	CudaDeviceID int `json:"cuda_device_id,omitempty"`
 }
 
-// EmbeddingBackendAPI / EmbeddingBackendLocal are allowed EmbeddingConfig.Type values.
+// Embedding backend type values for Memory.Embedding.Type.
 const (
-	EmbeddingBackendAPI   = "api"
+	EmbeddingBackendAPI  = "api"
+	EmbeddingBackendGGUF = "gguf"
+	// EmbeddingBackendLocal is accepted as an alias of gguf during migration.
 	EmbeddingBackendLocal = "local"
 )
 
-// DefaultEmbeddingDir is the project-scoped embedding root (chromem index +
-// optional project-local ONNX), sibling of knowledge.db under ProjectStateDir.
+// DefaultEmbeddingDir is the project-scoped embedding root (chromem index),
+// sibling of knowledge.db under ProjectStateDir.
 func DefaultEmbeddingDir(workDir string) string {
 	if projectSubDir(workDir) != "" {
 		return filepath.Join(ProjectStateDir(workDir), "embeddings")
@@ -208,23 +208,23 @@ func DefaultEmbeddingDir(workDir string) string {
 	return filepath.Join(UserStateDir(), "embeddings")
 }
 
-// SharedEmbeddingModelDir is the user-level ONNX/tokenizer cache
-// (~/.solcode/embeddings). Local backends look here when the project Dir
-// does not contain a model.
+// SharedEmbeddingModelDir is the user-level embedding model cache
+// (~/.solcode/embeddings). GGUF backends look here for EmbeddingGemma weights.
 func SharedEmbeddingModelDir() string {
 	return filepath.Join(UserConfigDir(), "embeddings")
 }
 
 // EmbeddingConfig configures optional vector embeddings for semantic search.
 //
-// type=api talks to an OpenAI-compatible /v1/embeddings endpoint.
-// type=local uses ONNX under Dir (project) with fallback to SharedEmbeddingModelDir.
-// Dir is always normalized to DefaultEmbeddingDir(WorkDir); custom values are ignored.
+// Nested under memory{} as memory.embedding. type=api talks to an
+// OpenAI-compatible /v1/embeddings endpoint. type=gguf uses llama.cpp with a
+// local EmbeddingGemma GGUF (legacy type=local is remapped to gguf).
+// Dir is always normalized to DefaultEmbeddingDir(WorkDir).
 type EmbeddingConfig struct {
 	// Enabled turns on embeddings. Activation still depends on Type:
-	// api needs a resolvable APIKey and model; local needs a model id.
+	// api needs a resolvable APIKey and model; gguf needs a GGUF path/model id.
 	Enabled bool `json:"enabled,omitempty"`
-	// Type selects the backend: "api" (OpenAI-compatible, default) or "local".
+	// Type selects the backend: "api" (OpenAI-compatible) or "gguf" (llama.cpp).
 	Type string `json:"type,omitempty"`
 	// BaseURL is the API origin (default https://api.openai.com/v1). api only.
 	BaseURL string `json:"base_url,omitempty"`
@@ -234,16 +234,28 @@ type EmbeddingConfig struct {
 	APIKey string `json:"api_key,omitempty"`
 	// APIKeyEnv names an env var holding APIKey (default OPENAI_API_KEY).
 	APIKeyEnv string `json:"api_key_env,omitempty"`
-	// Model is the embedding model id (e.g. text-embedding-3-small, or embeddinggemma-300m).
+	// Model is the embedding model id (API model name, or GGUF stem hint).
 	Model string `json:"model,omitempty"`
-	// Dir is the project embedding root (index + optional local ONNX).
-	// Always forced to DefaultEmbeddingDir(WorkDir) on normalize; kept in JSON
-	// so UIs can display the fixed path.
+	// ModelPath is the GGUF file for type=gguf. Empty falls back to
+	// ~/.solcode/embeddings/embeddinggemma-300m_Q4_k_m.gguf.
+	ModelPath string `json:"model_path,omitempty"`
+	// LibDir overrides the llama.cpp shared-library directory for gguf.
+	// Empty reuses YZMA_LIB / ~/.solcode/lib/llama (same as organizer).
+	LibDir string `json:"lib_dir,omitempty"`
+	// ContextSize is the llama.cpp context for one embedding pass (default 2048).
+	ContextSize int `json:"context_size,omitempty"`
+	// Threads bounds inference threads. Zero lets llama.cpp decide.
+	Threads int `json:"threads,omitempty"`
+	// GPULayers offloads layers to GPU. 0 = CPU; negative = all.
+	GPULayers int `json:"gpu_layers,omitempty"`
+	// IdleUnloadSec: 0 releases after each Embed (default); negative keeps resident.
+	IdleUnloadSec int `json:"idle_unload_sec,omitempty"`
+	// Dir is the project embedding root (chromem index).
+	// Always forced to DefaultEmbeddingDir(WorkDir) on normalize.
 	Dir string `json:"dir,omitempty"`
 	// TimeoutSec bounds one embedding request (default 30, max 300).
 	TimeoutSec int `json:"timeout_sec,omitempty"`
-	// Dimensions optionally requests a truncated output size (provider-specific).
-	// For EmbeddingGemma local, truncates the 768-d vector then re-normalizes (MRL).
+	// Dimensions optionally truncates output then re-normalizes (MRL).
 	Dimensions int `json:"dimensions,omitempty"`
 }
 
@@ -410,6 +422,9 @@ type MemoryConfig struct {
 	// enabled, the model's own memory-writing tools are disabled and memory is
 	// produced asynchronously by this local model instead.
 	Organizer OrganizerConfig `json:"organizer,omitempty"`
+	// Embedding configures optional vector embeddings for semantic search.
+	// Lives under memory so organizer + embeddings share the local-model story.
+	Embedding EmbeddingConfig `json:"embedding,omitempty"`
 }
 
 // OrganizerRuntimeYzma loads GGUF in-process through github.com/hybridgroup/yzma.
@@ -1358,8 +1373,13 @@ func applyJSONConfig(cfg *Config, data []byte) error {
 			if err := json.Unmarshal(value, &cfg.Jev); err != nil {
 				return err
 			}
+		case "ort":
+			if err := json.Unmarshal(value, &cfg.ORT); err != nil {
+				return err
+			}
 		case "embedding":
-			if err := json.Unmarshal(value, &cfg.Embedding); err != nil {
+			// Legacy top-level embedding{}; normalizeEmbedding migrates into memory.embedding.
+			if err := json.Unmarshal(value, &cfg.DeprecatedEmbedding); err != nil {
 				return err
 			}
 		case "provider":
@@ -1789,18 +1809,35 @@ func (c Config) ComputerUseEnabled() bool {
 	return c.ComputerUse.Enabled
 }
 
-// normalizeEmbedding resolves env indirection and forces the project-scoped dir.
+// normalizeEmbedding resolves env indirection, migrates the legacy top-level
+// embedding{} block into memory.embedding, and forces the project-scoped dir.
 func (cfg *Config) normalizeEmbedding() {
 	if cfg == nil {
 		return
 	}
-	emb := &cfg.Embedding
+	// Prefer nested memory.embedding; fall back to legacy top-level embedding{}.
+	if embeddingConfigEmpty(cfg.Memory.Embedding) && !embeddingConfigEmpty(cfg.DeprecatedEmbedding) {
+		cfg.Memory.Embedding = cfg.DeprecatedEmbedding
+	}
+	cfg.DeprecatedEmbedding = EmbeddingConfig{}
+
+	emb := &cfg.Memory.Embedding
 	emb.Type = strings.ToLower(strings.TrimSpace(emb.Type))
-	if emb.Type == "" {
+	switch emb.Type {
+	case "", EmbeddingBackendAPI:
 		emb.Type = EmbeddingBackendAPI
+	case EmbeddingBackendLocal:
+		// Legacy ONNX local maps onto llama.cpp GGUF.
+		emb.Type = EmbeddingBackendGGUF
+	default:
+		if emb.Type != EmbeddingBackendGGUF {
+			emb.Type = EmbeddingBackendAPI
+		}
 	}
 	emb.BaseURL = strings.TrimSpace(emb.BaseURL)
 	emb.Model = strings.TrimSpace(emb.Model)
+	emb.ModelPath = strings.TrimSpace(emb.ModelPath)
+	emb.LibDir = strings.TrimSpace(emb.LibDir)
 	emb.BaseURLEnv = strings.TrimSpace(emb.BaseURLEnv)
 	emb.APIKeyEnv = strings.TrimSpace(emb.APIKeyEnv)
 	if emb.APIKeyEnv != "" {
@@ -1825,6 +1862,26 @@ func (cfg *Config) normalizeEmbedding() {
 	}
 	emb.APIKey = strings.TrimSpace(emb.APIKey)
 	emb.BaseURL = strings.TrimRight(strings.TrimSpace(emb.BaseURL), "/")
+	if emb.ModelPath != "" {
+		emb.ModelPath = expandPath(emb.ModelPath)
+	}
+	if emb.LibDir != "" {
+		emb.LibDir = expandPath(emb.LibDir)
+	}
+	if emb.Type == EmbeddingBackendGGUF {
+		if emb.Model == "" {
+			emb.Model = "embeddinggemma-300m"
+		}
+		if emb.ModelPath == "" {
+			emb.ModelPath = filepath.Join(SharedEmbeddingModelDir(), "embeddinggemma-300m_Q4_k_m.gguf")
+		}
+		if emb.ContextSize <= 0 {
+			emb.ContextSize = 2048
+		}
+		if emb.ContextSize > 8192 {
+			emb.ContextSize = 8192
+		}
+	}
 	// Project index root is fixed; ignore any custom dir from settings.
 	emb.Dir = DefaultEmbeddingDir(cfg.WorkDir)
 	if emb.TimeoutSec <= 0 {
@@ -1836,6 +1893,27 @@ func (cfg *Config) normalizeEmbedding() {
 	if emb.Dimensions < 0 {
 		emb.Dimensions = 0
 	}
+	if emb.Threads < 0 {
+		emb.Threads = 0
+	}
+}
+
+func embeddingConfigEmpty(e EmbeddingConfig) bool {
+	return !e.Enabled &&
+		strings.TrimSpace(e.Type) == "" &&
+		strings.TrimSpace(e.Model) == "" &&
+		strings.TrimSpace(e.ModelPath) == "" &&
+		strings.TrimSpace(e.APIKey) == "" &&
+		strings.TrimSpace(e.BaseURL) == "" &&
+		strings.TrimSpace(e.APIKeyEnv) == "" &&
+		strings.TrimSpace(e.BaseURLEnv) == "" &&
+		strings.TrimSpace(e.Dir) == "" &&
+		e.TimeoutSec == 0 &&
+		e.Dimensions == 0 &&
+		e.ContextSize == 0 &&
+		e.Threads == 0 &&
+		e.GPULayers == 0 &&
+		e.IdleUnloadSec == 0
 }
 
 // normalizeOrganizer cleans local memory-organizer settings.
@@ -1941,10 +2019,11 @@ func (c Config) OrganizerLibDir() string {
 }
 
 // EmbeddingType returns the normalized backend type. Empty Type means api.
+// Legacy "local" is reported as gguf after normalize.
 func (c Config) EmbeddingType() string {
-	switch strings.ToLower(strings.TrimSpace(c.Embedding.Type)) {
-	case EmbeddingBackendLocal:
-		return EmbeddingBackendLocal
+	switch strings.ToLower(strings.TrimSpace(c.Memory.Embedding.Type)) {
+	case EmbeddingBackendGGUF, EmbeddingBackendLocal:
+		return EmbeddingBackendGGUF
 	default:
 		return EmbeddingBackendAPI
 	}
@@ -1953,19 +2032,17 @@ func (c Config) EmbeddingType() string {
 // EmbeddingEnabled reports whether vector embeddings should be used.
 //
 // api requires enabled=true plus a resolvable api_key and model.
-// local requires enabled=true and a model id (dir is ProjectStateDir/embeddings).
+// gguf requires enabled=true and a model id or model_path.
 func (c Config) EmbeddingEnabled() bool {
-	if !c.Embedding.Enabled {
-		return false
-	}
-	if strings.TrimSpace(c.Embedding.Model) == "" {
+	emb := c.Memory.Embedding
+	if !emb.Enabled {
 		return false
 	}
 	switch c.EmbeddingType() {
-	case EmbeddingBackendLocal:
-		return true
+	case EmbeddingBackendGGUF:
+		return strings.TrimSpace(emb.Model) != "" || strings.TrimSpace(emb.ModelPath) != ""
 	default:
-		return strings.TrimSpace(c.Embedding.APIKey) != ""
+		return strings.TrimSpace(emb.Model) != "" && strings.TrimSpace(emb.APIKey) != ""
 	}
 }
 

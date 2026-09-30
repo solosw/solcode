@@ -51,16 +51,19 @@ func TestSettingsPersistFeaturesThroughDisk(t *testing.T) {
 				"gpu":            next.ORT.GPU,
 				"cuda_device_id": next.ORT.CudaDeviceID,
 			},
-			"embedding": map[string]any{
-				"enabled":     next.Embedding.Enabled,
-				"type":        next.Embedding.Type,
-				"base_url":    next.Embedding.BaseURL,
-				"api_key":     next.Embedding.APIKey,
-				"api_key_env": next.Embedding.APIKeyEnv,
-				"model":       next.Embedding.Model,
-				"dir":         next.Embedding.Dir,
-				"timeout_sec": next.Embedding.TimeoutSec,
-				"dimensions":  next.Embedding.Dimensions,
+			"memory": map[string]any{
+				"embedding": map[string]any{
+					"enabled":     next.Memory.Embedding.Enabled,
+					"type":        next.Memory.Embedding.Type,
+					"base_url":    next.Memory.Embedding.BaseURL,
+					"api_key":     next.Memory.Embedding.APIKey,
+					"api_key_env": next.Memory.Embedding.APIKeyEnv,
+					"model":       next.Memory.Embedding.Model,
+					"model_path":  next.Memory.Embedding.ModelPath,
+					"dir":         next.Memory.Embedding.Dir,
+					"timeout_sec": next.Memory.Embedding.TimeoutSec,
+					"dimensions":  next.Memory.Embedding.Dimensions,
+				},
 			},
 		}); err != nil {
 			return err
@@ -166,15 +169,20 @@ func TestSettingsPersistFeaturesThroughDisk(t *testing.T) {
 		t.Fatalf("reloaded ort = %+v", reloaded.ORT)
 	}
 	if !reloaded.EmbeddingEnabled() {
-		t.Fatalf("reloaded Embedding should be active: %+v", reloaded.Embedding)
+		t.Fatalf("reloaded Embedding should be active: %+v", reloaded.Memory.Embedding)
 	}
-	if reloaded.Embedding.Model != "text-embedding-3-small" || reloaded.Embedding.APIKey != "emb_persisted" {
-		t.Fatalf("reloaded embedding = %+v", reloaded.Embedding)
+	if reloaded.Memory.Embedding.Model != "text-embedding-3-small" || reloaded.Memory.Embedding.APIKey != "emb_persisted" {
+		t.Fatalf("reloaded embedding = %+v", reloaded.Memory.Embedding)
 	}
-	if reloaded.Embedding.Dir != config.DefaultEmbeddingDir(reloaded.WorkDir) {
-		t.Fatalf("reloaded embedding dir = %q", reloaded.Embedding.Dir)
+	if reloaded.Memory.Embedding.Dir != config.DefaultEmbeddingDir(reloaded.WorkDir) {
+		t.Fatalf("reloaded embedding dir = %q", reloaded.Memory.Embedding.Dir)
 	}
 	emb, ok := persisted["embedding"].(map[string]any)
+	if !ok {
+		if mem, mok := persisted["memory"].(map[string]any); mok {
+			emb, ok = mem["embedding"].(map[string]any)
+		}
+	}
 	if !ok || emb["enabled"] != true {
 		t.Fatalf("persisted embedding = %#v", persisted["embedding"])
 	}

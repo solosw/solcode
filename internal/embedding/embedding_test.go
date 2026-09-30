@@ -15,7 +15,6 @@ func TestTruncateAndNormalize(t *testing.T) {
 	if math.Abs(float64(got[0])-0.6) > 1e-5 || math.Abs(float64(got[1])-0.8) > 1e-5 {
 		t.Fatalf("got %v", got)
 	}
-	// original unchanged
 	if v[0] != 3 {
 		t.Fatalf("input mutated: %v", v)
 	}
@@ -29,21 +28,15 @@ func TestTruncateAndNormalize(t *testing.T) {
 	}
 }
 
-func TestResolveLocalArtifactsShared(t *testing.T) {
+func TestResolveDefaultGGUFPath(t *testing.T) {
 	shared := config.SharedEmbeddingModelDir()
-	onnx := filepath.Join(shared, "model_q4f16.onnx")
-	if _, err := os.Stat(onnx); err != nil {
-		t.Skip("shared EmbeddingGemma missing:", err)
+	gguf := filepath.Join(shared, "embeddinggemma-300m_Q4_k_m.gguf")
+	if _, err := os.Stat(gguf); err != nil {
+		t.Skip("shared EmbeddingGemma GGUF missing:", err)
 	}
-	arts, err := ResolveLocalArtifacts("", t.TempDir(), "embeddinggemma-300m")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if arts.ONNXPath != onnx {
-		t.Fatalf("onnx=%q want %q", arts.ONNXPath, onnx)
-	}
-	if arts.ModelID != "embeddinggemma-300m" {
-		t.Fatalf("model=%q", arts.ModelID)
+	got := resolveDefaultGGUFPath("embeddinggemma-300m")
+	if got != gguf {
+		t.Fatalf("got %q want %q", got, gguf)
 	}
 }
 

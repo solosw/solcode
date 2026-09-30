@@ -425,15 +425,12 @@ func openEmbeddingStore(cfg config.Config) (*embedding.Store, error) {
 		return nil, nil
 	}
 	provider, err := embedding.NewProvider(embedding.Options{
-		Config:       cfg.Embedding,
-		ORTLib:       cfg.ORTLibraryPath(),
-		GPU:          cfg.ORTGPUEnabled(),
-		CudaDeviceID: cfg.ORT.CudaDeviceID,
+		Config: cfg.Memory.Embedding,
 	})
 	if err != nil {
 		return nil, err
 	}
-	store, err := embedding.OpenStore(cfg.Embedding.Dir, provider)
+	store, err := embedding.OpenStore(cfg.Memory.Embedding.Dir, provider)
 	if err != nil {
 		_ = provider.Close()
 		return nil, err
