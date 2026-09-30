@@ -95,7 +95,8 @@ func TestRecordTurnSessionMemoryCapturesTodosAndPrunesNoise(t *testing.T) {
 	a.captureCheckpoint(filepath.Join(work, "go.sum"), &content)
 	a.captureCheckpoint(filepath.Join(work, "tmp", "noise.log"), &content)
 
-	a.recordTurnSessionMemory(context.Background(), "main", work, "wire turn memory", "done")
+	// Model outcome is preferred over the raw user prompt.
+	a.recordTurnSessionMemory(context.Background(), "main", work, "嗯随便看看", "Wired turn-end session memory and pruned noise files.")
 
 	entries, err := sessionmemory.NewStore(work).ReadForSession(context.Background(), "main", "", 5)
 	if err != nil {
@@ -105,8 +106,11 @@ func TestRecordTurnSessionMemoryCapturesTodosAndPrunesNoise(t *testing.T) {
 		t.Fatalf("entries = %#v", entries)
 	}
 	entry := entries[0]
-	if !strings.Contains(entry.Summary, "wire turn memory") {
-		t.Fatalf("summary = %q", entry.Summary)
+	if !strings.Contains(entry.Summary, "Wired turn-end session memory") {
+		t.Fatalf("summary = %q, want model outcome", entry.Summary)
+	}
+	if strings.Contains(entry.Summary, "随便看看") {
+		t.Fatalf("summary kept raw user prompt noise: %q", entry.Summary)
 	}
 	if len(entry.Files) != 1 || entry.Files[0] != "internal/app/session_memory.go" {
 		t.Fatalf("files = %#v, want only the source file after prune", entry.Files)
@@ -119,6 +123,21 @@ func TestRecordTurnSessionMemoryCapturesTodosAndPrunesNoise(t *testing.T) {
 	}
 	if entry.Todos[0].Status != sessionmemory.TodoInProgress {
 		t.Fatalf("todo0 status = %q", entry.Todos[0].Status)
+	}
+}
+
+func TestTurnSessionMemorySummaryPrefersModelOutcome(t *testing.T) {
+	got := turnSessionMemorySummary("用户随便说的废话", "Fixed the organizer turn summary path.")
+	if got != "Fixed the organizer turn summary path." {
+		t.Fatalf("got %q", got)
+	}
+	// Fallback to prompt when the model produced nothing.
+	if got := turnSessionMemorySummary("only prompt left", "  "); got != "only prompt left" {
+		t.Fatalf("fallback = %q", got)
+	}
+	long := strings.Repeat("字", 500)
+	if got := turnSessionMemorySummary("", long); !strings.HasSuffix(got, "…") || len([]rune(got)) != 401 {
+		t.Fatalf("truncation = %d runes, %q", len([]rune(got)), got[len(got)-3:])
 	}
 }
 

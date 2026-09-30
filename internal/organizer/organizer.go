@@ -87,22 +87,40 @@ const (
 type Input struct {
 	SessionID string
 	WorkDir   string
-	// Transcript is the session text to summarize.
+	// Transcript is the session text to summarize (chat and/or tool trace).
 	Transcript string
 	// PreviousSummary carries the prior summary so a refresh does not lose
 	// context that already left the message window.
 	PreviousSummary string
+	// NextSummary is the post-compact working summary when available.
+	NextSummary string
+	// Trigger labels the call site ("turn", "compact", …) for the model.
+	Trigger string
+	// ChangedFiles are checkpoint-captured paths for this session.
+	ChangedFiles []string
+	// Todos are open / in-progress task lines from the session todolist.
+	Todos []string
+	// ToolFacts are deterministic bullets (edits, validation commands, tools).
+	ToolFacts []string
+	// RelatedMemories are short existing archival snippets (id + text) so the
+	// model can supersede or avoid duplicating known rules.
+	RelatedMemories []string
 }
 
 // Candidate is one proposed long-term memory.
 type Candidate struct {
-	Kind       CandidateKind `json:"kind"`
-	Scope      string        `json:"scope"`
+	Kind       CandidateKind  `json:"kind"`
+	Scope      string         `json:"scope"`
 	Tier       CandidateTier `json:"suggested_tier"`
-	Confidence float64       `json:"confidence"`
-	Text       string        `json:"canonical_text"`
-	Tags       []string      `json:"tags"`
-	Reason     string        `json:"reason"`
+	Confidence float64        `json:"confidence"`
+	Text       string         `json:"canonical_text"`
+	Tags       []string       `json:"tags"`
+	Reason     string         `json:"reason"`
+	// Status is an optional governance hint (active|superseded|expired|contradicted).
+	// Empty/unknown normalizes to active at parse time.
+	Status string `json:"status,omitempty"`
+	// Supersedes is an optional older memory id or short topic key this candidate replaces.
+	Supersedes string `json:"supersedes,omitempty"`
 }
 
 // Result is one organizer outcome.

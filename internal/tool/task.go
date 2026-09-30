@@ -55,7 +55,12 @@ func (t *taskTool) Name() string { return TaskToolName }
 func (t *taskTool) Description() string {
 	return `Launches one or more sub-agents to complete independent or dependent tasks and returns their results.
 Use a single prompt for one bounded task, or pass tasks with dependency edges. Independent tasks run in parallel; dependency chains run serially by level. Set difficulty=easy or model=fast to use the configured fast model when available.
-Each leaf task runs through the internal Subagent tool (including retries). Give each sub-agent a self-contained prompt with paths, constraints, and the expected return. Do not use Task for a single cheap file read you can do with View/Grep.`
+Each leaf task runs through the internal Subagent tool (including retries). Give each sub-agent a self-contained prompt with paths, constraints, and the expected return. Do not use Task for a single cheap file read you can do with View/Grep.
+
+allowed_tools is a RUNTIME permission on the child executor only. It does not
+change the tools schema sent to the model: every agent (main and sub) shares
+the same core tools prefix for prompt-cache stability. Disallowed tools still
+appear in the schema but fail at invoke time if called.`
 }
 func (t *taskTool) InputSchema() map[string]any {
 	taskSchema := map[string]any{
@@ -64,7 +69,7 @@ func (t *taskTool) InputSchema() map[string]any {
 			"id":            map[string]any{"type": "string", "description": "Stable task id used by dependencies"},
 			"description":   map[string]any{"type": "string", "description": "Short label for this task"},
 			"prompt":        map[string]any{"type": "string", "description": "Detailed prompt for this sub-agent"},
-			"allowed_tools": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Optional list of tools this sub-agent may use"},
+			"allowed_tools": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Runtime allowlist for this sub-agent's executor. Does not change the shared tools schema prefix (core tools stay on the wire for prompt cache). Empty means unrestricted execution (subject to permission mode)."},
 			"difficulty":    map[string]any{"type": "string", "enum": []string{"easy", "medium", "hard"}, "description": "Use easy for fast model, hard for main model"},
 			"model":         map[string]any{"type": "string", "description": "Optional explicit model or 'fast'"},
 			"depends_on":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Task ids that must complete before this task starts"},
@@ -76,7 +81,7 @@ func (t *taskTool) InputSchema() map[string]any {
 		"properties": map[string]any{
 			"description":    map[string]any{"type": "string", "description": "Short label for a single task"},
 			"prompt":         map[string]any{"type": "string", "description": "Detailed prompt for a single sub-agent"},
-			"allowed_tools":  map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Optional list of tools the single sub-agent may use"},
+			"allowed_tools":  map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Runtime allowlist for the single sub-agent's executor. Does not change the shared tools schema prefix. Empty means unrestricted execution (subject to permission mode)."},
 			"model":          map[string]any{"type": "string", "description": "Optional explicit model or 'fast'"},
 			"fast_model":     map[string]any{"type": "string", "description": "Configured fast model id, passed by the host"},
 			"execution_mode": map[string]any{"type": "string", "enum": []string{"auto", "parallel", "serial"}, "description": "auto runs independent graph levels in parallel; serial runs tasks one by one"},

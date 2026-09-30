@@ -79,6 +79,9 @@ type Manager struct {
 	Vectors VectorIndex
 	// Decider optionally re-ranks merged lexical+vector candidates via Jev.
 	Decider *systemone.Decider
+	// ConflictJudge optionally adjudicates supersede/contradict with Jev.
+	// Nil uses HeuristicConflictJudge.
+	ConflictJudge ConflictJudge
 }
 
 func NewManager(store *FileStore, gate Gate, judge Judge) *Manager {
@@ -122,12 +125,234 @@ func (m *Manager) WithRetrievalBudget(m2, m3, m4, m5 int) *Manager {
 	return m
 }
 
+// WithConflictJudge installs an optional LLM/heuristic conflict adjudicator.
+func (m *Manager) WithConflictJudge(judge ConflictJudge) *Manager {
+	if m == nil {
+		return nil
+	}
+	m.ConflictJudge = judge
+	return m
+}
+
+func (m *Manager) conflictJudge() ConflictJudge {
+	if m != nil && m.ConflictJudge != nil {
+		return m.ConflictJudge
+	}
+	return HeuristicConflictJudge{}
+}
+
 func (m *Manager) RememberExplicit(ctx context.Context, text, sourceSessionID, workDir, existingSummary string) (Item, bool, error) {
 	return m.remember(ctx, text, sourceSessionID, workDir, existingSummary, true, "explicit")
 }
 
 func (m *Manager) RememberCandidate(ctx context.Context, text, sourceSessionID, workDir, existingSummary string) (Item, bool, error) {
 	return m.remember(ctx, text, sourceSessionID, workDir, existingSummary, false, "candidate")
+}
+
+// OrganizerCandidateInput is a structured fact produced by the local memory
+// organizer (Letta-style archival write). The organizer already validated
+// shape/enums, so no extra AI judge round-trip runs.
+type OrganizerCandidateInput struct {
+	Text            string
+	Kind            Kind
+	Scope           Scope
+	Tier            Tier
+	Confidence      float64
+	Tags            []string
+	Reason          string
+	SourceSessionID string
+	SourceTurn      int
+	// SessionMemoryRef links this archival fact to a recall entry
+	// ("sessionID#turn"). Empty means unset.
+	SessionMemoryRef string
+	Model            string
+	// Status is an optional governance hint from the organizer
+	// (active|superseded|expired|contradicted). Empty means active.
+	Status string
+	// Supersedes is an optional older memory id or topic key this candidate replaces.
+	Supersedes string
+}
+
+// RememberOrganizerCandidate stores one organizer-produced archival memory.
+// Near-duplicates merge via lexical overlap and optional vector neighbors
+// (ADD/MERGE/NOOP style); secrets are still gated out.
+func (m *Manager) RememberOrganizerCandidate(ctx context.Context, input OrganizerCandidateInput) (DirectOutcome, error) {
+	text := strings.TrimSpace(input.Text)
+	if text == "" {
+		return DirectOutcome{Reason: "empty organizer candidate"}, nil
+	}
+	if m == nil || m.Store == nil {
+		return DirectOutcome{}, fmt.Errorf("memory manager store is nil")
+	}
+
+	gate := Gate(DefaultGate{})
+	if m.Gate != nil {
+		gate = m.Gate
+	}
+	// Organizer candidates are not "explicit user remember" — treat as
+	// non-explicit so NeedsAI stays false, but still reject secrets.
+	if decision := gate.Evaluate(text, false); !decision.Allow {
+		reason := strings.TrimSpace(decision.RejectReason)
+		if reason == "" {
+			reason = "rejected by memory gate"
+		}
+		return DirectOutcome{Reason: reason}, nil
+	}
+
+	items, err := m.Store.List(ctx)
+	if err != nil {
+		return DirectOutcome{}, err
+	}
+	workingItems, err := m.limitWorkingSet(ctx, text, input.SourceSessionID, items)
+	if err != nil {
+		return DirectOutcome{}, err
+	}
+	workingItems = m.expandWorkingSetWithVectorNeighbors(ctx, text, items, workingItems)
+
+	now := time.Now()
+	tier := nonEmptyTier(input.Tier, TierShortTerm)
+	// Organizer may suggest M4; allow it for preference/constraint, otherwise
+	// keep derived-from-model facts from jumping straight to long-term.
+	kind := nonEmptyKind(input.Kind, KindFact)
+	if tier == TierLongTerm && kind != KindPreference && kind != KindConstraint && kind != KindWorkflow {
+		tier = TierShortTerm
+	}
+	candidate := NewItem(text, tier, input.SourceSessionID)
+	candidate.Kind = kind
+	candidate.Scope = nonEmptyScope(input.Scope, ScopeProject)
+	candidate.Tags = append([]string(nil), input.Tags...)
+	candidate.Confidence = input.Confidence
+	if candidate.Confidence <= 0 {
+		candidate.Confidence = 0.7
+	}
+	candidate.Importance = clampUnit(candidate.Confidence)
+	candidate.RetentionScore = candidate.Importance
+	candidate.JudgeReason = strings.TrimSpace(input.Reason)
+	candidate.JudgeModel = strings.TrimSpace(input.Model)
+	if candidate.JudgeModel == "" {
+		candidate.JudgeModel = "local-organizer"
+	}
+	candidate.JudgeVersion = "organizer-v1"
+	candidate.SourceTurn = input.SourceTurn
+	candidate.SessionMemoryRef = strings.TrimSpace(input.SessionMemoryRef)
+	candidate.DerivedFromSummary = true
+	candidate.Status = normalizeIncomingStatus(input.Status)
+	if hint := strings.TrimSpace(input.Supersedes); hint != "" {
+		candidate.Supersedes = hint
+	}
+	candidate = EnsureTopic(candidate)
+
+	// Governance peers: working set + same-topic / conflict candidates from the
+	// full store so far-away rules still supersede/contradict.
+	govItems := expandGovernanceSet(items, workingItems, candidate)
+
+	for _, existing := range workingItems {
+		// Near-duplicate rewrites (lexical or vector) still merge. Only block
+		// merge on explicit supersede hints or polarity conflicts; topic-level
+		// supersede/contradict is left to applyGovernanceOnWriteWithJudge.
+		if hintMatchesExisting(candidate.Supersedes, existing) || detectSemanticConflict(existing, candidate) {
+			continue
+		}
+		if !shouldMergeCandidate(existing, candidate) && !shouldMergeVectorNeighbor(existing, candidate) {
+			continue
+		}
+		merged := m.lifecycle().Apply(mergeItems(existing, candidate, now), now)
+		if merged.SessionMemoryRef == "" {
+			merged.SessionMemoryRef = candidate.SessionMemoryRef
+		}
+		merged = EnsureTopic(merged)
+		saved, err := m.Store.Save(ctx, merged)
+		if err != nil {
+			return DirectOutcome{}, err
+		}
+		m.indexMemory(ctx, saved)
+		return DirectOutcome{
+			Item:     saved,
+			Stored:   true,
+			Merged:   true,
+			MergedID: saved.ID,
+			Reason:   "merged into an existing related memory",
+		}, nil
+	}
+
+	candidate, updates := applyGovernanceOnWriteWithJudge(ctx, m.conflictJudge(), govItems, candidate, now)
+	for _, old := range updates {
+		old = EnsureTopic(old)
+		if _, err := m.Store.Save(ctx, old); err != nil {
+			return DirectOutcome{}, err
+		}
+	}
+
+	candidate = m.lifecycle().Apply(candidate, now)
+	candidate = EnsureTopic(candidate)
+	saved, err := m.Store.Save(ctx, candidate)
+	if err != nil {
+		return DirectOutcome{}, err
+	}
+	m.indexMemory(ctx, saved)
+	return DirectOutcome{Item: saved, Stored: true}, nil
+}
+
+// vectorMergeSimilarity is the chromem similarity floor for treating a vector
+// neighbor as a near-duplicate of an organizer candidate.
+const vectorMergeSimilarity = 0.86
+
+func (m *Manager) expandWorkingSetWithVectorNeighbors(ctx context.Context, text string, all, working []Item) []Item {
+	if m == nil || m.Vectors == nil || strings.TrimSpace(text) == "" {
+		return working
+	}
+	hits, err := m.Vectors.Query(ctx, text, 6, nil)
+	if err != nil || len(hits) == 0 {
+		return working
+	}
+	byID := make(map[string]Item, len(all))
+	for _, item := range all {
+		byID[item.ID] = item
+	}
+	seen := itemIDSet(working)
+	out := append([]Item(nil), working...)
+	for _, hit := range hits {
+		if hit.Similarity < vectorMergeSimilarity {
+			continue
+		}
+		id := strings.TrimSpace(hit.ID)
+		if id == "" || seen[id] {
+			continue
+		}
+		item, ok := byID[id]
+		if !ok {
+			continue
+		}
+		out = append(out, item)
+		seen[id] = true
+	}
+	return out
+}
+
+// shouldMergeVectorNeighbor is a slightly looser lexical check used only after
+// a vector neighbor has already been selected. Same kind/scope still required
+// when both sides declare them.
+func shouldMergeVectorNeighbor(existing Item, candidate Item) bool {
+	if existing.Kind != "" && candidate.Kind != "" && existing.Kind != candidate.Kind {
+		return false
+	}
+	if existing.Scope != "" && candidate.Scope != "" && existing.Scope != candidate.Scope {
+		return false
+	}
+	if normalizeText(existing.Text) == normalizeText(candidate.Text) {
+		return true
+	}
+	overlap := tokenOverlap(existing.Text, candidate.Text)
+	return overlap >= 0.28 || sharedTokenCount(existing.Text, candidate.Text) >= 2
+}
+
+// FormatSessionMemoryRef builds the archival→recall pointer "sessionID#turn".
+func FormatSessionMemoryRef(sessionID string, turn int) string {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s#%d", sessionID, turn)
 }
 
 func (m *Manager) remember(ctx context.Context, text, sourceSessionID, workDir, existingSummary string, explicit bool, reason string) (Item, bool, error) {
@@ -213,10 +438,11 @@ func (m *Manager) remember(ctx context.Context, text, sourceSessionID, workDir, 
 	if explicit && item.Tier == TierSensory {
 		item.Tier = TierShortTerm
 	}
+	now := time.Now()
 	for _, existing := range related {
 		if shouldMergeCandidate(existing, item) {
-			merged := mergeItems(existing, item, time.Now())
-			merged = m.lifecycle().Apply(merged, time.Now())
+			merged := mergeItems(existing, item, now)
+			merged = m.lifecycle().Apply(merged, now)
 			updated, err := m.Store.Save(ctx, merged)
 			if err == nil {
 				m.indexMemory(ctx, updated)
@@ -224,7 +450,13 @@ func (m *Manager) remember(ctx context.Context, text, sourceSessionID, workDir, 
 			return updated, false, err
 		}
 	}
-	item = m.lifecycle().Apply(item, time.Now())
+	item, superseded := applyGovernanceOnWrite(workingItems, item, now)
+	for _, old := range superseded {
+		if _, err := m.Store.Save(ctx, old); err != nil {
+			return Item{}, false, err
+		}
+	}
+	item = m.lifecycle().Apply(item, now)
 	created, err := m.Store.Save(ctx, item)
 	if err == nil {
 		m.indexMemory(ctx, created)
@@ -308,13 +540,19 @@ func (m *Manager) RememberDirect(ctx context.Context, input DirectInput) (Direct
 		candidate.Importance = importance
 		candidate.RetentionScore = importance
 	}
+	candidate = EnsureTopic(candidate)
+	govItems := expandGovernanceSet(items, workingItems, candidate)
 
 	if !input.AllowDuplicate {
 		for _, existing := range workingItems {
+			if hintMatchesExisting(candidate.Supersedes, existing) || detectSemanticConflict(existing, candidate) {
+				continue
+			}
 			if !shouldMergeCandidate(existing, candidate) {
 				continue
 			}
 			merged := m.lifecycle().Apply(mergeItems(existing, candidate, now), now)
+			merged = EnsureTopic(merged)
 			saved, err := m.Store.Save(ctx, merged)
 			if err != nil {
 				return DirectOutcome{}, err
@@ -336,7 +574,16 @@ func (m *Manager) RememberDirect(ctx context.Context, input DirectInput) (Direct
 		candidate.ID = fmt.Sprintf("%s-%d", candidate.ID, now.UnixNano())
 	}
 
+	candidate, superseded := applyGovernanceOnWriteWithJudge(ctx, m.conflictJudge(), govItems, candidate, now)
+	for _, old := range superseded {
+		old = EnsureTopic(old)
+		if _, err := m.Store.Save(ctx, old); err != nil {
+			return DirectOutcome{}, err
+		}
+	}
+
 	candidate = m.lifecycle().Apply(candidate, now)
+	candidate = EnsureTopic(candidate)
 	saved, err := m.Store.Save(ctx, candidate)
 	if err != nil {
 		return DirectOutcome{}, err
@@ -367,7 +614,11 @@ func (m *Manager) Retrieve(ctx context.Context, query, currentSessionID string, 
 	merged := m.mergeVectorCandidates(ctx, query, currentSessionID, allowCrossSession, items, selected, limit)
 	selected = m.rankWithJev(ctx, query, merged, limit)
 	cleaned := make([]Item, 0, len(selected))
+	now := time.Now()
 	for _, item := range selected {
+		if !item.IsActive(now) {
+			continue
+		}
 		next, _, keep := sanitizeStoredMemoryItem(item)
 		if !keep {
 			continue
@@ -423,13 +674,14 @@ func (m *Manager) RememberExtracted(ctx context.Context, input ExtractionInput) 
 		if item.Tier == TierLongTerm {
 			item.Tier = TierShortTerm
 		}
+		now := time.Now()
 		mergedExisting := false
 		for _, existing := range workingItems {
 			if !shouldMergeCandidate(existing, item) {
 				continue
 			}
-			merged := mergeItems(existing, item, time.Now())
-			merged = m.lifecycle().Apply(merged, time.Now())
+			merged := mergeItems(existing, item, now)
+			merged = m.lifecycle().Apply(merged, now)
 			created, err := m.Store.Save(ctx, merged)
 			if err != nil {
 				return stored, err
@@ -442,7 +694,13 @@ func (m *Manager) RememberExtracted(ctx context.Context, input ExtractionInput) 
 		if mergedExisting {
 			continue
 		}
-		item = m.lifecycle().Apply(item, time.Now())
+		item, superseded := applyGovernanceOnWrite(workingItems, item, now)
+		for _, old := range superseded {
+			if _, err := m.Store.Save(ctx, old); err != nil {
+				return stored, err
+			}
+		}
+		item = m.lifecycle().Apply(item, now)
 		created, err := m.Store.Save(ctx, item)
 		if err != nil {
 			return stored, err
@@ -514,14 +772,28 @@ func (m *Manager) Consolidate(ctx context.Context) error {
 			if err := m.Store.Delete(ctx, item.ID); err != nil {
 				return err
 			}
+			m.dropVector(ctx, item.ID)
 			continue
 		}
 		next := m.lifecycle().Apply(item, now)
-		if next.Tier != item.Tier || next.RetentionScore != item.RetentionScore || next.PromotionCount != item.PromotionCount {
+		// Stamp expired status when ExpiresAt has passed, so GC can hard-delete.
+		if next.normalizedStatus() == StatusActive && !next.ExpiresAt.IsZero() && !now.Before(next.ExpiresAt) {
+			next = MarkExpired(next, now)
+		}
+		// Backfill topic keys so belief views work on older entries.
+		withTopic := EnsureTopic(next)
+		topicChanged := withTopic.Topic != item.Topic
+		next = withTopic
+		if next.Tier != item.Tier || next.RetentionScore != item.RetentionScore || next.PromotionCount != item.PromotionCount || next.Status != item.Status || !next.ExpiresAt.Equal(item.ExpiresAt) || topicChanged {
 			if _, err := m.Store.Save(ctx, next); err != nil {
 				return err
 			}
 		}
+	}
+	// Hard-delete expired entries; keep superseded/contradicted for audit unless
+	// a longer retention policy is configured later.
+	if _, err := m.GC(ctx, GCOptions{Now: now, DeleteSupersededAfter: 30 * 24 * time.Hour}); err != nil {
+		return err
 	}
 	return nil
 }
@@ -667,6 +939,9 @@ func mergeItems(existing Item, candidate Item, now time.Time) Item {
 	}
 	if candidate.SourceTurn != 0 {
 		existing.SourceTurn = candidate.SourceTurn
+	}
+	if existing.SessionMemoryRef == "" {
+		existing.SessionMemoryRef = candidate.SessionMemoryRef
 	}
 	if strings.TrimSpace(candidate.JudgeReason) != "" {
 		existing.JudgeReason = candidate.JudgeReason

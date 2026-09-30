@@ -119,8 +119,10 @@ func (a *App) ReadSessionMemory(ctx context.Context, req tool.SessionMemoryReadR
 
 // recordTurnSessionMemory writes one per-turn session memory after a main
 // agent turn. It captures the current todolist (Jev-judged when enabled) and
-// the pruned set of changed files. Failures are logged and ignored so a turn
-// never fails because session memory could not be written.
+// the pruned set of changed files. The summary prefers the model/assistant
+// outcome over the raw user prompt so casual or empty prompts do not pollute
+// solcode.md. Failures are logged and ignored so a turn never fails because
+// session memory could not be written.
 func (a *App) recordTurnSessionMemory(ctx context.Context, sessionID, workDir, prompt, summary string) {
 	if a == nil {
 		return
@@ -140,17 +142,12 @@ func (a *App) recordTurnSessionMemory(ctx context.Context, sessionID, workDir, p
 	task := sessionTaskContext(prompt, summary)
 	files = a.pruneSessionFiles(ctx, task, files)
 	todos := a.judgeCurrentTodos(ctx, workDir, task)
-	if len(todos) == 0 && len(files) == 0 && strings.TrimSpace(prompt) == "" {
+	summaryText := turnSessionMemorySummary(prompt, summary)
+	if len(todos) == 0 && len(files) == 0 && summaryText == "" {
 		return
-	}
-	summaryText := strings.TrimSpace(prompt)
-	if summaryText == "" {
-		summaryText = strings.TrimSpace(summary)
 	}
 	if summaryText == "" {
 		summaryText = "Turn completed."
-	} else if len([]rune(summaryText)) > 400 {
-		summaryText = string([]rune(summaryText)[:400]) + "…"
 	}
 	summaryText = "Turn memory: " + summaryText
 	_, _, err := store.UpsertBySessionTurn(ctx, sessionmemory.Entry{
@@ -166,6 +163,46 @@ func (a *App) recordTurnSessionMemory(ctx context.Context, sessionID, workDir, p
 	if err != nil {
 		jevLog("session turn memory not stored: " + err.Error())
 	}
+}
+
+// turnSessionMemorySummary builds the recall-layer turn text.
+//
+// Prefer the model outcome (assistant final output / compact-style summary)
+// over the raw user prompt: prompts are often short, noisy, or off-task, while
+// the assistant reply usually states what actually happened. Fall back to the
+// prompt only when no usable model text exists.
+func turnSessionMemorySummary(prompt, modelSummary string) string {
+	text := strings.TrimSpace(modelSummary)
+	if text == "" {
+		text = strings.TrimSpace(prompt)
+	}
+	if text == "" {
+		return ""
+	}
+	// Drop common role/tool noise if a caller passed a raw transcript fragment.
+	lines := strings.Split(text, "\n")
+	cleaned := make([]string, 0, len(lines))
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		lower := strings.ToLower(trimmed)
+		if strings.HasPrefix(lower, "[tool use") || strings.HasPrefix(lower, "[tool result") {
+			continue
+		}
+		cleaned = append(cleaned, trimmed)
+	}
+	if len(cleaned) == 0 {
+		return ""
+	}
+	text = strings.Join(cleaned, "\n")
+	const maxRunes = 400
+	runes := []rune(text)
+	if len(runes) > maxRunes {
+		return string(runes[:maxRunes]) + "…"
+	}
+	return text
 }
 
 // recordTodoSessionMemory writes a todolist snapshot after each successful

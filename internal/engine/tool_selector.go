@@ -51,9 +51,14 @@ var hiddenFromModel = map[string]bool{
 // request. Matching uses current tool metadata only, so dynamically connected
 // MCP servers do not require a hard-coded profile or provider map.
 //
-// allowed semantics match Registry.Filter for non-empty whitelists: a non-empty
-// allowed list is treated as an explicit restriction (for example Task
-// sub-agents). nil or empty allowed enables dynamic routing over all tools.
+// allowed semantics:
+//   - nil/empty: dynamic routing over all tools (core + sticky + query hits)
+//   - non-empty: explicit restriction. The shared coreToolNames prefix is ALWAYS
+//     included first (when present in `all`), then any extra names from allowed.
+//     This keeps main and sub/task agents on a common tools schema prefix for
+//     prompt cache; allowed only narrows or extends beyond core, it never
+//     replaces the public prefix with a free-form subset.
+//
 // Wait and Subagent are never model-visible (see hiddenFromModel).
 func SelectToolsForTurn(all []tool.Tool, allowed []string, query string, enabled map[string]bool) []tool.Tool {
 	selected, _ := selectToolsForTurn(all, allowed, query, enabled)
@@ -64,15 +69,8 @@ func SelectToolsForTurn(all []tool.Tool, allowed []string, query string, enabled
 // current selection contains. The report lets the semantic router ask only
 // about candidates lexical matching could not resolve.
 func selectToolsForTurn(all []tool.Tool, allowed []string, query string, enabled map[string]bool) ([]tool.Tool, map[string]bool) {
-	if len(allowed) > 0 {
-		selected := filterTools(all, allowed)
-		names := make(map[string]bool, len(selected))
-		for _, candidate := range selected {
-			names[candidate.Name()] = true
-		}
-		return selected, names
-	}
 	selected := make(map[string]bool)
+	// Shared public prefix: every agent view starts from the same core set.
 	for _, candidate := range all {
 		name := candidate.Name()
 		if hiddenFromModel[name] {
@@ -82,6 +80,28 @@ func selectToolsForTurn(all []tool.Tool, allowed []string, query string, enabled
 			selected[name] = true
 		}
 	}
+
+	if len(allowed) > 0 {
+		// Restrictive allowlist on the SCHEMA path is legacy. Engine no longer
+		// passes AllowedTools here (executor enforces it). Tests may still call
+		// with an allowlist: keep core, then add only named extras.
+		allow := make(map[string]bool, len(allowed))
+		for _, name := range allowed {
+			name = strings.TrimSpace(name)
+			if name == "" || hiddenFromModel[name] {
+				continue
+			}
+			allow[name] = true
+		}
+		for _, candidate := range all {
+			name := candidate.Name()
+			if allow[name] && !hiddenFromModel[name] {
+				selected[name] = true
+			}
+		}
+		return orderSelectedTools(all, selected)
+	}
+
 	for name := range enabled {
 		name = strings.TrimSpace(name)
 		if name == "" || hiddenFromModel[name] {
@@ -115,13 +135,33 @@ func selectToolsForTurn(all []tool.Tool, allowed []string, query string, enabled
 		selected[matches[i].tool.Name()] = true
 	}
 
-	out := make([]tool.Tool, 0, len(selected))
+	return orderSelectedTools(all, selected)
+}
+
+// orderSelectedTools emits tools with a STABLE public prefix: all selected core
+// tools first (registry order among core), then selected extras (registry
+// order). Main and sub agents with the same selected set therefore produce
+// identical tools[] prefixes for prompt cache.
+func orderSelectedTools(all []tool.Tool, selected map[string]bool) ([]tool.Tool, map[string]bool) {
+	coreOut := make([]tool.Tool, 0, len(selected))
+	extraOut := make([]tool.Tool, 0, len(selected))
+	names := make(map[string]bool, len(selected))
 	for _, candidate := range all {
-		if selected[candidate.Name()] {
-			out = append(out, candidate)
+		name := candidate.Name()
+		if !selected[name] {
+			continue
+		}
+		names[name] = true
+		if coreToolNames[name] {
+			coreOut = append(coreOut, candidate)
+		} else {
+			extraOut = append(extraOut, candidate)
 		}
 	}
-	return out, selected
+	out := make([]tool.Tool, 0, len(coreOut)+len(extraOut))
+	out = append(out, coreOut...)
+	out = append(out, extraOut...)
+	return out, names
 }
 
 func filterTools(all []tool.Tool, allowed []string) []tool.Tool {

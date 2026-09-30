@@ -42,6 +42,12 @@ type ToolExecutor struct {
 	// guardrail is an optional advisory safety check. It never grants
 	// permission: it can only escalate a call that permissions already allowed.
 	guardrail ToolGuardrail
+	// allowedTools, when non-empty, is a runtime allowlist checked before
+	// invoke. It does NOT change the tools schema sent to the model — that
+	// list stays on the shared core prefix for prompt-cache stability across
+	// main and sub/task agents. Empty means unrestricted (subject to
+	// permissions / guardrail).
+	allowedTools map[string]bool
 }
 
 // ToolGuardrail inspects a tool call before it runs. Implementations return an
@@ -65,6 +71,33 @@ func (x *ToolExecutor) WithGuardrail(guardrail ToolGuardrail) *ToolExecutor {
 		return nil
 	}
 	x.guardrail = guardrail
+	return x
+}
+
+// WithAllowedTools restricts which tools may actually run. Names are matched
+// case-sensitively against Tool.Name(). Empty/nil leaves execution unrestricted
+// (the shared wire schema is unaffected either way).
+func (x *ToolExecutor) WithAllowedTools(names []string) *ToolExecutor {
+	if x == nil {
+		return nil
+	}
+	if len(names) == 0 {
+		x.allowedTools = nil
+		return x
+	}
+	allow := make(map[string]bool, len(names))
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		allow[name] = true
+	}
+	if len(allow) == 0 {
+		x.allowedTools = nil
+		return x
+	}
+	x.allowedTools = allow
 	return x
 }
 
@@ -124,6 +157,17 @@ func (x *ToolExecutor) Execute(ctx context.Context, call ToolCall, env ToolEnv) 
 			content := tool.ErrorResult(decision.Reason)
 			return ToolResult{Content: content, IsError: true}
 		}
+	}
+
+	// Runtime allowlist (sub/task AllowedTools). Checked after the global
+	// permission service so plan-mode / bypass still apply, but before
+	// validate/invoke. Schema on the wire is intentionally unaffected.
+	if len(x.allowedTools) > 0 && !x.allowedTools[call.Name] {
+		content := tool.ErrorResult(fmt.Sprintf(
+			"tool %q is not in this agent's allowed_tools (runtime permission; schema still lists the shared core set)",
+			call.Name,
+		))
+		return ToolResult{Content: content, IsError: true}
 	}
 
 	if err := selected.ValidateInput(ctx, input); err != nil {

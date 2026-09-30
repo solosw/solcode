@@ -1861,6 +1861,14 @@ func (cfg *Config) normalizeOrganizer() {
 	if org.Threads < 0 {
 		org.Threads = 0
 	}
+	// processor selects the preferred device. When it is a GPU backend and the
+	// user left gpu_layers at the zero value, offload every layer: a CUDA build
+	// with gpu_layers=0 otherwise stays fully on CPU (SetCPUOnly) and MiniCPM
+	// live runs time out or degrade. Explicit 0 is still available by setting
+	// processor to "cpu". Negative already means "all layers".
+	if org.GPULayers == 0 && org.Processor != "cpu" {
+		org.GPULayers = -1
+	}
 	if org.MaxOutputTokens <= 0 {
 		org.MaxOutputTokens = 1500
 	}

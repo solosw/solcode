@@ -17,6 +17,9 @@ func TestNormalizeOrganizerDefaults(t *testing.T) {
 	if org.Processor != "cpu" {
 		t.Fatalf("processor = %q, want cpu", org.Processor)
 	}
+	if org.GPULayers != 0 {
+		t.Fatalf("gpu layers = %d, want 0 on cpu", org.GPULayers)
+	}
 	if org.ContextSize != 8192 {
 		t.Fatalf("context size = %d, want 8192", org.ContextSize)
 	}
@@ -25,6 +28,24 @@ func TestNormalizeOrganizerDefaults(t *testing.T) {
 	}
 	if org.TimeoutSec != 180 {
 		t.Fatalf("timeout = %d, want 180", org.TimeoutSec)
+	}
+}
+
+func TestNormalizeOrganizerCUDADefaultsAllGPULayers(t *testing.T) {
+	cfg := Default()
+	cfg.Memory.Organizer.Processor = "cuda"
+	// Leave GPULayers at the zero value: cuda should offload everything.
+	cfg.Normalize()
+	if cfg.Memory.Organizer.GPULayers != -1 {
+		t.Fatalf("gpu layers = %d, want -1 when processor is cuda and unset", cfg.Memory.Organizer.GPULayers)
+	}
+
+	cfg = Default()
+	cfg.Memory.Organizer.Processor = "cuda"
+	cfg.Memory.Organizer.GPULayers = 12
+	cfg.Normalize()
+	if cfg.Memory.Organizer.GPULayers != 12 {
+		t.Fatalf("gpu layers = %d, want the explicit 12 to stick", cfg.Memory.Organizer.GPULayers)
 	}
 }
 

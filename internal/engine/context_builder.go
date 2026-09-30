@@ -28,9 +28,13 @@ type ContextBuilder struct {
 	Skills []SkillInfo
 	// SkillNames is a legacy name-only list used when Skills is empty.
 	SkillNames []string
-	// PlanMode, when true, appends plan-mode instructions to the system prompt.
-	// When false, any leftover plan-mode block is stripped from SystemPrompt.
+	// PlanMode is retained for callers/tests that still toggle the flag; the
+	// plan-mode instruction text is injected via ModeInstructions into the
+	// dynamic suffix, never into the system prompt (prompt-cache stability).
 	PlanMode bool
+	// ModeInstructions is turn-local policy (plan mode, etc.) placed in the
+	// ephemeral user context block. Empty means no mode overlay this turn.
+	ModeInstructions string
 	// ForceSkill is the rendered activation text of a skill the router selected
 	// for this run. It is injected as a user message so the selection is applied
 	// rather than merely advertised. Empty means no skill was force-loaded.
@@ -71,11 +75,15 @@ func (b ContextBuilder) Build(req BuildRequest) cpanthropic.MessageRequest {
 }
 
 // withContextMessages optionally injects session summary / retrieved memory /
-// project knowledge as an ephemeral user message immediately before the
-// latest user prompt. Callers should leave these empty for ordinary turns;
-// memory-related context is expected to enter via durable compaction
-// messages instead. When provided, they stay in the messages stream rather
-// than the system prompt so the stable system prefix is not rewritten.
+// project knowledge / mode instructions as an ephemeral user message
+// immediately before the latest user prompt. Callers should leave these empty
+// for ordinary turns; memory-related context is expected to enter via durable
+// compaction messages instead. When provided, they stay in the messages stream
+// rather than the system prompt so the stable system prefix is not rewritten.
+//
+// Plan/mode instructions intentionally live here (dynamic suffix), never in
+// systemPrompt: switching plan↔default must not bust Anthropic prompt-cache
+// on the long system+tools prefix.
 func (b ContextBuilder) withContextMessages(messages []sdk.MessageParam, sessionSummary string, memoryContext []ContextItem, projectKnowledge string) []sdk.MessageParam {
 	contextBlock := b.contextBlock(sessionSummary, memoryContext, projectKnowledge)
 	if contextBlock == "" {
@@ -101,7 +109,12 @@ func (b ContextBuilder) withContextMessages(messages []sdk.MessageParam, session
 
 func (b ContextBuilder) contextBlock(sessionSummary string, memoryContext []ContextItem, projectKnowledge string) string {
 	var parts []string
-	// A force-loaded skill goes first: it is the instruction for this turn, and
+	// Mode policy first among turn-local instructions: it gates what the model
+	// may do this turn without rewriting the cached system prefix.
+	if mode := strings.TrimSpace(b.ModeInstructions); mode != "" {
+		parts = append(parts, mode)
+	}
+	// A force-loaded skill goes next: it is the instruction for this turn, and
 	// the other blocks are supporting context for it.
 	if skill := strings.TrimSpace(b.ForceSkill); skill != "" {
 		parts = append(parts, forceSkillBlock(skill))
@@ -383,25 +396,24 @@ type BuildRequest struct {
 func (b ContextBuilder) systemPrompt(workDir string) string {
 	parts := []string{}
 	if text := strings.TrimSpace(b.SystemPrompt); text != "" {
-		// Never leave a stale plan-mode block in the custom system prompt.
-		// Re-append below only when PlanMode is active.
-		text = stripPlanModeFromText(text)
-		if text != "" {
-			parts = append(parts, text)
-		}
+		parts = append(parts, stripPlanModeFromText(text))
 	}
 	parts = append(parts, defaultSystemPrompt())
 	parts = append(parts, toolUsagePrompt())
 	parts = append(parts, skillsPrompt(b.skillCatalog()))
+	// Compact plan-mode rules are appended EXACTLY ONCE, at the end of the
+	// stable system prompt. They describe the read-only policy both modes share
+	// and are never removed when leaving plan mode, so switching plan↔default
+	// does not rewrite this string or bust the Anthropic tools+system cache.
+	parts = append(parts, planModeRulesPrompt())
 	if rules := strings.TrimSpace(b.ProjectRules); rules != "" {
 		parts = append(parts, rules)
 	}
 	if workDir != "" {
 		parts = append(parts, "Working directory: "+workDir)
 	}
-	if b.PlanMode {
-		parts = append(parts, planModeSystemPrompt())
-	}
+	// Intentionally no ModeInstructions here. Mode policy detail (plan-mode role
+	// and output format) goes through the ephemeral user context block only.
 	return strings.Join(nonEmptyParts(parts), "\n\n")
 }
 
@@ -516,8 +528,17 @@ func stripPlanModeFromText(text string) string {
 	return permission.StripPlanModePrompt(text)
 }
 
+// planModeSystemPrompt is the dynamic active-mode block (role + output format).
+// It is delivered through ModeInstructions while plan mode is on.
 func planModeSystemPrompt() string {
 	return permission.PlanModeInstructions
+}
+
+// planModeRulesPrompt is the compact, always-on plan-mode rule set baked into
+// the stable system prompt. It is idempotent-safe: Appending it must not
+// duplicate if a custom SystemPrompt already contains the marker.
+func planModeRulesPrompt() string {
+	return permission.PlanModeShortInstructions
 }
 
 func defaultSystemPrompt() string {
@@ -556,20 +577,16 @@ IMPORTANT: You must NEVER generate or guess URLs for the user unless you are con
 - Report outcomes faithfully: if tests fail, say so with the output; if a step was skipped, say that. Don't claim success you didn't verify.
 
 # Memory
-- Two memory systems exist, and they are not interchangeable:
-  - WriteMemory / ReadMemory persist durable facts across sessions (a user preference, a project rule, a verified command, a settled decision). Treat this as knowledge that should be true in every future session.
-  - WriteSessionMemory / ReadSessionMemory are this project's session log in .solcode/solcode.md: a chronological record of what a session did, decided, and left unfinished. Each entry carries the checkpoint turn, the files changed, the timestamp, and the session id.
-- Pick by intent: "what happened in this session" → session memory; "a fact worth knowing in every future session" → WriteMemory. Most sessions write one session memory and zero to three WriteMemory entries; do not duplicate the same content in both.
-- WriteMemory and ReadMemory are available only when memory is enabled.
-- Treat WriteMemory as a normal task-lifecycle action, not an exceptional user-request-only tool. Call it immediately after a meaningful milestone establishes durable knowledge, and before the final response if this task produced any durable knowledge that has not already been saved.
-- Save a concise entry when you verify a build/test command or repository layout, learn a user preference or project invariant, make a non-obvious implementation decision and its reason, or resolve a recurring failure/workflow. Usually one to three entries per substantial task are enough.
-- Do not save transient task status or in-flight steps (use TodoWrite), facts a quick read of the repo makes obvious, secrets, or raw code, diffs, and logs.
-- Write each entry as one or two self-contained sentences that make sense without this conversation. Each WriteMemory call stores its own entry (duplicates are kept) and is tagged with the current checkpoint turn when one is open.
-- Call ReadMemory before working out a build command, test layout, or project convention from scratch, when a decision looks like it was already made and you want the recorded reason, and before saving an entry that may already exist.
-- WriteSessionMemory once at the end of a session, after the work is done and verified: the summary plus a few retrieval keywords. Do not supply turn, files, time, or session id — the runtime fills those in.
-- Call ReadSessionMemory with a query to fuzzy-search this session's log, or with no query to get this session's most recent entries newest-first. It only returns the current session's entries, never other sessions'.
-- Sessions that enabled cross-session memory also receive the most relevant durable WriteMemory entries automatically at start; sessions that declined it see only their own durable entries.
-- Memory is a note from earlier work, not ground truth. When an entry contradicts the code in front of you, trust the code and save the correction.`
+- Memory is layered like an OS (Letta / MemGPT style). Layers are not interchangeable:
+  - Core: durable preferences and constraints. When this session opted into cross-session memory, the most relevant core facts may appear once at session start under "Retrieved memory" / "Core memory".
+  - Archival: long-term facts, workflows, and verified commands. Search them with ReadMemory; do not assume they are already in the prompt.
+  - Recall: this project's chronological session log in .solcode/solcode.md (checkpoint turn, files, timestamp, session id). Use ReadSessionMemory / WriteSessionMemory for "what happened this session".
+  - Working: in-flight task state belongs in TodoWrite, not memory.
+- Pick by intent: "what happened in this session" → session recall; "a fact that should stay true across sessions" → archival (WriteMemory when that tool is available).
+- WriteMemory and ReadMemory are available only when memory is enabled. When the local memory organizer is enabled, WriteMemory and WriteSessionMemory are hidden — archival writes happen after compaction via the local organizer instead; keep using ReadMemory / ReadSessionMemory.
+- When WriteMemory is available, treat it as a normal task-lifecycle action: save one to three concise entries after a milestone (preference, project rule, verified command, settled decision). Do not save secrets, raw code, diffs, logs, or transient todos.
+- Call ReadMemory before re-deriving a build command, project convention, or earlier decision. Memory is a note from earlier work, not ground truth — when it contradicts the code in front of you, trust the code and save the correction.
+- WriteSessionMemory once at session end when that tool is available. Call ReadSessionMemory to search this session's log (current session only).`
 }
 
 func convertTools(tools []tool.Tool) []sdk.ToolUnionParam {

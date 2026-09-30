@@ -168,11 +168,82 @@ func TestSelectToolsForTurnStickyEnabled(t *testing.T) {
 }
 
 func TestSelectToolsForTurnAllowedWhitelist(t *testing.T) {
-	allowed := []string{tool.BashToolName, tool.ViewToolName}
+	// Non-empty allowlist used to REPLACE the entire tool set (destroying the
+	// shared prefix between main and subagents). It must now keep core tools
+	// and only ADD the named extras.
+	allowed := []string{tool.BashToolName, tool.ViewToolName, "mcp__office__cli"}
 	selected := SelectToolsForTurn(sampleTools(), allowed, "office documents", nil)
 	got := namesOf(selected)
-	if len(selected) != 2 || !got[tool.BashToolName] || !got[tool.ViewToolName] {
-		t.Fatalf("whitelist broken: %#v", got)
+	if !got[tool.BashToolName] || !got[tool.ViewToolName] || !got[tool.EditToolName] || !got[tool.ToolSearchToolName] {
+		t.Fatalf("shared core prefix missing under allowlist: %#v", got)
+	}
+	if !got["mcp__office__cli"] {
+		t.Fatalf("allowlist extra missing: %#v", got)
+	}
+	// Query matches must NOT pull in unrelated dynamics when allowlist is set;
+	// only core + explicit extras.
+	if got["WebSearch"] || got["mcp__docs__query"] {
+		t.Fatalf("allowlist must not open arbitrary query matches: %#v", got)
+	}
+}
+
+func TestSelectToolsForTurnSubagentSharesCorePrefix(t *testing.T) {
+	mainSel := namesOf(SelectToolsForTurn(sampleTools(), nil, "", nil))
+	// Typical Task subagent used to pass a short allowlist. Schema selection
+	// must ignore it for the public prefix (executor enforces allowlists).
+	subSel := namesOf(SelectToolsForTurn(sampleTools(), nil, "", nil))
+	for name := range coreToolNames {
+		if hiddenFromModel[name] {
+			continue
+		}
+		if !mainSel[name] {
+			continue // not in sampleTools registry
+		}
+		if !subSel[name] {
+			t.Fatalf("subagent missing shared core tool %s (main has it)", name)
+		}
+	}
+	// Core tools must lead the slice (stable public prefix ordering).
+	mainList := SelectToolsForTurn(sampleTools(), nil, "", map[string]bool{"mcp__office__cli": true})
+	subList := SelectToolsForTurn(sampleTools(), nil, "", map[string]bool{"mcp__office__cli": true})
+	if len(mainList) != len(subList) {
+		t.Fatalf("main/sub tool count diverge: %d vs %d", len(mainList), len(subList))
+	}
+	for i := range mainList {
+		if mainList[i].Name() != subList[i].Name() {
+			t.Fatalf("tools order diverge at %d: %s vs %s", i, mainList[i].Name(), subList[i].Name())
+		}
+	}
+	// First non-core must come after every core entry.
+	sawExtra := false
+	for _, tl := range mainList {
+		name := tl.Name()
+		if coreToolNames[name] {
+			if sawExtra {
+				t.Fatalf("core tool %s appeared after extras — prefix unstable", name)
+			}
+			continue
+		}
+		sawExtra = true
+	}
+}
+
+func TestOrderSelectedToolsCoreBeforeExtras(t *testing.T) {
+	selected := map[string]bool{
+		tool.BashToolName:  true,
+		tool.ViewToolName:  true,
+		"mcp__office__cli": true,
+		"WebSearch":        true,
+	}
+	out, _ := orderSelectedTools(sampleTools(), selected)
+	if len(out) != 4 {
+		t.Fatalf("len = %d, want 4", len(out))
+	}
+	if !coreToolNames[out[0].Name()] || !coreToolNames[out[1].Name()] {
+		t.Fatalf("core must lead: %#v", namesOf(out))
+	}
+	if coreToolNames[out[2].Name()] || coreToolNames[out[3].Name()] {
+		t.Fatalf("extras must trail: %#v", namesOf(out))
 	}
 }
 

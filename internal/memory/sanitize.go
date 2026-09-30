@@ -128,6 +128,13 @@ func sanitizeStoredModification(part string) string {
 			return storedExcerpt(part, 140)
 		}
 	}
+	// Bare "path: edited" facts keep the path, drop unknown parentheticals.
+	if strings.Contains(strings.ToLower(part), ": edited") {
+		if idx := strings.Index(part, " ("); idx >= 0 {
+			part = part[:idx]
+		}
+		return storedExcerpt(part, 140)
+	}
 	if idx := strings.Index(part, " ("); idx >= 0 {
 		part = part[:idx]
 	}

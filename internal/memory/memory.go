@@ -45,29 +45,50 @@ const (
 )
 
 type Item struct {
-	ID                 string    `json:"id"`
-	Tier               Tier      `json:"tier"`
-	Kind               Kind      `json:"kind,omitempty"`
-	Scope              Scope     `json:"scope,omitempty"`
-	Text               string    `json:"text"`
-	Tags               []string  `json:"tags,omitempty"`
-	Importance         float64   `json:"importance"`
-	Confidence         float64   `json:"confidence,omitempty"`
-	RetentionScore     float64   `json:"retention_score,omitempty"`
-	AccessCount        int       `json:"access_count"`
-	PromotionCount     int       `json:"promotion_count,omitempty"`
-	CreatedAt          time.Time `json:"created_at"`
-	UpdatedAt          time.Time `json:"updated_at"`
-	LastAccessedAt     time.Time `json:"last_accessed_at"`
-	LastReinforcedAt   time.Time `json:"last_reinforced_at,omitempty"`
-	SourceSessionID    string    `json:"source_session_id,omitempty"`
+	ID               string    `json:"id"`
+	Tier             Tier      `json:"tier"`
+	Kind             Kind      `json:"kind,omitempty"`
+	Scope            Scope     `json:"scope,omitempty"`
+	Text             string    `json:"text"`
+	Tags             []string  `json:"tags,omitempty"`
+	Importance       float64   `json:"importance"`
+	Confidence       float64   `json:"confidence,omitempty"`
+	RetentionScore   float64   `json:"retention_score,omitempty"`
+	AccessCount      int       `json:"access_count"`
+	PromotionCount   int       `json:"promotion_count,omitempty"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+	LastAccessedAt   time.Time `json:"last_accessed_at"`
+	LastReinforcedAt time.Time `json:"last_reinforced_at,omitempty"`
+	SourceSessionID  string    `json:"source_session_id,omitempty"`
 	// SourceTurn is the checkpoint turn that authored this entry when known.
 	// Zero means unset; negative values (e.g. -1) mean no active turn.
-	SourceTurn         int       `json:"source_turn,omitempty"`
-	DerivedFromSummary bool      `json:"derived_from_summary,omitempty"`
-	JudgeReason        string    `json:"judge_reason,omitempty"`
-	JudgeModel         string    `json:"judge_model,omitempty"`
-	JudgeVersion       string    `json:"judge_version,omitempty"`
+	SourceTurn int `json:"source_turn,omitempty"`
+	// SessionMemoryRef is an optional pointer back to a recall-layer entry
+	// (session id + turn) so archival facts can open their episodic source.
+	SessionMemoryRef   string `json:"session_memory_ref,omitempty"`
+	DerivedFromSummary bool   `json:"derived_from_summary,omitempty"`
+	JudgeReason        string `json:"judge_reason,omitempty"`
+	JudgeModel         string `json:"judge_model,omitempty"`
+	JudgeVersion       string `json:"judge_version,omitempty"`
+	// Status is active | superseded | expired | contradicted. Empty means active
+	// for backward compatibility with entries written before governance existed.
+	Status Status `json:"status,omitempty"`
+	// Version increments when an entry supersedes an older related memory.
+	Version int `json:"version,omitempty"`
+	// ExpiresAt, when set, makes the entry inactive after this time.
+	ExpiresAt time.Time `json:"expires_at,omitempty"`
+	// SupersededBy is the id of the newer entry that replaced this one.
+	SupersededBy string `json:"superseded_by,omitempty"`
+	// Supersedes is a comma-separated list of older ids this entry replaced.
+	Supersedes string `json:"supersedes,omitempty"`
+	// Contradicts lists ids of entries this one conflicts with.
+	Contradicts []string `json:"contradicts,omitempty"`
+	// Topic is a short stable key grouping related beliefs (auto-derived when empty).
+	Topic string `json:"topic,omitempty"`
+	// Relations are typed edges to other memory ids (same_topic, supports, …).
+	// Legacy Supersedes/Contradicts remain authoritative for those two types.
+	Relations []Relation `json:"relations,omitempty"`
 }
 
 type Retriever interface {
@@ -101,6 +122,8 @@ func NewItem(text string, tier Tier, sourceSessionID string) Item {
 		Tier:             tier,
 		Kind:             KindFact,
 		Scope:            ScopeProject,
+		Status:           StatusActive,
+		Version:          1,
 		Text:             text,
 		Importance:       0.7,
 		Confidence:       0.7,
@@ -194,16 +217,27 @@ func (s *FileStore) Save(ctx context.Context, item Item) (Item, error) {
 	if item.Kind == "" {
 		item.Kind = KindFact
 	}
+	if item.Status == "" {
+		item.Status = StatusActive
+	}
+	if item.Version <= 0 {
+		item.Version = 1
+	}
 	if item.Scope == "" {
 		item.Scope = ScopeProject
 	}
+	item = EnsureTopic(item)
 	if item.AccessCount <= 0 {
 		item.AccessCount = 1
 	}
 	if item.CreatedAt.IsZero() {
 		item.CreatedAt = now
 	}
-	item.UpdatedAt = now
+	// Preserve an explicit UpdatedAt so governance stamps (e.g. MarkSuperseded
+	// with a past timestamp) survive the write and GC retention can measure age.
+	if item.UpdatedAt.IsZero() {
+		item.UpdatedAt = now
+	}
 	if item.LastAccessedAt.IsZero() {
 		item.LastAccessedAt = now
 	}
@@ -263,6 +297,7 @@ func (s *FileStore) Touch(ctx context.Context, item Item) error {
 	item.AccessCount++
 	item.LastAccessedAt = now
 	item.LastReinforcedAt = now
+	item.UpdatedAt = now
 	_, err := s.Save(ctx, item)
 	return err
 }

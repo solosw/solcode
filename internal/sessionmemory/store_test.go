@@ -53,6 +53,33 @@ func TestAppendCreatesFileWithHeaderAndMetadata(t *testing.T) {
 	}
 }
 
+func TestMemoryIDsRoundTrip(t *testing.T) {
+	store := NewStore(t.TempDir())
+	ctx := context.Background()
+	_, err := store.Append(ctx, Entry{
+		Keywords:   []string{"organizer"},
+		Summary:    "Organizer extracted durable facts.",
+		Importance: 0.7,
+		Turn:       2,
+		MemoryIDs:  []string{"mem_abc", "mem_def"},
+		Time:       time.Date(2026, 3, 1, 9, 0, 0, 0, time.Local),
+		SessionID:  "e2e",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := store.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("entries = %#v", entries)
+	}
+	if got := strings.Join(entries[0].MemoryIDs, ","); got != "mem_abc,mem_def" {
+		t.Fatalf("memory_ids = %#v", entries[0].MemoryIDs)
+	}
+}
+
 func TestReadRecentAndFuzzySearch(t *testing.T) {
 	store := NewStore(t.TempDir())
 	ctx := context.Background()

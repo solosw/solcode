@@ -22,6 +22,10 @@ func TestSettingsExposeMemoryOrganizerBlock(t *testing.T) {
 	cfg.Memory.Organizer.ModelPath = modelPath
 	cfg.Memory.Organizer.ContextSize = 4096
 	cfg.Memory.Organizer.GPULayers = 12
+	// Point the library probe at an empty directory. Without this it falls back
+	// to YZMA_LIB / ~/.solcode/lib/llama, which is installed on a developer
+	// machine that actually runs the organizer.
+	cfg.Memory.Organizer.LibDir = filepath.Join(dir, "libs")
 	cfg.Normalize()
 
 	_, url, _ := settingsServer(t, cfg)

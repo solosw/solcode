@@ -62,7 +62,11 @@ func (r LayeredRetriever) Retrieve(items []Item, plan RetrievalPlan) []Item {
 	}
 	profile := analyzeRetrievalQuery(plan.Query)
 	filtered := make([]Item, 0, len(items))
+	now := time.Now()
 	for _, item := range items {
+		if !item.IsActive(now) {
+			continue
+		}
 		if item.Tier == TierSensory {
 			continue
 		}

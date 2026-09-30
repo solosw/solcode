@@ -59,8 +59,15 @@ func loadLibrary(dir string) error {
 	if dir == "" {
 		return fmt.Errorf("yzma: library directory is empty")
 	}
+	libPath := LibraryPath(dir)
 	if !LibraryPresent(dir) {
-		return fmt.Errorf("yzma: llama.cpp shared library not found at %s (install it with `yzma install`, or set memory.organizer.lib_dir / YZMA_LIB)", LibraryPath(dir))
+		return fmt.Errorf("yzma: llama.cpp shared library not found at %s (install it with `yzma install`, or set memory.organizer.lib_dir / YZMA_LIB)", libPath)
+	}
+	// Make the side-by-side ggml DLLs resolvable before binding. Without this
+	// Windows fails to resolve llama.dll's imports even though every file is
+	// present, reporting a missing module that names a dependency.
+	if err := prepareLibrarySearchPath(dir); err != nil {
+		return fmt.Errorf("yzma: prepare DLL search path for %s: %w", dir, err)
 	}
 	if err := llama.Load(dir); err != nil {
 		return fmt.Errorf("yzma: load llama.cpp from %s: %w", dir, err)

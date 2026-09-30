@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -56,6 +57,35 @@ func TestTimeoutForAskUserAllowsDialogPlusGrace(t *testing.T) {
 func TestTimeoutForRegularToolIsTwoMinutes(t *testing.T) {
 	if got := timeoutForTool(timeoutTestTool{name: "Other"}); got != 2*time.Minute {
 		t.Fatalf("regular tool timeout = %s, want 2m", got)
+	}
+}
+
+func TestAllowedToolsIsExecutorOnly(t *testing.T) {
+	reg := tool.NewRegistry()
+	reg.Register(
+		timeoutTestTool{name: tool.ViewToolName},
+		timeoutTestTool{name: tool.BashToolName},
+		timeoutTestTool{name: tool.EditToolName},
+	)
+	exec := NewToolExecutor(reg, nil).WithAllowedTools([]string{tool.ViewToolName, tool.BashToolName})
+
+	// Allowed tool runs.
+	ok := exec.Execute(context.Background(), ToolCall{Name: tool.ViewToolName, Input: json.RawMessage(`{}`)}, ToolEnv{})
+	if ok.IsError {
+		t.Fatalf("View should be allowed: %#v", ok)
+	}
+	// Disallowed tool is denied at execute time (schema still lists core set).
+	denied := exec.Execute(context.Background(), ToolCall{Name: tool.EditToolName, Input: json.RawMessage(`{}`)}, ToolEnv{})
+	if !denied.IsError {
+		t.Fatal("Edit should be denied by runtime allowlist")
+	}
+	if denied.Content == nil || !strings.Contains(denied.Content.Text, "allowed_tools") {
+		t.Fatalf("deny message = %#v", denied.Content)
+	}
+	// Empty allowlist = unrestricted.
+	open := NewToolExecutor(reg, nil).WithAllowedTools(nil)
+	if r := open.Execute(context.Background(), ToolCall{Name: tool.EditToolName, Input: json.RawMessage(`{}`)}, ToolEnv{}); r.IsError {
+		t.Fatalf("nil allowlist should not restrict: %#v", r)
 	}
 }
 
