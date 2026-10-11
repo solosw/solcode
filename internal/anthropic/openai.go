@@ -189,7 +189,7 @@ func doOpenAIRequest(ctx context.Context, client *http.Client, endpoint string, 
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
-	return nil, fmt.Errorf("openai chat/completions failed after %d retries: %w", openAIMaxRetries, lastErr)
+	return nil, fmt.Errorf("openai API failed after %d retries: %w", openAIMaxRetries, lastErr)
 }
 
 func isRetryableOpenAIStatus(status int) bool {
@@ -198,7 +198,7 @@ func isRetryableOpenAIStatus(status int) bool {
 
 func openAIResponseError(resp *http.Response) error {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	return fmt.Errorf("openai chat/completions %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	return fmt.Errorf("openai API %s: %s", resp.Status, strings.TrimSpace(string(body)))
 }
 
 func waitOpenAIRetry(ctx context.Context, delay time.Duration) error {

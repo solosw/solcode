@@ -28,6 +28,8 @@ const (
 	// FormatOpenAI sends OpenAI chat/completions-compatible requests to
 	// {base_url}/chat/completions. Internal engine types stay Anthropic SDK shaped.
 	FormatOpenAI = "openai"
+	// FormatResponses sends OpenAI Responses API requests to {base_url}/v1/responses.
+	FormatResponses = "responses"
 )
 
 // Options configures the API client wrapper.
@@ -39,7 +41,7 @@ type Options struct {
 }
 
 // Client is a thin wrapper around the official Anthropic Go SDK, with an optional
-// OpenAI chat/completions transport for compatible gateways.
+// OpenAI Chat Completions and Responses transports for compatible gateways.
 type Client struct {
 	sdk     sdk.Client
 	format  string
@@ -72,6 +74,8 @@ func NormalizeFormat(format string) string {
 	switch strings.ToLower(strings.TrimSpace(format)) {
 	case FormatOpenAI, "chat", "chat_completions", "chat-completions":
 		return FormatOpenAI
+	case FormatResponses, "openai_responses", "openai-responses":
+		return FormatResponses
 	default:
 		return FormatAnthropic
 	}
@@ -91,16 +95,18 @@ func (c *Client) SDK() *sdk.Client {
 	return &c.sdk
 }
 
-// Create sends one chat request. When Format is openai, it uses OpenAI
-// chat/completions at {base_url}/chat/completions and maps the response back
+// Create sends one request using the selected wire protocol and maps the response
 // into an Anthropic sdk.Message. When Stream is true, deltas are delivered via
 // OnTextDelta / OnThinkingDelta callbacks.
 func (c *Client) Create(ctx context.Context, req MessageRequest) (*sdk.Message, error) {
 	if c == nil {
 		return nil, fmt.Errorf("anthropic client is nil")
 	}
-	if c.Format() == FormatOpenAI {
+	switch c.Format() {
+	case FormatOpenAI:
 		return c.createOpenAI(ctx, req)
+	case FormatResponses:
+		return c.createResponses(ctx, req)
 	}
 	return c.createAnthropic(ctx, req)
 }

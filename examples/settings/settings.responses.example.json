@@ -1,0 +1,22 @@
+{
+  "provider": "openai-responses",
+  "model": "coding",
+  "stream": true,
+  "thinking": true,
+  "thinking_text": true,
+  "effort": "high",
+  "providers": [
+    {
+      "name": "openai-responses",
+      "api_format": "responses",
+      "api_key_env": "OPENAI_API_KEY",
+      "base_url": "https://api.openai.com",
+      "models": [
+        {
+          "name": "coding",
+          "id": "YOUR_RESPONSES_MODEL"
+        }
+      ]
+    }
+  ]
+}

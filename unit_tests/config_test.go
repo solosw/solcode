@@ -1465,3 +1465,66 @@ func TestLoadProjectRulesMissingDir(t *testing.T) {
 		t.Fatalf("empty workDir should be empty, got %q", got)
 	}
 }
+
+func TestLoadResponsesAPIFormat(t *testing.T) {
+	for _, format := range []string{"responses", "openai_responses", "openai-responses"} {
+		t.Run(format, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "settings.json")
+			writeFile(t, path, `{"api_format":"`+format+`"}`)
+			cfg, err := config.Load(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.APIFormat != anthropic.FormatResponses {
+				t.Fatalf("APIFormat = %q, want responses", cfg.APIFormat)
+			}
+		})
+	}
+}
+
+func TestResponsesProviderOverridesAPIFormat(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	writeFile(t, path, `{
+		"api_format": "openai",
+		"provider": "responses-provider",
+		"model": "coding",
+		"providers": [{
+			"name": "responses-provider",
+			"api_format": "openai_responses",
+			"api_key": "test-key",
+			"base_url": "https://api.example.test/v1",
+			"models": [{"name":"coding","id":"responses-model"}]
+		}]
+	}`)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.APIFormat != anthropic.FormatResponses || cfg.Model != "responses-model" {
+		t.Fatalf("format = %q; model = %q", cfg.APIFormat, cfg.Model)
+	}
+	if cfg.APIKey != "test-key" || cfg.BaseURL != "https://api.example.test/v1" {
+		t.Fatalf("provider credentials = %q / %q", cfg.APIKey, cfg.BaseURL)
+	}
+}
+
+func TestResponsesProviderInheritsGlobalAPIFormat(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	writeFile(t, path, `{
+		"api_format": "responses",
+		"provider": "responses-provider",
+		"model": "coding",
+		"providers": [{
+			"name": "responses-provider",
+			"base_url": "https://api.example.test",
+			"models": [{"name":"coding","id":"responses-model"}]
+		}]
+	}`)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.APIFormat != anthropic.FormatResponses {
+		t.Fatalf("APIFormat = %q, want responses", cfg.APIFormat)
+	}
+}

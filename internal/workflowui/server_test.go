@@ -329,3 +329,50 @@ func TestServerSettingsProvidersModels(t *testing.T) {
 		t.Fatalf("expected 409 for duplicate provider, got %d", resp6.StatusCode)
 	}
 }
+
+func TestServerResponsesProvider(t *testing.T) {
+	stored := config.Config{WorkDir: t.TempDir()}
+	srv, url, err := Start(Config{
+		WorkDir: stored.WorkDir,
+		List:    func() []workflow.Definition { return nil },
+		Save: func(workflow.Definition, workflow.SaveScope, *workflow.Layout) (string, error) {
+			return "", nil
+		},
+		Settings: func() config.Config { return stored },
+		ApplySettings: func(next config.Config) error {
+			stored = next
+			return nil
+		},
+		OpenBrowser: false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = srv.Close() })
+	resp, err := http.Post(url+"api/providers", "application/json", strings.NewReader(
+		`{"name":"responses-provider","api_key":"test-key","base_url":"https://api.example.test/v1","api_format":"responses"}`,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || len(stored.Providers) != 1 || stored.Providers[0].APIFormat != "responses" {
+		t.Fatalf("status = %d; providers = %#v", resp.StatusCode, stored.Providers)
+	}
+	settings, err := http.Get(url + "api/settings")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer settings.Body.Close()
+	var body struct {
+		Providers []struct {
+			APIFormat string `json:"api_format"`
+		} `json:"providers"`
+	}
+	if err := json.NewDecoder(settings.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Providers) != 1 || body.Providers[0].APIFormat != "responses" {
+		t.Fatalf("provider summary = %#v", body)
+	}
+}

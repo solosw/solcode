@@ -7,6 +7,7 @@ solcode reads JSON config (usually `settings.json` / `settings.local.json`).
 | File | Use when |
 |------|----------|
 | [`settings.minimal.example.json`](settings.minimal.example.json) | First install: one provider, sonnet + haiku |
+| [`settings.responses.example.json`](settings.responses.example.json) | OpenAI Responses (`/v1/responses`); replace `YOUR_RESPONSES_MODEL` with your provider's model ID |
 | [`settings.multimodel.example.json`](settings.multimodel.example.json) | Multiple models / second provider (proxy) |
 | [`settings.full.example.json`](settings.full.example.json) | Models + skills + MCP stub + hooks + memory + hosted Jev (`type=api`) |
 | [`settings.jev.local.example.json`](settings.jev.local.example.json) | Local OpenJev/Laya ONNX (`type=local`; empty `engine` defaults to `ort`) — merge into your settings |

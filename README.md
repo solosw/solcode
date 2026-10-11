@@ -789,6 +789,31 @@ Sessions are reused per `(workDir, language)` for the life of the process and sh
 
 For `api_format: "anthropic"` (the default), solcode sends native Messages API requests through its own HTTP/JSON transport rather than the official SDK client. It supports non-streaming responses and SSE streams, including text, thinking, and incremental `tool_use` JSON input. Before a response body is consumed, transient transport failures and HTTP `408`, `409`, `429`, and `5xx` responses are retried up to five times with capped exponential backoff; `Retry-After` is honored when present. Existing engine and session code continues to use SDK-shaped message types as a compatibility boundary.
 
+### OpenAI Responses transport
+
+Set `api_format: "responses"` to use `/v1/responses` instead of Chat Completions. This can be configured globally or on an individual provider (`openai_responses` and `openai-responses` are also accepted). The existing `api_format: "openai"` continues to use Chat Completions.
+
+```json
+{
+  "provider": "openai-responses",
+  "model": "coding",
+  "stream": true,
+  "providers": [
+    {
+      "name": "openai-responses",
+      "api_format": "responses",
+      "api_key_env": "OPENAI_API_KEY",
+      "base_url": "https://api.openai.com",
+      "models": [{ "name": "coding", "id": "YOUR_RESPONSES_MODEL" }]
+    }
+  ]
+}
+```
+
+`base_url` is required and may be an origin, a `/v1` API root, or the complete `/v1/responses` endpoint; the transport avoids adding `/v1` twice. Choose a model supported by your Responses provider.
+
+The adapter supports non-streaming JSON and SSE, text and image inputs (including `view_image` results), function calls and results, reasoning summaries, and cached-token usage accounting. It maps `max_tokens` to `max_output_tokens`, `effort` to `reasoning.effort`, and enabled `thinking_text` to `reasoning.summary: "auto"`. Tool schemas are sent with `strict: false` to preserve optional fields. Each request sends the engine's full history with `store: false`; server-side conversation state is not used. Encrypted reasoning items are requested and replayed through the existing SDK-shaped history so reasoning-enabled tool turns can continue without server-side storage. Incomplete responses report the appropriate token-limit/refusal stop reason, while failed or interrupted streams return errors rather than silently accepting partial output. HTTP authentication and retry behavior are shared with the Chat Completions transport.
+
 See also [`examples/settings/settings.full.example.json`](examples/settings/settings.full.example.json).
 
 ## Built-in Tools

@@ -122,9 +122,9 @@ func DefaultKnowledgeGraphPath(workDir string) string {
 type Config struct {
 	APIKey  string `json:"api_key"`
 	BaseURL string `json:"base_url"`
-	// APIFormat selects the outbound chat protocol: "anthropic" (default) or "openai".
-	// OpenAI mode POSTs to {base_url}/chat/completions while keeping internal
-	// Anthropic message/tool types for the engine/session stack.
+	// APIFormat selects "anthropic" (default), "openai" (Chat Completions), or
+	// "responses" (OpenAI Responses). Internal Anthropic message/tool types
+	// remain the compatibility boundary for the engine/session stack.
 	APIFormat        string               `json:"api_format,omitempty"`
 	Model            string               `json:"model"`
 	FastModel        string               `json:"fast_model,omitempty"`
@@ -1274,6 +1274,10 @@ func applyJSONConfig(cfg *Config, data []byte) error {
 			}
 		case "base_url":
 			if err := json.Unmarshal(value, &cfg.BaseURL); err != nil {
+				return err
+			}
+		case "api_format":
+			if err := json.Unmarshal(value, &cfg.APIFormat); err != nil {
 				return err
 			}
 		case "proxy":
