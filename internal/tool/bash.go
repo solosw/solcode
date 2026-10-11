@@ -43,8 +43,8 @@ func DefaultShell() ShellRunner {
 type BashParams struct {
 	Command string `json:"command"`
 	Timeout int    `json:"timeout,omitempty"`
-	// RunInBackground is retained for tests/compat only; it is not part of the
-	// model-facing schema. Long runs use timeout > AutoWaitThresholdMs instead.
+	// RunInBackground asks the main-agent scheduler to yield immediately.
+	// Standalone/nested execution remains synchronous with the same deadline.
 	RunInBackground bool `json:"run_in_background,omitempty"`
 }
 
@@ -117,9 +117,13 @@ Output is truncated at %d characters.
 - Use ';' or '&&' to chain commands, do NOT use newlines.
 - Avoid find/grep/cat/head/tail — use Glob, Grep, and View tools instead.
 - Timeout in milliseconds (max %d = 24h). Default %d (1m).
-- When timeout is greater than %d (3m), the command is tracked as a background job
-  and this tool call blocks until it finishes or the timeout elapses (wait duration
-  equals the timeout, up to 24h). No separate Wait tool is required or available.`,
+- When enabled by the host (default), the main agent yields long-running calls after its configured
+  foreground interval (default 10s), allowing independent work to continue. Completion
+  and output are delivered automatically; do not poll or restart the command.
+- Set run_in_background=true to yield immediately when host scheduling is enabled.
+- timeout is the command's hard deadline, NOT the foreground yielding interval.
+- Internally, timeouts above %d (3m) use the command registry. No Wait call is needed.
+- Do not start work that depends on this command until its completion notification.`,
 		bannedStr, MaxOutputLength, MaxTimeout, DefaultTimeout, AutoWaitThresholdMs)
 }
 
@@ -127,6 +131,10 @@ func (b *bashTool) InputSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
+			"run_in_background": map[string]any{
+				"type":        "boolean",
+				"description": "Yield immediately and receive a completion notification later (main agent, when background scheduling is enabled). The command timeout still applies.",
+			},
 			"command": map[string]any{
 				"type":        "string",
 				"description": "The bash command to execute",
@@ -134,8 +142,8 @@ func (b *bashTool) InputSchema() map[string]any {
 			"timeout": map[string]any{
 				"type": "integer",
 				"description": fmt.Sprintf(
-					"Optional timeout in milliseconds (default %d, max %d = 24h). Values above %d (3m) auto-wait for the full timeout.",
-					DefaultTimeout, MaxTimeout, AutoWaitThresholdMs,
+					"Command execution deadline in milliseconds (default %d, max %d = 24h). Separate from the host's automatic foreground yielding interval.",
+					DefaultTimeout, MaxTimeout,
 				),
 			},
 		},
@@ -206,7 +214,7 @@ func (b *bashTool) invokeBackgroundAndWait(ctx context.Context, command, workDir
 		timeout = time.Duration(MaxTimeout) * time.Millisecond
 	}
 
-	id := jobs.Start(command, workDir, timeout, func(jobCtx context.Context, stdout, stderr *safeBuffer) (int, error) {
+	id := jobs.StartWithContext(ctx, command, workDir, timeout, func(jobCtx context.Context, stdout, stderr *safeBuffer) (int, error) {
 		return b.runCommandTo(jobCtx, command, workDir, stdout, stderr)
 	})
 
@@ -219,13 +227,28 @@ func (b *bashTool) invokeBackgroundAndWait(ctx context.Context, command, workDir
 		return ErrorResult(err.Error()), nil
 	}
 
-	text := formatJobSnapshot(snap)
-	if err == errWaitTimeout || (snap.Status == JobRunning && waitCtx.Err() == context.DeadlineExceeded) {
-		text = fmt.Sprintf("Command still running after %s (bash timeout).\n\n%s", timeout.Round(time.Second), text)
-	} else if waitCtx.Err() != nil && snap.Status == JobRunning {
-		text = fmt.Sprintf("Wait canceled.\n\n%s", text)
+	timedOut := err == errWaitTimeout || waitCtx.Err() == context.DeadlineExceeded
+	canceled := waitCtx.Err() == context.Canceled
+	if (timedOut || canceled) && snap.Status == JobRunning {
+		// The wait and execution deadline can race. Do not announce a finished
+		// background call while its process is still shutting down, or leave it
+		// detached after the executor cancels this invocation's context.
+		jobs.Cancel(id)
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+		final, _ := jobs.Wait(shutdownCtx, id, 0)
+		shutdownCancel()
+		if final.ID != "" {
+			snap = final
+		}
 	}
-	isErr := snap.Status == JobFailed || snap.Status == JobTimedOut || snap.Status == JobCanceled
+	text := formatJobSnapshot(snap)
+	if timedOut && snap.Status != JobCompleted {
+		text = fmt.Sprintf("Command timed out after %s.\n\n%s", timeout.Round(time.Millisecond), text)
+	} else if canceled && snap.Status != JobCompleted {
+		text = fmt.Sprintf("Command canceled.\n\n%s", text)
+	}
+	isErr := snap.Status == JobFailed || snap.Status == JobTimedOut || snap.Status == JobCanceled || snap.Status == JobRunning
+
 	return &ContentBlock{Type: "text", Text: text, IsError: isErr}, nil
 }
 

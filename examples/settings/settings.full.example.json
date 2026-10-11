@@ -3,6 +3,10 @@
   "model": "sonnet",
   "fast_model": "haiku",
   "max_turns": 30,
+  "background_tasks": {
+    "enabled": true,
+    "yield_after_ms": 10000
+  },
   "stream": true,
   "thinking": true,
   "thinking_text": false,

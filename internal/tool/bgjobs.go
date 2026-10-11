@@ -101,6 +101,12 @@ func NewBackgroundJobs(maxKeep int) *BackgroundJobs {
 // Start registers and launches a background command. run must block until the
 // process exits; it receives live stdout/stderr writers and a cancellable ctx.
 func (m *BackgroundJobs) Start(command, workDir string, timeout time.Duration, run func(ctx context.Context, stdout, stderr *safeBuffer) (exitCode int, execErr error)) string {
+	return m.StartWithContext(context.Background(), command, workDir, timeout, run)
+}
+
+// StartWithContext binds the command lifetime to its owning agent run as well
+// as its timeout. Canceling a foreground wait cannot leave an orphaned process.
+func (m *BackgroundJobs) StartWithContext(parent context.Context, command, workDir string, timeout time.Duration, run func(ctx context.Context, stdout, stderr *safeBuffer) (exitCode int, execErr error)) string {
 	if m == nil {
 		return ""
 	}
@@ -108,7 +114,7 @@ func (m *BackgroundJobs) Start(command, workDir string, timeout time.Duration, r
 		timeout = time.Duration(MaxTimeout) * time.Millisecond
 	}
 	id := fmt.Sprintf("bash-%d", m.seq.Add(1))
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	job := &backgroundJob{
 		id:        id,
 		command:   command,

@@ -11,7 +11,7 @@ A terminal-based coding agent powered by Claude (Anthropic API) that can read, w
 - **ACP (Agent Client Protocol)** — Speak JSON-RPC over stdio with `solcode --acp` (or `solcode acp`) so editors like Zed can drive the same agent loop as the TUI. Supports streaming updates, permissions, cancel, session modes/load, tool-call diffs, ACP `plan` updates from `TodoWrite`, and capability-gated client `fs/read_text_file` / `fs/write_text_file`.
 - **Multi-model support** — Configure multiple LLM providers and models, switch at runtime with `/model` (current provider only) and `/provider`, or add them directly from their dialogs.
 - **Native Anthropic transport** — The Anthropic Messages API uses a handwritten HTTP/JSON/SSE client, including streaming text, thinking, and tool-input deltas; the official SDK remains only for internal message compatibility.
-- **20+ built-in tools** — Bash (timeouts above 3m auto-wait up to 24h), ImageGenerate / ImageEdit (optional OpenAI-format Images API, separately configurable), ComputerUse (optional desktop screenshot/mouse/keyboard via robotgo; off by default), Edit, Write, View, ViewImage, Grep, Glob, LS, Diff, Patch, Fetch, WebSearch, LSP, MCP, TodoWrite, WriteMemory, ReadMemory, WriteSessionMemory, ReadSessionMemory, AskUser, Task (orchestrates internal Subagent workers), and more.
+- **20+ built-in tools** — Bash / Task (long-running calls automatically yield to the background with completion notifications), ImageGenerate / ImageEdit (optional OpenAI-format Images API, separately configurable), ComputerUse (optional desktop screenshot/mouse/keyboard via robotgo; off by default), Edit, Write, View, ViewImage, Grep, Glob, LS, Diff, Patch, Fetch, WebSearch, LSP, MCP, TodoWrite, WriteMemory, ReadMemory, WriteSessionMemory, ReadSessionMemory, AskUser, Task (orchestrates internal Subagent workers), and more.
 - **Checkpoints & rewind** — Before any file-mutating tool runs, solcode snapshots the file's turn-start contents. During a Bash call it instead compares before/after SHA-256 workdir fingerprints (capped at 2000 files / 1 MiB each, skipping `.git`, `node_modules`, binaries, and hidden paths) and captures whatever changed. `/rewind` then restores workspace files to the start of a past turn — **code only**; conversation history is untouched. Checkpoints may be labeled with `/checkpoint-name` and listed with `/checkpoints`.
 - **Two memory layers** — `WriteMemory` / `ReadMemory` persist durable facts that stay true across sessions (preferences, project rules, verified commands). `WriteSessionMemory` / `ReadSessionMemory` keep this project's chronological session log in `<project>/.solcode/solcode.md`, where each entry records the checkpoint turn, the files changed, the timestamp, and the session id.
 - **MCP (Model Context Protocol)** — Connect to external MCP servers over stdio or HTTP.
@@ -815,6 +815,28 @@ Set `api_format: "responses"` to use `/v1/responses` instead of Chat Completions
 The adapter supports non-streaming JSON and SSE, text and image inputs (including `view_image` results), function calls and results, reasoning summaries, and cached-token usage accounting. It maps `max_tokens` to `max_output_tokens`, `effort` to `reasoning.effort`, and enabled `thinking_text` to `reasoning.summary: "auto"`. Tool schemas are sent with `strict: false` to preserve optional fields. Each request sends the engine's full history with `store: false`; server-side conversation state is not used. Encrypted reasoning items are requested and replayed through the existing SDK-shaped history so reasoning-enabled tool turns can continue without server-side storage. Incomplete responses report the appropriate token-limit/refusal stop reason, while failed or interrupted streams return errors rather than silently accepting partial output. HTTP authentication and retry behavior are shared with the Chat Completions transport.
 
 See also [`examples/settings/settings.full.example.json`](examples/settings/settings.full.example.json).
+
+## Background Bash / Task execution
+
+The main agent no longer has to block on a long shell command or task graph. By default, `Bash` and `Task` calls that are still running after **10 seconds of actual waiting** yield a `running_in_background` acknowledgement, and the agent can continue independent work. Both tools accept `run_in_background: true` to yield immediately. Up to eight calls can be detached per main-agent run; additional calls run in the foreground.
+
+```json
+{
+  "background_tasks": {
+    "enabled": true,
+    "yield_after_ms": 10000
+  }
+}
+```
+
+- `yield_after_ms` is the foreground waiting interval, **not** the execution deadline. Bash's `timeout` still limits the command's total runtime (default 60 seconds, maximum 24 hours); specify a larger `timeout` for builds, training, or other lengthy commands. Task retains its executor deadline of 30 minutes.
+- Completion, failure, and output are inserted as a background-task notification at the next safe model boundary. The original tool call receives exactly one `tool_result`; there is no duplicate result or forced cancellation of an in-flight model response.
+- If the main model has nothing else to do, the runtime waits locally for completion rather than polling the model. Queued user prompts can wake this idle wait and allow more independent work.
+- Background jobs are owned by the current main-agent run. Canceling the run, reaching its turn limit, or encountering a model error cancels unfinished jobs and records cancellation. They do not survive an application restart or transfer to another session.
+- A background `Task` keeps its entire dependency graph and child agents running normally. Nested agents keep synchronous tool execution so their dependent work cannot continue with unfinished results. Permissions, validation, execution timeouts, and pre/post-tool hooks still apply.
+- Do not start dependent work or assume success until the completion notification arrives. Avoid concurrent edits to the same files from the main agent and background tasks.
+
+Set `background_tasks.enabled` to `false` to retain foreground-only execution.
 
 ## Built-in Tools
 

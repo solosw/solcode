@@ -17,14 +17,15 @@ var taskRetryDelay = 10 * time.Second
 const taskMaxRetries = 5
 
 type TaskParams struct {
-	Description   string              `json:"description"`
-	Prompt        string              `json:"prompt"`
-	AllowedTools  []string            `json:"allowed_tools,omitempty"`
-	Model         string              `json:"model,omitempty"`
-	FastModel     string              `json:"fast_model,omitempty"`
-	Tasks         []TaskItem          `json:"tasks,omitempty"`
-	ExecutionMode string              `json:"execution_mode,omitempty"`
-	Dependencies  map[string][]string `json:"dependencies,omitempty"`
+	Description     string              `json:"description"`
+	Prompt          string              `json:"prompt"`
+	AllowedTools    []string            `json:"allowed_tools,omitempty"`
+	Model           string              `json:"model,omitempty"`
+	FastModel       string              `json:"fast_model,omitempty"`
+	Tasks           []TaskItem          `json:"tasks,omitempty"`
+	ExecutionMode   string              `json:"execution_mode,omitempty"`
+	Dependencies    map[string][]string `json:"dependencies,omitempty"`
+	RunInBackground bool                `json:"run_in_background,omitempty"`
 }
 
 type TaskItem struct {
@@ -54,6 +55,7 @@ func NewTaskToolWithSubagent(subagent Tool) Tool {
 func (t *taskTool) Name() string { return TaskToolName }
 func (t *taskTool) Description() string {
 	return `Launches one or more sub-agents to complete independent or dependent tasks and returns their results.
+When enabled by the host (default), the main agent yields long-running Task calls after the host foreground interval (default 10s). Set run_in_background=true to yield immediately when background scheduling is enabled. The entire task graph keeps running, and its final result is delivered automatically as a completion notification. Continue only independent work; do not poll, relaunch the task, or use unfinished results.
 Use a single prompt for one bounded task, or pass tasks with dependency edges. Independent tasks run in parallel; dependency chains run serially by level. Set difficulty=easy or model=fast to use the configured fast model when available.
 Each leaf task runs through the internal Subagent tool (including retries). Give each sub-agent a self-contained prompt with paths, constraints, and the expected return. Do not use Task for a single cheap file read you can do with View/Grep.
 
@@ -79,14 +81,15 @@ func (t *taskTool) InputSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"description":    map[string]any{"type": "string", "description": "Short label for a single task"},
-			"prompt":         map[string]any{"type": "string", "description": "Detailed prompt for a single sub-agent"},
-			"allowed_tools":  map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Runtime allowlist for the single sub-agent's executor. Does not change the shared tools schema prefix. Empty means unrestricted execution (subject to permission mode)."},
-			"model":          map[string]any{"type": "string", "description": "Optional explicit model or 'fast'"},
-			"fast_model":     map[string]any{"type": "string", "description": "Configured fast model id, passed by the host"},
-			"execution_mode": map[string]any{"type": "string", "enum": []string{"auto", "parallel", "serial"}, "description": "auto runs independent graph levels in parallel; serial runs tasks one by one"},
-			"dependencies":   map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "array", "items": map[string]any{"type": "string"}}, "description": "Optional dependency graph keyed by task id"},
-			"tasks":          map[string]any{"type": "array", "items": taskSchema, "description": "Multiple tasks to execute"},
+			"run_in_background": map[string]any{"type": "boolean", "description": "Yield immediately while this task graph continues; receive a completion notification automatically (main agent, when host background scheduling is enabled)."},
+			"description":       map[string]any{"type": "string", "description": "Short label for a single task"},
+			"prompt":            map[string]any{"type": "string", "description": "Detailed prompt for a single sub-agent"},
+			"allowed_tools":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Runtime allowlist for the single sub-agent's executor. Does not change the shared tools schema prefix. Empty means unrestricted execution (subject to permission mode)."},
+			"model":             map[string]any{"type": "string", "description": "Optional explicit model or 'fast'"},
+			"fast_model":        map[string]any{"type": "string", "description": "Configured fast model id, passed by the host"},
+			"execution_mode":    map[string]any{"type": "string", "enum": []string{"auto", "parallel", "serial"}, "description": "auto runs independent graph levels in parallel; serial runs tasks one by one"},
+			"dependencies":      map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "array", "items": map[string]any{"type": "string"}}, "description": "Optional dependency graph keyed by task id"},
+			"tasks":             map[string]any{"type": "array", "items": taskSchema, "description": "Multiple tasks to execute"},
 		},
 	}
 }

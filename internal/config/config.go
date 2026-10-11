@@ -125,31 +125,32 @@ type Config struct {
 	// APIFormat selects "anthropic" (default), "openai" (Chat Completions), or
 	// "responses" (OpenAI Responses). Internal Anthropic message/tool types
 	// remain the compatibility boundary for the engine/session stack.
-	APIFormat        string               `json:"api_format,omitempty"`
-	Model            string               `json:"model"`
-	FastModel        string               `json:"fast_model,omitempty"`
-	MaxContextTokens int64                `json:"max_context_tokens,omitempty"`
-	MaxTokens        int64                `json:"max_tokens"`
-	SystemPrompt     string               `json:"system_prompt"`
-	WorkDir          string               `json:"work_dir"`
-	MaxTurns         int                  `json:"max_turns"`
-	Stream           bool                 `json:"stream"`
-	Thinking         bool                 `json:"thinking"`
-	ThinkingText     bool                 `json:"thinking_text"`
-	Effort           string               `json:"effort"`
-	PermissionMode   permission.Mode      `json:"permission_mode"`
-	Permissions      permission.Config    `json:"permissions,omitempty"`
-	Hooks            hook.Config          `json:"hooks,omitempty"`
-	TUI              TUIConfig            `json:"tui,omitempty"`
-	Skills           SkillsConfig         `json:"skills,omitempty"`
-	Workflows        WorkflowsConfig      `json:"workflows,omitempty"`
-	MCP              MCPConfig            `json:"mcp,omitempty"`
-	MCPServers       []MCPServerConfig    `json:"mcp_servers,omitempty"`
-	LSP              LSPConfig            `json:"lsp,omitempty"`
-	Session          SessionConfig        `json:"session,omitempty"`
-	Memory           MemoryConfig         `json:"memory,omitempty"`
-	KnowledgeGraph   KnowledgeGraphConfig `json:"knowledge_graph,omitempty"`
-	Sandbox          sandbox.Policy       `json:"sandbox,omitempty"`
+	APIFormat        string                `json:"api_format,omitempty"`
+	Model            string                `json:"model"`
+	FastModel        string                `json:"fast_model,omitempty"`
+	MaxContextTokens int64                 `json:"max_context_tokens,omitempty"`
+	MaxTokens        int64                 `json:"max_tokens"`
+	SystemPrompt     string                `json:"system_prompt"`
+	WorkDir          string                `json:"work_dir"`
+	MaxTurns         int                   `json:"max_turns"`
+	Stream           bool                  `json:"stream"`
+	Thinking         bool                  `json:"thinking"`
+	ThinkingText     bool                  `json:"thinking_text"`
+	Effort           string                `json:"effort"`
+	PermissionMode   permission.Mode       `json:"permission_mode"`
+	Permissions      permission.Config     `json:"permissions,omitempty"`
+	Hooks            hook.Config           `json:"hooks,omitempty"`
+	TUI              TUIConfig             `json:"tui,omitempty"`
+	Skills           SkillsConfig          `json:"skills,omitempty"`
+	Workflows        WorkflowsConfig       `json:"workflows,omitempty"`
+	BackgroundTasks  BackgroundTasksConfig `json:"background_tasks,omitempty"`
+	MCP              MCPConfig             `json:"mcp,omitempty"`
+	MCPServers       []MCPServerConfig     `json:"mcp_servers,omitempty"`
+	LSP              LSPConfig             `json:"lsp,omitempty"`
+	Session          SessionConfig         `json:"session,omitempty"`
+	Memory           MemoryConfig          `json:"memory,omitempty"`
+	KnowledgeGraph   KnowledgeGraphConfig  `json:"knowledge_graph,omitempty"`
+	Sandbox          sandbox.Policy        `json:"sandbox,omitempty"`
 	// Proxy configures outbound HTTP(S) traffic for API, Fetch, MCP HTTP, etc.
 	Proxy httpproxy.Config `json:"proxy,omitempty"`
 	// Image is an optional OpenAI-compatible Images API (generations + edits),
@@ -171,6 +172,15 @@ type Config struct {
 	Provider  string           `json:"provider,omitempty"`
 	Providers []ProviderConfig `json:"providers,omitempty"`
 }
+
+// BackgroundTasksConfig controls foreground yielding, not the task's execution
+// deadline. Bash timeout and the Task executor deadline remain independent.
+type BackgroundTasksConfig struct {
+	Enabled      bool `json:"enabled"`
+	YieldAfterMS int  `json:"yield_after_ms"`
+}
+
+const DefaultBackgroundYieldAfterMS = 10_000
 
 // ComputerUseConfig gates the ComputerUse tool and bundled computer-use skill.
 // Leave Enabled=false (default) to hide both.
@@ -534,6 +544,7 @@ func Default() Config {
 		MaxTokens:        64_000,
 		WorkDir:          wd,
 		MaxTurns:         0,
+		BackgroundTasks:  BackgroundTasksConfig{Enabled: true, YieldAfterMS: DefaultBackgroundYieldAfterMS},
 		Stream:           true,
 		Thinking:         true,
 		ThinkingText:     false,
@@ -656,6 +667,12 @@ func defaultSettingsPayload(workDir string) map[string]any {
 
 func (cfg *Config) Normalize() error {
 	cfg.APIFormat = anthropic.NormalizeFormat(cfg.APIFormat)
+	if cfg.BackgroundTasks.YieldAfterMS <= 0 {
+		cfg.BackgroundTasks.YieldAfterMS = DefaultBackgroundYieldAfterMS
+	}
+	if cfg.BackgroundTasks.YieldAfterMS > 86_400_000 {
+		cfg.BackgroundTasks.YieldAfterMS = 86_400_000
+	}
 	cfg.Proxy.URL = strings.TrimSpace(cfg.Proxy.URL)
 	if cfg.Proxy.URL == "" {
 		cfg.Proxy.Enabled = false
@@ -1294,6 +1311,10 @@ func applyJSONConfig(cfg *Config, data []byte) error {
 			}
 		case "system_prompt":
 			if err := json.Unmarshal(value, &cfg.SystemPrompt); err != nil {
+				return err
+			}
+		case "background_tasks":
+			if err := json.Unmarshal(value, &cfg.BackgroundTasks); err != nil {
 				return err
 			}
 		case "work_dir":

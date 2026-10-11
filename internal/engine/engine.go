@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
 	"github.com/solosw/solcode/internal/agent"
@@ -66,30 +67,33 @@ type Config struct {
 	SkillRootsByName map[string]string // activated skill name -> absolute package root
 	// SkillRegistry resolves a skill name to its Definition, so a
 	// router-selected skill can be force-loaded without a Skill tool round trip.
-	SkillRegistry    *skill.Registry
-	MaxTurns         int
-	Stream           bool
-	Thinking         bool
-	ThinkingText     bool
-	Effort           string
-	TodoPath         string
-	TextFileSystem   tool.TextFileSystem
-	OnTextDelta      func(string)
-	OnThinkingDelta  func(string)
-	OnToolStart      func(name string, input json.RawMessage, toolUseID string)
-	OnToolDone       func(name string, output string, isError bool, toolUseID string)
-	OnStatus         func(string)
-	OnAgentProgress  func(tool.AgentProgressEvent)
-	OnUsage          func(Usage)
-	OnAskUser        func(ctx context.Context, params tool.AskUserParams) (map[string]string, error)
+	SkillRegistry   *skill.Registry
+	MaxTurns        int
+	Stream          bool
+	Thinking        bool
+	ThinkingText    bool
+	Effort          string
+	TodoPath        string
+	TextFileSystem  tool.TextFileSystem
+	OnTextDelta     func(string)
+	OnThinkingDelta func(string)
+	OnToolStart     func(name string, input json.RawMessage, toolUseID string)
+	OnToolDone      func(name string, output string, isError bool, toolUseID string)
+	OnStatus        func(string)
+	OnAgentProgress func(tool.AgentProgressEvent)
+	OnUsage         func(Usage)
+	OnAskUser       func(ctx context.Context, params tool.AskUserParams) (map[string]string, error)
 	// AskUserAutoSelect answers AskUser without a human (Jev or first-option
 	// fallback). Used for nested agents and AskUser timeouts.
 	AskUserAutoSelect func(ctx context.Context, params tool.AskUserParams) (map[string]string, error)
 	// OnTodosUpdated records a session-memory todolist snapshot after each
 	// successful TodoWrite. Nil keeps TodoWrite persistence-only.
-	OnTodosUpdated   func(ctx context.Context, sessionID, workDir string, todos []tool.TodoItem)
-	QueuedPrompts    func() []string
-	RecordFileChange func(ctx context.Context, uctx *tool.UseContext, change tool.FileChange)
+	OnTodosUpdated func(ctx context.Context, sessionID, workDir string, todos []tool.TodoItem)
+	QueuedPrompts  func() []string
+	// Background scheduling applies only to main-agent Bash/Task calls.
+	BackgroundTasksEnabled bool
+	BackgroundYieldAfter   time.Duration
+	RecordFileChange       func(ctx context.Context, uctx *tool.UseContext, change tool.FileChange)
 	// CaptureCheckpoint records turn-start file content for code-only rewind.
 	CaptureCheckpoint func(path string, content *string)
 	// UncaptureCheckpoint removes a path from the active turn when a later
@@ -250,7 +254,7 @@ func (e *Engine) runLegacyModel(ctx context.Context, req RunRequest) RunResult {
 	return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Output: response.Text}, Messages: messages}
 }
 
-func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResult {
+func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result RunResult) {
 	cfg := runReq.AgentConfig
 	if e.config.Client == nil {
 		return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: "engine has no anthropic client"}}
@@ -314,6 +318,37 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 	activeSkillRoot := ""
 	isMain := cfg.Role == "" || cfg.Role == agent.AgentRoleMain
 	isTask := cfg.Role == agent.AgentRoleTask
+	background := newBackgroundTools(isMain && e.config.BackgroundTasksEnabled, e.config.BackgroundYieldAfter)
+	defer func() {
+		for _, notification := range background.abort(e.config.OnToolDone) {
+			result.Messages = append(result.Messages, sdk.NewUserMessage(sdk.NewTextBlock(notification)))
+		}
+	}()
+	drainBackground := func() int {
+		notifications := background.drain(e.config.OnToolDone)
+		for _, notification := range notifications {
+			// Completion is a new user-context notification, never a second
+			// tool_result for an already acknowledged tool_use ID.
+			messages = append(messages, sdk.NewUserMessage(sdk.NewTextBlock(notification)))
+		}
+		return len(notifications)
+	}
+	drainQueuedPrompts := func() int {
+		if !isMain || e.config.QueuedPrompts == nil {
+			return 0
+		}
+		count := 0
+		for _, queued := range e.config.QueuedPrompts() {
+			queued = permission.StripPlanModePrompt(strings.TrimSpace(queued))
+			if queued == "" {
+				continue
+			}
+			msg, _ := userMessageFromPrompt(queued, cfg.WorkDir)
+			messages = append(messages, msg)
+			count++
+		}
+		return count
+	}
 	emitProgress := func(kind, toolName, toolInput, output string, isError bool) {
 		if !isTask || e.config.OnAgentProgress == nil {
 			return
@@ -335,6 +370,8 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 		if err := ctx.Err(); err != nil {
 			return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: err.Error()}, Messages: messages}
 		}
+		drainBackground()
+		drainQueuedPrompts()
 		modelName := cfg.Model
 		if modelName == "" {
 			modelName = e.config.ModelName
@@ -507,6 +544,37 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 		messages = append(messages, message.ToParam())
 		toolUses := cpanthropic.ToolUseBlocks(message)
 		if message.StopReason != sdk.StopReasonToolUse || len(toolUses) == 0 {
+			injected := drainBackground() + drainQueuedPrompts()
+			if injected > 0 {
+				if turn+1 >= turnLimit {
+					return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: fmt.Sprintf("max turns reached: %d; queued/background messages saved but not processed", turnLimit)}, Messages: messages}
+				}
+				continue
+			}
+			if background.hasPending() {
+				if turn+1 >= turnLimit {
+					return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: fmt.Sprintf("max turns reached: %d; unfinished background calls canceled", turnLimit)}, Messages: messages}
+				}
+				if e.config.OnStatus != nil {
+					e.config.OnStatus("Waiting for background Bash/Task results")
+				}
+				// No model polling: wait for completion. A local queue tick also
+				// lets newly submitted user prompts wake an otherwise idle run.
+				ticker := time.NewTicker(100 * time.Millisecond)
+				for injected == 0 {
+					select {
+					case <-ctx.Done():
+						ticker.Stop()
+						return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: ctx.Err().Error()}, Messages: messages}
+					case <-background.wake:
+						injected += drainBackground()
+					case <-ticker.C:
+						injected += drainQueuedPrompts()
+					}
+				}
+				ticker.Stop()
+				continue
+			}
 			e.runStopHook(ctx, cfg)
 			return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Output: finalText}, Messages: messages}
 		}
@@ -521,15 +589,13 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 				e.config.OnToolStart(use.Name, input, use.ID)
 			}
 			emitProgress("tool_start", use.Name, string(input), "", false)
-			toolResult := executor.Execute(ctx, ToolCall{
-				Name:  use.Name,
-				Input: input,
-			}, ToolEnv{
+			callSkillRoots := orderedSkillRoots(activeSkillRoot, e.config.SkillRoots)
+			toolEnv := ToolEnv{
 				UseContext: &tool.UseContext{
 					SessionID:      nonEmpty(runReq.SessionID, string(cfg.ID)),
 					MessageID:      use.ID,
 					WorkDir:        cfg.WorkDir,
-					SkillRoots:     orderedSkillRoots(activeSkillRoot, e.config.SkillRoots),
+					SkillRoots:     callSkillRoots,
 					AgentID:        string(cfg.ID),
 					AgentRole:      string(cfg.Role),
 					TodoPath:       e.config.TodoPath,
@@ -546,7 +612,7 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 							e.config.RecordFileChange(changeCtx, &tool.UseContext{
 								SessionID:  nonEmpty(runReq.SessionID, string(cfg.ID)),
 								WorkDir:    cfg.WorkDir,
-								SkillRoots: orderedSkillRoots(activeSkillRoot, e.config.SkillRoots),
+								SkillRoots: callSkillRoots,
 							}, change)
 						}
 					},
@@ -568,6 +634,11 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 						e.config.OnTodosUpdated(todoCtx, nonEmpty(runReq.SessionID, string(cfg.ID)), cfg.WorkDir, todos)
 					},
 				},
+			}
+			toolResult := background.execute(ctx, backgroundSchedulingName(e.config.Tools, use.Name), use.ID, input, func(runCtx context.Context, onStart func()) ToolResult {
+				env := toolEnv
+				env.OnInvokeStart = onStart
+				return executor.Execute(runCtx, ToolCall{Name: use.Name, Input: input}, env)
 			})
 			if err := ctx.Err(); err != nil {
 				return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: err.Error()}, Messages: messages}
@@ -598,7 +669,7 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 			apiResult := toolResultToAPI(use.ID, toolResult)
 			text := apiResult.Text
 			isError := apiResult.IsError
-			if isMain && e.config.OnToolDone != nil {
+			if isMain && !toolResult.Background && e.config.OnToolDone != nil {
 				// UI gets caption text only — never dump base64 image payloads.
 				e.config.OnToolDone(use.Name, text, isError, use.ID)
 			}
@@ -609,18 +680,10 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) RunResu
 			results = append(results, apiResult)
 		}
 		messages = append(messages, sdk.NewUserMessage(cpanthropic.ToolResultBlocks(results)...))
-		if isMain && e.config.QueuedPrompts != nil {
-			for _, queued := range e.config.QueuedPrompts() {
-				queued = strings.TrimSpace(queued)
-				if queued == "" {
-					continue
-				}
-				// Plan-mode instructions are ModeInstructions only.
-				queued = permission.StripPlanModePrompt(queued)
-				msg, _ := userMessageFromPrompt(queued, cfg.WorkDir)
-				messages = append(messages, msg)
-			}
-		}
+	}
+
+	if background.hasPending() {
+		return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: fmt.Sprintf("max turns reached: %d; unfinished background calls canceled", turnLimit)}, Messages: messages}
 	}
 
 	e.runStopHook(ctx, cfg)

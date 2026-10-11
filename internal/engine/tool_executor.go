@@ -20,11 +20,17 @@ type ToolCall struct {
 
 type ToolEnv struct {
 	UseContext *tool.UseContext
+	// OnInvokeStart runs after permissions, validation, hooks, and checkpoint
+	// setup. Foreground yielding must not time out an approval dialog.
+	OnInvokeStart func()
 }
 
 type ToolResult struct {
 	Content *tool.ContentBlock
 	IsError bool
+	// Background means the result is a scheduling acknowledgement, not a
+	// terminal tool result. UI completion is emitted only when the job ends.
+	Background bool
 }
 
 const (
@@ -188,6 +194,9 @@ func (x *ToolExecutor) Execute(ctx context.Context, call ToolCall, env ToolEnv) 
 
 	toolCtx, cancel := context.WithTimeout(ctx, timeoutForTool(selected))
 	defer cancel()
+	if env.OnInvokeStart != nil {
+		env.OnInvokeStart()
+	}
 	content, err := selected.Invoke(toolCtx, env.UseContext, input)
 	if err != nil {
 		switch {

@@ -229,3 +229,59 @@ func TestMaxTimeoutIsTwentyFourHours(t *testing.T) {
 		t.Fatalf("AutoWaitThresholdMs = %d, want 180000 (3m)", AutoWaitThresholdMs)
 	}
 }
+
+func TestBashLongJobCancellationDoesNotOrphanCommand(t *testing.T) {
+	jobs := NewBackgroundJobs(4)
+	bash := NewBashToolWithJobs(DefaultShell(), jobs)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	input, _ := json.Marshal(BashParams{Command: sleepCommand(10), Timeout: MaxTimeout})
+	returned := make(chan *ContentBlock, 1)
+	go func() {
+		result, err := bash.Invoke(ctx, &UseContext{}, input)
+		if err != nil {
+			result = ErrorResult(err.Error())
+		}
+		returned <- result
+	}()
+	deadline := time.After(2 * time.Second)
+	var ids []string
+	for len(ids) == 0 {
+		select {
+		case <-deadline:
+			t.Fatal("long command did not start")
+		case <-time.After(time.Millisecond):
+			ids = jobs.RunningIDs()
+		}
+	}
+	cancel()
+	select {
+	case result := <-returned:
+		if !result.IsError {
+			t.Fatalf("canceled wait reported success: %s", result.Text)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Bash did not return after cancellation")
+	}
+	snapshot, err := jobs.Wait(t.Context(), ids[0], 2*time.Second)
+	if err != nil || snapshot.Status != JobCanceled {
+		t.Fatalf("command survived its parent cancellation: snapshot=%#v error=%v", snapshot, err)
+	}
+}
+
+func TestBackgroundJobsStartWithContext(t *testing.T) {
+	jobs := NewBackgroundJobs(4)
+	ctx, cancel := context.WithCancel(t.Context())
+	started := make(chan struct{})
+	id := jobs.StartWithContext(ctx, "test", "", time.Minute, func(ctx context.Context, _, _ *safeBuffer) (int, error) {
+		close(started)
+		<-ctx.Done()
+		return 0, ctx.Err()
+	})
+	<-started
+	cancel()
+	snapshot, err := jobs.Wait(t.Context(), id, time.Second)
+	if err != nil || snapshot.Status != JobCanceled {
+		t.Fatalf("snapshot = %#v; error=%v", snapshot, err)
+	}
+}
