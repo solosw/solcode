@@ -53,13 +53,13 @@ func TestViewReadsUserDirectorySkillReferenceByRelativePath(t *testing.T) {
 	}
 }
 
-func TestSkillRootPathsCannotEscapeRoot(t *testing.T) {
+func TestCheckAllowedPathAllowsAnyDirectory(t *testing.T) {
 	workDir := t.TempDir()
 	skillRoot := t.TempDir()
 	outside := t.TempDir()
 	uctx := &tool.UseContext{WorkDir: workDir, SkillRoots: []string{skillRoot}}
-	if err := tool.CheckAllowedPath(uctx, filepath.Join(outside, "secret.md")); err == nil {
-		t.Fatal("expected external path to be rejected")
+	if err := tool.CheckAllowedPath(uctx, filepath.Join(outside, "secret.md")); err != nil {
+		t.Fatalf("CheckAllowedPath() external path rejected: %v", err)
 	}
 }
 
@@ -76,7 +76,7 @@ func TestCheckAllowedPathAllowsUserSolcodeDir(t *testing.T) {
 	}
 }
 
-func TestCheckAllowedPathRejectsOutsideUserSolcode(t *testing.T) {
+func TestCheckAllowedPathAllowsOutsideUserSolcode(t *testing.T) {
 	workDir := t.TempDir()
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -84,7 +84,7 @@ func TestCheckAllowedPathRejectsOutsideUserSolcode(t *testing.T) {
 	}
 	outside := filepath.Join(home, "not-solcode-secret.txt")
 	uctx := &tool.UseContext{WorkDir: workDir}
-	if err := tool.CheckAllowedPath(uctx, outside); err == nil {
-		t.Fatal("expected path outside ~/.solcode to be rejected")
+	if err := tool.CheckAllowedPath(uctx, outside); err != nil {
+		t.Fatalf("CheckAllowedPath() path outside ~/.solcode rejected: %v", err)
 	}
 }

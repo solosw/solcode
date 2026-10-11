@@ -455,7 +455,7 @@ func toolUsagePrompt() string {
 		"- Call ToolSearch as soon as the task needs a capability that is not in the current list (for example web search, fetch, image generation/edit, browser/MCP servers, or a named skill). Use a short capability query, not a full sentence.",
 		"- After ToolSearch, wait for the next turn: matching tools are enabled then, and you must use the exact returned tool name. Do not invent tool names.",
 		"- Prefer ToolSearch over guessing, skipping the capability, or asking the user which hidden tool to use.",
-		"- File tools may read/write the project WorkDir and the user ~/.solcode directory. Do not try to access other home-directory paths.",
+		"- File tools may read and write any directory. Relative paths still resolve against the project WorkDir, then configured skill roots.",
 		"- Prefer specialized tools over Bash: Glob/Grep/LS/View for files, LSP for code intelligence, WebSearch/Fetch (via ToolSearch if hidden) for the network. Bash is banned from curl/wget and similar downloaders.",
 		"- Use AskUser for real product/requirement choices (2-4 options). Do not use it for facts you can discover with tools.",
 		"- Use ModeSwitch only when the user wants plan/bypass/goal, or when a large design should be planned before edits. Do not switch modes unprompted for ordinary coding.",

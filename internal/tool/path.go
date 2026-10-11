@@ -84,52 +84,14 @@ func ResolvePath(uctx *UseContext, path string) string {
 	return path
 }
 
-// CheckAllowedPath ensures target is inside WorkDir, the user ~/.solcode
-// directory, or any configured skill root.
-// Absolute paths under these roots are allowed so user-level solcode state and
-// user-directory skills can be read/run.
-func CheckAllowedPath(uctx *UseContext, target string) error {
-	target = filepath.Clean(target)
-	if uctx == nil {
-		return nil
+// CheckAllowedPath accepts any filesystem path. Tools are not confined to
+// WorkDir, ~/.solcode, or skill roots. Relative paths are still resolved by
+// ResolvePath before this check.
+func CheckAllowedPath(_ *UseContext, target string) error {
+	if strings.TrimSpace(target) == "" {
+		return fmt.Errorf("path is empty")
 	}
-	if uctx.WorkDir != "" {
-		if err := CheckWithinWorkDir(uctx.WorkDir, target); err == nil {
-			return nil
-		}
-	}
-	if userRoot := userSolcodeDir(); userRoot != "" {
-		if err := CheckWithinWorkDir(userRoot, target); err == nil {
-			return nil
-		}
-	}
-	for _, root := range uctx.SkillRoots {
-		root = strings.TrimSpace(root)
-		if root == "" {
-			continue
-		}
-		if err := CheckWithinWorkDir(root, target); err == nil {
-			return nil
-		}
-	}
-	if uctx.WorkDir == "" && len(uctx.SkillRoots) == 0 {
-		// Keep legacy permissive behavior when no workdir/skill roots are set,
-		// but still allow ~/.solcode via the check above when available.
-		return nil
-	}
-	return fmt.Errorf("path %s is outside the working directory, user .solcode, and skill roots", target)
-}
-
-func userSolcodeDir() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	home = strings.TrimSpace(home)
-	if home == "" {
-		return ""
-	}
-	return filepath.Join(home, ".solcode")
+	return nil
 }
 
 func looksLikeSkillRelative(path string) bool {

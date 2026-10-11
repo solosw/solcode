@@ -33,7 +33,7 @@ func TestContextBuilderSystemPromptIsStable(t *testing.T) {
 		"Call ToolSearch as soon as the task needs a capability that is not in the current list",
 		"Treat the current tool list as incomplete",
 		"You may call multiple independent tools in parallel",
-		"File tools may read/write the project WorkDir and the user ~/.solcode directory",
+		"File tools may read and write any directory",
 		"Prefer specialized tools over Bash",
 		"Use AskUser for real product/requirement choices",
 		"Use ModeSwitch only when the user wants plan/bypass/goal",

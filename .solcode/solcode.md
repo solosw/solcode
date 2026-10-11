@@ -2,10 +2,11 @@
 
 Written by the model at session end. Newest entries last.
 
-## 2026-09-23 22:56:16 · session task-1 · turn -1 · importance 0.50
+## 2026-10-11 14:41:23 · session task-1 · turn -1 · importance 0.35
 - keywords: todolist, todo-write, jevconfig, webui settings, embeddingconfig, normalizejev, applyjevsettings
+- todos: 1|定位目录白名单实现、调用点及相关提示|in_progress|valid|open; 2|检查 sandbox、checkpoint、LSP 与 README 的路径限制|pending|valid|open; 3|汇总路径行号、保留检查与最小变更建议|pending|valid|open
 
-Mapped how optional Jev feature settings flow: JevConfig in internal/config/config.go (normalizeJev/JevEnabled/JevType), WebUI DTO+handlers in workflowui/server.go (jevSettings/settingsUpdate/applyJevSettings/getSettings), static conditional api/local fields in index.html+app.js, persistence via cmd/solcode ApplySettings → SaveLocalOverrides(\~/.solcode/settings.local.json). Existing embedding mentions are lexical Vector maps in memory retriever plus README embeddinggemma link — no EmbeddingConfig yet. Recommended parallel EmbeddingConfig shape: type=local|api, enabled, model, model\_dir, api base/key/env.
+Todolist update (3 items).
 
 ## 2026-09-23 23:16:05 · session session-20260919-235046 · turn 72 · importance 0.40
 - keywords: todolist, todo-write, embedding, settings, webui, config, turn
@@ -27,11 +28,11 @@ Turn memory: 先做本地模式，先使用本地模型C:\\Users\\solosw.solcode
 
 Turn memory: 向量记忆相关使用go get github.com/philippgille/chromem-go这个库，然后先完成本地嵌入模型
 
-## 2026-09-23 23:26:59 · session task-2 · turn -1 · importance 0.35
+## 2026-10-11 14:41:53 · session task-2 · turn -1 · importance 0.35
 - keywords: todolist, todo-write
-- todos: 1|Read ort_engine.go API (NewORTEngine, RunNamed, etc.)|completed|valid|done; 2|Read tokenizer.go for HF tokenizer reuse|completed|valid|done; 3|Check go.mod for ort/chromem deps|completed|valid|done; 4|Find EmbeddingConfig / paths in config.go|completed|valid|done; 5|Search internal/ for existing embedding packages|completed|valid|done; 6|Summarize chromem-go EmbeddingFunc seams|completed|valid|done
+- todos: 1|定位目录访问校验、checkpoint、LSP 和 ACP 相关代码|in_progress|valid|open; 2|追踪调用流程，区分访问限制与工作空间/checkpoint 范围|pending|valid|open; 3|整理最小修改建议及测试影响，附路径与行号|pending|valid|open
 
-Todolist update (6 items).
+Todolist update (3 items).
 
 ## 2026-09-24 00:13:47 · session acp-1790177307741658300-1 · turn 0 · importance 0.40
 - keywords: todolist, todo-write, askuser, jev, subagent, timeout, answeraskuser, turn
@@ -701,3 +702,56 @@ Turn memory: ### 结论
 | 位置 | 改动 |
 |------|------|
 | `internal/app/ses…
+
+## 2026-10-11 14:49:11 · session acp-1791700728355350000-1 · turn 0 · importance 0.40
+- keywords: todolist, todo-write, turn
+
+Turn memory: 现在更新一下工具限制，现在所有工具在任意目录都能工作不再限制
+
+## 2026-10-11 14:41:51 · session task-3 · turn -1 · importance 0.35
+- keywords: todolist, todo-write
+- todos: 1|查找 README、docs、prompts 中目录访问与工具白名单说明|in_progress|valid|open; 2|核对相关说明的上下文并区分权限和破坏性操作限制|pending|valid|open; 3|汇总具体路径行号和最小改动建议，不修改文件|pending|valid|open
+
+Todolist update (3 items).
+
+## 2026-10-11 14:41:53 · session task-4 · turn -1 · importance 0.35
+- keywords: todolist, todo-write
+- todos: 1|定位目录白名单、sandbox 与命令执行实现|in_progress|valid|open; 2|核对调用路径与相关测试，区分其他安全防护|pending|valid|open; 3|汇总实际影响、路径行号与最小修改建议|pending|valid|open
+
+Todolist update (3 items).
+
+## 2026-10-11 14:48:38 · session task-6 · turn -1 · importance 0.35
+- keywords: todolist, todo-write
+- todos: 1|定位 LSP 工具、服务管理与通用路径检查实现|completed|valid|done; 2|追踪调用链并区分访问限制和 workspace/server 选择|completed|valid|done; 3|整理最小修改建议、精确行号及测试影响|completed|valid|done
+
+Todolist update (3 items).
+
+## 2026-10-11 14:42:25 · session task-5 · turn -1 · importance 0.35
+- keywords: todolist, todo-write
+- todos: 1|定位 ACP 入口和路径限制相关实现|in_progress|valid|open; 2|追踪 cwd、文件操作、权限与 checkpoint 调用链|pending|valid|open; 3|汇总实际阻断点、最小修改建议及相关测试|pending|valid|open
+
+Todolist update (3 items).
+
+## 2026-10-11 14:43:11 · session task-7 · turn -1 · importance 0.35
+- keywords: todolist, todo-write
+- todos: 1|定位 engine checkpoint 和路径检查入口|completed|valid|done; 2|追踪工具执行前后与 snapshot/restore 的调用链和边界|in_progress|valid|open; 3|核对已有测试并形成最小修改建议及证据|pending|valid|open
+
+Todolist update (3 items).
+
+## 2026-10-11 14:48:00 · session task-13 · turn -1 · importance 0.35
+- keywords: todolist, todo-write
+- todos: 1|定位 checkpoint 入口及路径检查相关实现|in_progress|valid|open; 2|梳理工具执行前后调用链并区分限制作用范围|pending|valid|open; 3|核对已有测试并给出最小修改建议与证据|pending|valid|open
+
+Todolist update (3 items).
+
+## 2026-10-11 14:50:22 · session acp-1791700728355350000-1 · turn 1 · importance 0.40
+- keywords: turn, todolist
+
+Turn memory: 继续
+
+## 2026-10-11 15:00:56 · session acp-1791700728355350000-1 · turn 2 · importance 0.50
+- keywords: todolist, todo-write, turn, organizer, archival, retrieval, terms, tool
+- files: internal/engine/context_builder.go, internal/tool/path.go, unit_tests/context_builder_test.go, unit_tests/skill_path_test.go
+- memory_ids: mem_21337d602406a50a
+
+Organizer: 用户要求将工具限制改为可在任意目录工作，移除对 .solcode 和 skill roots 的访问限制。assistant: 已定位代码中的目录访问限制，将工具改为可在任意目录工作，并保留其他权限检查。assistant: [tool use: TodoWrite] {"todos":[{"content":"定位工具目录限制及相关测试","id":"1","priority":"high","status":"in_progress"},{"content":"移除目录限
