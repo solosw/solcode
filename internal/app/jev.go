@@ -135,6 +135,21 @@ func (j *jevRuntime) router() *engine.Router {
 	return &engine.Router{Decider: j.decider, MinConfidence: j.routeMin}
 }
 
+func (j *jevRuntime) shouldInjectWorkingSet() func(context.Context, map[string]any) bool {
+	if j == nil || j.decider == nil || !j.decider.Enabled() {
+		return nil
+	}
+	return func(ctx context.Context, state map[string]any) bool {
+		choice, _ := j.decider.Choose(ctx, state,
+			"Should the main coding agent receive the current task working set and efficiency note now? Inject only when it contains useful context for the changed task; skip redundant unchanged context.",
+			map[string]string{
+				"inject": "Inject the current WorkingSet and EfficiencyNote because they contain relevant new task context.",
+				"skip":   "Skip them because the task context is unchanged or the information is not useful now.",
+			}, j.routeConfidence(), "inject")
+		return choice == "inject"
+	}
+}
+
 // memoryJudge returns the Jev memory judge, or nil when memory judgement is off.
 func (j *jevRuntime) memoryJudge() memory.Judge {
 	if j == nil || !j.memoryEnabled || j.decider == nil {

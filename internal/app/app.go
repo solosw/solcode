@@ -251,6 +251,7 @@ func New(cfg config.Config, opts ...Option) (*App, error) {
 	}
 	engineCfg := engineConfig(cfg, client, runtime, registry, permissions, options.onTextDelta, options.onThinkingDelta, options.onToolStart, options.onToolDone, application.emitUsage, options.onStatus, options.onAgentProgress, options.onAskUser, options.textFileSystem, options.queuedPrompts, recordFileChange, application.captureCheckpoint, application.uncaptureCheckpoint, application.listCheckpointPaths, application.fingerprintBaseline, application.compactMessagesMidRun)
 	engineCfg.Router = jev.router()
+	engineCfg.ShouldInjectWorkingSet = jev.shouldInjectWorkingSet()
 	engineCfg.Guardrail = jev.guardrail()
 	engineCfg.AskUserAutoSelect = application.askUserAutoSelect
 	// Snapshot todolist on every TodoWrite so mid-turn updates are not lost;
@@ -259,7 +260,12 @@ func New(cfg config.Config, opts ...Option) (*App, error) {
 	eng := engine.NewEngine(engineCfg)
 	coordinator := agent.NewCoordinator(eng)
 	subagent := tool.NewSubagentTool(coordinator)
-	registry.Register(subagent, tool.NewTaskToolWithSubagent(subagent), tool.NewBatchTool())
+	registry.Register(subagent, tool.NewTaskToolWithSubagent(subagent), tool.NewBatchToolWithLimits(tool.BatchLimits{
+		MaxOperations:  cfg.Batch.MaxOperations,
+		MaxParallel:    cfg.Batch.MaxParallel,
+		MaxResultRunes: cfg.Batch.MaxResultRunes,
+		MaxReadRetries: cfg.Batch.MaxReadRetries,
+	}))
 	registry.Register(tool.NewModeSwitchToolWithGoal(application.SwitchMode, application.startGoalFlow))
 	// When Jev is on, screen WebSearch hits against the search query itself.
 	if jev != nil && jev.decider != nil {
@@ -660,6 +666,7 @@ func (a *App) ReloadFeatures(cfg config.Config, mcpFactory mcp.ClientFactory) er
 	}
 	engineCfg := engineConfig(cfg, a.Client, a.Hooks, a.Tools, a.Permissions, a.onTextDelta, a.onThinkingDelta, a.onToolStart, a.onToolDone, a.emitUsage, a.onStatus, a.onAgentProgress, a.onAskUser, a.textFileSystem, a.queuedPrompts, newFileChangeRecorder(a.ChangeGraph), a.captureCheckpoint, a.uncaptureCheckpoint, a.listCheckpointPaths, a.fingerprintBaseline, a.compactMessagesMidRun)
 	engineCfg.Router = jev.router()
+	engineCfg.ShouldInjectWorkingSet = jev.shouldInjectWorkingSet()
 	engineCfg.Guardrail = jev.guardrail()
 	engineCfg.AskUserAutoSelect = a.askUserAutoSelect
 	engineCfg.OnTodosUpdated = a.recordTodoSessionMemory

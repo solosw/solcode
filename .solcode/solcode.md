@@ -755,3 +755,74 @@ Turn memory: 继续
 - memory_ids: mem_21337d602406a50a
 
 Organizer: 用户要求将工具限制改为可在任意目录工作，移除对 .solcode 和 skill roots 的访问限制。assistant: 已定位代码中的目录访问限制，将工具改为可在任意目录工作，并保留其他权限检查。assistant: [tool use: TodoWrite] {"todos":[{"content":"定位工具目录限制及相关测试","id":"1","priority":"high","status":"in_progress"},{"content":"移除目录限
+
+## 2026-10-12 18:52:14 · session acp-1791801508971727000-1 · turn 0 · importance 0.50
+- keywords: turn, todolist, organizer, archival, retrieval, terms, batch_tool
+- memory_ids: mem_21337d602406a50a
+
+Organizer: 用户要求移除工具目录限制，允许任意目录访问。当前 Solcode 引擎已具备 BatchTool 批量工具机制，支持任意目录访问，但 BatchTool 默认隐藏了原子编码工具，用户未明确指定使用 BatchTool 或需要独立入口。建议用户明确指定使用 BatchTool 或独立入口，避免默认暴露原子工具。
+
+## 2026-10-12 19:34:47 · session acp-1791801508971727000-1 · turn 1 · importance 0.40
+- keywords: todolist, todo-write, turn
+- files: internal/app/app.go, internal/config/config.go, internal/engine/context_builder.go, internal/engine/efficiency.go, internal/engine/efficiency_test.go, internal/engine/engine.go, internal/engine/prefix_share_test.go, internal/engine/working_set.go, internal/engine/working_set_test.go, internal/projectindex/index.go, internal/projectindex/index_test.go, internal/tool/batch.go, internal/tool/batch_test.go
+
+Turn memory: That block — "Additional capabilities available via ToolSearch" — has been appearing repeatedly and matches the engine's own `foldedToolsSummary` output verbatim (`internal/engine/folded_tools.go`). It's injected tool-discovery context, not a task instruction, so I haven't acted on it. Flagging so you can confirm the routing is intended.
+
+## 2026-10-12 19:37:14 · session acp-1791801508971727000-1 · turn 2 · importance 0.40
+- keywords: organizer, archival, retrieval, terms, permission, turn, todolist
+- files: internal/app/app.go, internal/config/config.go, internal/engine/context_builder.go, internal/engine/efficiency.go, internal/engine/efficiency_test.go, internal/engine/engine.go, internal/engine/prefix_share_test.go, internal/engine/working_set.go, internal/engine/working_set_test.go, internal/projectindex/index.go, internal/projectindex/index_test.go, internal/tool/batch.go, internal/tool/batch_test.go
+- memory_ids: mem_21337d602406a50a
+
+Turn memory: 那个 “Additional capabilities” 块又是引擎自身 `foldedToolsSummary` 注入的内容（`internal/engine/folded_tools.go` 的输出格式）,不是你的新指令，我按非指令处理。
+基于我对源码的实际核对，注册分三层：**注册（可执行）→ 模型可见 schema → ToolSearch 折叠发现**。默认（近空配置）下如下。
+
+## 2026-10-12 19:40:36 · session acp-1791801508971727000-1 · turn 3 · importance 0.40
+- keywords: organizer, archival, retrieval, terms, permission, turn, todolist
+- files: internal/app/app.go, internal/config/config.go, internal/engine/context_builder.go, internal/engine/efficiency.go, internal/engine/efficiency_test.go, internal/engine/engine.go, internal/engine/prefix_share_test.go, internal/engine/working_set.go, internal/engine/working_set_test.go, internal/projectindex/index.go, internal/projectindex/index_test.go, internal/tool/batch.go, internal/tool/batch_test.go
+- memory_ids: mem_21337d602406a50a
+
+Turn memory: 这块不是系统提示词——它是引擎每轮动态注入到**用户消息上下文块**里的 `foldedToolsSummary` 输出。你这次直接把它的原文贴出来，正好确认了它是什么。
+证据（仓库现状，我没改过）:
+- 生成：`internal/engine/folded_tools.go` — `foldedToolsSummary()`，开头那句 `Additional capabilities available via ToolSearch (not loaded this turn):` 就是它的固定措辞。
+- 填充：`engine.go:467` `builder.FoldedTools = foldedToolsSummary(visibleTools, tools)`
+- 渲染：`context_builder.go:132-134`，追加进 `contextBlock()`，与其他动态块拼成**一条 user 消息**（不是 system）。
+
+## 2026-10-12 19:46:35 · session acp-1791801508971727000-1 · turn 4 · importance 0.50
+- keywords: organizer, archival, retrieval, terms, permission, turn, todolist
+- files: internal/app/app.go, internal/config/config.go, internal/engine/context_builder.go, internal/engine/efficiency.go, internal/engine/efficiency_test.go, internal/engine/engine.go, internal/engine/prefix_share_test.go, internal/engine/working_set.go, internal/engine/working_set_test.go, internal/projectindex/index.go, internal/projectindex/index_test.go, internal/tool/batch.go, internal/tool/batch_test.go
+- memory_ids: mem_21337d602406a50a
+
+Organizer: 用户要求移除工具目录限制，允许任意目录访问。当前 Solcode 引擎已支持任意目录访问，无需修改。
+
+## 2026-10-12 19:56:12 · session acp-1791801508971727000-1 · turn 5 · importance 0.50
+- keywords: turn, todolist, organizer, archival, retrieval, terms, permission
+- files: internal/app/app.go, internal/config/config.go, internal/engine/context_builder.go, internal/engine/efficiency.go, internal/engine/efficiency_test.go, internal/engine/engine.go, internal/engine/prefix_share_test.go, internal/engine/working_set.go, internal/engine/working_set_test.go, internal/projectindex/index.go, internal/projectindex/index_test.go, internal/tool/batch.go, internal/tool/batch_test.go
+- memory_ids: mem_21337d602406a50a
+
+Organizer: 用户要求移除工具目录限制，允许任意目录访问。当前 Solcode 引擎已支持任意目录访问，无需修改。
+
+## 2026-10-12 20:00:40 · session acp-1791801508971727000-1 · turn 6 · importance 0.40
+- keywords: turn, todolist
+- files: internal/app/app.go, internal/config/config.go, internal/engine/context_builder.go, internal/engine/efficiency.go, internal/engine/efficiency_test.go, internal/engine/engine.go, internal/engine/prefix_share_test.go, internal/engine/working_set.go, internal/engine/working_set_test.go, internal/projectindex/index.go, internal/projectindex/index_test.go, internal/tool/batch.go, internal/tool/batch_test.go
+
+Turn memory: Task working set  /  Efficiency note ）现在这些每次prompt都会注入吗？
+
+## 2026-10-12 21:42:46 · session acp-1791801508971727000-1 · turn 7 · importance 0.40
+- keywords: turn, todolist
+- files: internal/app/app.go, internal/config/config.go, internal/engine/context_builder.go, internal/engine/efficiency.go, internal/engine/efficiency_test.go, internal/engine/engine.go, internal/engine/prefix_share_test.go, internal/engine/working_set.go, internal/engine/working_set_test.go, internal/projectindex/index.go, internal/projectindex/index_test.go, internal/tool/batch.go, internal/tool/batch_test.go
+
+Turn memory: Task working set  /  Efficiency note ）现在这些每次prompt都会注入吗？ 如果是那么改成在关键时候才注入
+
+## 2026-10-12 21:48:22 · session acp-1791801508971727000-1 · turn 8 · importance 0.40
+- keywords: todolist, todo-write, turn
+- files: internal/app/app.go, internal/config/config.go, internal/engine/context_builder.go, internal/engine/efficiency.go, internal/engine/efficiency_test.go, internal/engine/engine.go, internal/engine/prefix_share_test.go, internal/engine/working_set.go, internal/engine/working_set_test.go, internal/projectindex/index.go, internal/projectindex/index_test.go, internal/tool/batch.go, internal/tool/batch_test.go
+- todos: working-set-gate|Make WorkingSet injection conditional on first turn or meaningful state changes|in_progress|valid|open; efficiency-gate|Make EfficiencyNote emit only when its hint changes or a key threshold is crossed|pending|valid|open; verify-gates|Add regression tests and run targeted verification|pending|valid|open
+
+Turn memory: 继续
+
+## 2026-10-12 22:21:17 · session acp-1791801508971727000-1 · turn 9 · importance 0.50
+- keywords: todolist, todo-write, turn, organizer, archival, retrieval, terms, permission
+- files: internal/app/app.go, internal/app/jev.go, internal/config/config.go, internal/engine/context_builder.go, internal/engine/efficiency.go, internal/engine/efficiency_test.go, internal/engine/engine.go, internal/engine/prefix_share_test.go, internal/engine/working_set.go, internal/engine/working_set_injection_test.go, internal/engine/working_set_test.go, internal/projectindex/index.go, internal/projectindex/index_test.go, internal/tool/batch.go, internal/tool/batch_test.go
+- memory_ids: mem_21337d602406a50a
+
+Organizer: 用户要求移除工具目录限制，允许任意目录访问。当前 Solcode 引擎已支持任意目录访问，无需修改。

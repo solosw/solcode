@@ -144,6 +144,7 @@ type Config struct {
 	Skills           SkillsConfig          `json:"skills,omitempty"`
 	Workflows        WorkflowsConfig       `json:"workflows,omitempty"`
 	BackgroundTasks  BackgroundTasksConfig `json:"background_tasks,omitempty"`
+	Batch            BatchConfig           `json:"batch,omitempty"`
 	MCP              MCPConfig             `json:"mcp,omitempty"`
 	MCPServers       []MCPServerConfig     `json:"mcp_servers,omitempty"`
 	LSP              LSPConfig             `json:"lsp,omitempty"`
@@ -181,6 +182,20 @@ type BackgroundTasksConfig struct {
 }
 
 const DefaultBackgroundYieldAfterMS = 10_000
+
+// BatchConfig bounds the BatchTool. Zero values fall back to the built-in
+// defaults, so an omitted block preserves the shipped behavior.
+type BatchConfig struct {
+	// MaxOperations caps how many operations one batch may contain.
+	MaxOperations int `json:"max_operations,omitempty"`
+	// MaxParallel caps concurrent read-only operations in one wave.
+	MaxParallel int `json:"max_parallel,omitempty"`
+	// MaxResultRunes truncates each operation's output text.
+	MaxResultRunes int `json:"max_result_runes,omitempty"`
+	// MaxReadRetries is the bounded retry count for transient read failures.
+	// Negative is treated as unset; 0 disables retry.
+	MaxReadRetries int `json:"max_read_retries,omitempty"`
+}
 
 // ComputerUseConfig gates the ComputerUse tool and bundled computer-use skill.
 // Leave Enabled=false (default) to hide both.

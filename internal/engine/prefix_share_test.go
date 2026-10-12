@@ -33,6 +33,7 @@ func (c *prefixCaptureClient) Create(_ context.Context, req cpanthropic.MessageR
 func registerCoreStubs(reg *tool.Registry) {
 	// Minimal core set so SelectToolsForTurn has something to prefix.
 	for _, name := range []string{
+		tool.BatchToolName,
 		tool.BashToolName, tool.ViewToolName, tool.EditToolName, tool.WriteToolName,
 		tool.GlobToolName, tool.GrepToolName, tool.LSToolName, tool.TaskToolName,
 		tool.TodoWriteToolName, tool.ToolSearchToolName, tool.SkillToolName,
@@ -106,9 +107,17 @@ func TestMainAndTaskSharePublicPrefix(t *testing.T) {
 	if !taskNames["mcp__office__cli"] {
 		t.Fatalf("task missing sticky extra inherited from engine: %#v", client.tools[1])
 	}
-	// AllowedTools denied at execute time, not by shrinking schema: Edit still listed.
-	if !taskNames[tool.EditToolName] {
-		t.Fatalf("Edit must remain on wire schema under runtime allowlist: %#v", client.tools[1])
+	// BatchTool is the public coding entrypoint; the wrapped atomic tools stay
+	// executable but are intentionally absent from the wire schema (§2).
+	if !taskNames[tool.BatchToolName] {
+		t.Fatalf("BatchTool must be on wire schema under runtime allowlist: %#v", client.tools[1])
+	}
+	if taskNames[tool.EditToolName] {
+		t.Fatalf("wrapped Edit must be hidden from wire schema (use BatchTool): %#v", client.tools[1])
+	}
+	// The hidden tool remains registered/executable through the shared registry.
+	if reg.Find(tool.EditToolName) == nil {
+		t.Fatalf("Edit must remain registered for batch execution")
 	}
 }
 

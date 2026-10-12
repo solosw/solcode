@@ -42,6 +42,13 @@ type ContextBuilder struct {
 	// FoldedTools summarizes registered-but-unsent tools so the model knows what
 	// exists beyond the current schema list. Empty means nothing was folded.
 	FoldedTools string
+	// WorkingSet is the rendered task working set (§5): goal, touched files with
+	// version hashes, confirmed facts. It excludes contents of code already in
+	// the session so it never duplicates retained context.
+	WorkingSet string
+	// EfficiencyNote is an advisory anti-loop hint (§7): repeated reads/searches
+	// and turns without progress. Local only; never a model request.
+	EfficiencyNote string
 }
 
 type ContextItem struct {
@@ -131,6 +138,12 @@ func (b ContextBuilder) contextBlock(sessionSummary string, memoryContext []Cont
 	// Last, because it is reference material rather than this turn's task.
 	if folded := strings.TrimSpace(b.FoldedTools); folded != "" {
 		parts = append(parts, folded)
+	}
+	if working := strings.TrimSpace(b.WorkingSet); working != "" {
+		parts = append(parts, working)
+	}
+	if note := strings.TrimSpace(b.EfficiencyNote); note != "" {
+		parts = append(parts, note)
 	}
 	return strings.Join(parts, "\n\n")
 }
@@ -447,19 +460,24 @@ func MemoryContextTokens(items []ContextItem) int {
 func toolUsagePrompt() string {
 	return strings.Join([]string{
 		"Tool usage:",
+		"Minimize unnecessary model round trips while preserving correctness and required verification. A few sufficient calls beat many small sequential ones; never skip necessary work to save requests.",
 		"- Use the available tools when they are the most direct way to gather information, inspect code, make changes, or verify behavior.",
 		"- Prefer BatchTool for repository exploration, related file reads, searches, and edits. Submit independent operations together in one batch, not one model turn per file.",
+		"- Explore related repository files together in one batch, and prefer batch edit tools for related changes, so one response covers the whole edit.",
+		"- Use the WorkingSet facts already in context (goal, file hashes, confirmed facts) before repeating a search or re-reading a file that has not changed. Re-read only when the file was modified since it was cached.",
 		"- Use the underlying tool names and their documented input fields inside BatchTool.operations. Failures are per operation; reuse successful outputs rather than repeating the batch.",
 		"- Make dependency edges explicit only when necessary. BatchTool runs independent safe reads concurrently; it serializes unsafe operations.",
 		"- Match input schemas exactly and prefer the smallest sufficient batch of operations that advances the task.",
-		"- You may call multiple independent tools in parallel in one turn (for example several View/Grep/Glob/LS/LSP reads). Do not parallelize edits that depend on each other.",
+		"- Express independent reads as multiple operations in ONE BatchTool call, where safe reads run concurrently. Do not parallelize edits that depend on each other.",
+		"- Keep routine tasks in the main agent. Delegate with Task only independent, substantial work when parallel execution clearly helps; do not delegate trivial exploration or file reads.",
+		"- Avoid repeated polling, redundant planning, and unnecessary tool discovery.",
 		"- Only a compact core of tools is listed each turn. Additional MCP tools and less common builtins stay in a live registry and are not all sent as schemas.",
 		"- Treat the current tool list as incomplete. Do not assume a capability is unavailable just because it is not listed this turn.",
 		"- Call ToolSearch as soon as the task needs a capability that is not in the current list (for example web search, fetch, image generation/edit, browser/MCP servers, or a named skill). Use a short capability query, not a full sentence.",
 		"- After ToolSearch, wait for the next turn: matching tools are enabled then, and you must use the exact returned tool name. Do not invent tool names.",
 		"- Prefer ToolSearch over guessing, skipping the capability, or asking the user which hidden tool to use.",
 		"- File tools may read and write any directory. Relative paths still resolve against the project WorkDir, then configured skill roots.",
-		"- Prefer specialized tools over Bash: Glob/Grep/LS/View for files, LSP for code intelligence, WebSearch/Fetch (via ToolSearch if hidden) for the network. Bash is banned from curl/wget and similar downloaders.",
+		"- Prefer specialized operations over Bash: use View/Grep/Glob/LS/LSP as BatchTool operations for files and code intelligence, and WebSearch/Fetch (via ToolSearch if hidden) for the network. Bash is banned from curl/wget and similar downloaders.",
 		"- Use AskUser for real product/requirement choices (2-4 options). Do not use it for facts you can discover with tools.",
 		"- Use ModeSwitch only when the user wants plan/bypass/goal/ultrl, or when a large design should be planned before edits. Do not switch modes unprompted for ordinary coding. Task and Task-graph workflows require explicit ultrl mode (bypass + task); in all other modes perform the work in the main agent.",
 		"- When a reusable workflow matches the task, use the Skill tool before continuing with other tools. Skill names may also be found via ToolSearch.",

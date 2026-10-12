@@ -111,6 +111,9 @@ type Config struct {
 	// Router optionally adds a semantic fallback to lexical tool selection.
 	// Nil keeps selection purely lexical.
 	Router *Router
+	// ShouldInjectWorkingSet lets an optional Jev decider choose whether the
+	// current task summary is useful enough to inject. Nil means Jev is off.
+	ShouldInjectWorkingSet func(ctx context.Context, state map[string]any) bool
 	// Guardrail optionally holds a tool call for escalation before it runs.
 	// It is advisory: permissions remain the control that grants access.
 	Guardrail ToolGuardrail
@@ -279,7 +282,9 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 	// Paths are advisory: code contents still have to be read with BatchTool.
 	if cfg.Role == "" || cfg.Role == agent.AgentRoleMain {
 		if index := projectindex.Context(ctx, cfg.WorkDir, modelText); index != "" {
-			if runReq.ProjectKnowledge != "" { runReq.ProjectKnowledge += "\n\n" }
+			if runReq.ProjectKnowledge != "" {
+				runReq.ProjectKnowledge += "\n\n"
+			}
 			runReq.ProjectKnowledge += index
 		}
 	}
@@ -319,6 +324,18 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 		Skills:       e.config.Skills,
 		SkillNames:   e.config.SkillNames,
 	}
+	// Task working set (§5): tracks files read/modified and confirmed facts so
+	// later turns reuse local knowledge instead of re-exploring. Updated only
+	// from tool results; never a model request.
+	workingSet := NewWorkingSet()
+	workingSet.SetGoal(prompt)
+	// Efficiency controller (§7): local anti-loop signals. Advisory only; it
+	// never issues requests, executes operations, or ends the run.
+	efficiency := NewRequestEfficiencyController()
+	// WorkingSet/EfficiencyNote are evaluated only when the task context changes.
+	// Without Jev, the initial task is the sole injection point.
+	workingSetTaskChanged := true
+	workingSetDecisionConsumed := false
 
 	var finalText string
 	// The most recently activated skill owns relative resource paths for the
@@ -355,6 +372,10 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 			msg, _ := userMessageFromPrompt(queued, cfg.WorkDir)
 			messages = append(messages, msg)
 			count++
+		}
+		if count > 0 {
+			workingSetTaskChanged = true
+			workingSetDecisionConsumed = false
 		}
 		return count
 	}
@@ -465,6 +486,31 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 		// this it cannot know a capability is merely unloaded rather than
 		// absent, so it will not think to search for it.
 		builder.FoldedTools = foldedToolsSummary(visibleTools, tools)
+		workingSet.BeginTurn(turn)
+		efficiency.BeginTurn(turn)
+		builder.WorkingSet = ""
+		builder.EfficiencyNote = ""
+		if workingSetTaskChanged && !workingSetDecisionConsumed {
+			var jevDecision func(context.Context) bool
+			if e.config.ShouldInjectWorkingSet != nil {
+				jevDecision = func(decisionCtx context.Context) bool {
+					return e.config.ShouldInjectWorkingSet(decisionCtx, map[string]any{
+						"task":              prompt,
+						"session_summary":   runReq.SessionSummary,
+						"project_knowledge": runReq.ProjectKnowledge,
+						"working_set":       workingSet.InjectionText(),
+						"efficiency_note":   efficiency.Hint(),
+						"turn":              turn,
+					})
+				}
+			}
+			if workingSetInjectionAllowed(ctx, turn, workingSetTaskChanged, workingSetDecisionConsumed, jevDecision) {
+				builder.WorkingSet = workingSet.InjectionText()
+				builder.EfficiencyNote = efficiency.Hint()
+			}
+			workingSetDecisionConsumed = true
+			workingSetTaskChanged = false
+		}
 		req := builder.Build(BuildRequest{
 			Model:            modelName,
 			ProjectKnowledge: runReq.ProjectKnowledge,
@@ -675,6 +721,12 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 				env.OnInvokeStart = onStart
 				return executor.Execute(runCtx, ToolCall{Name: use.Name, Input: input}, env)
 			})
+			// Update the local working set from this tool result (§5). No model
+			// request is made; this only records paths/hashes and invalidates
+			// stale cached content.
+			observeWorkingSet(workingSet, use.Name, input, toolEnv.UseContext, toolResult)
+			// Record local anti-loop signals (§7). No model request.
+			efficiency.ObserveCall(use.Name, input, toolResult)
 			if err := ctx.Err(); err != nil {
 				return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: err.Error()}, Messages: messages}
 			}
@@ -752,6 +804,16 @@ func toolResultToAPI(toolUseID string, toolResult ToolResult) cpanthropic.ToolRe
 		out.ImageData = toolResult.Content.Data
 	}
 	return out
+}
+
+func workingSetInjectionAllowed(ctx context.Context, turn int, taskChanged, decisionConsumed bool, jevDecision func(context.Context) bool) bool {
+	if !taskChanged || decisionConsumed {
+		return false
+	}
+	if jevDecision != nil {
+		return jevDecision(ctx)
+	}
+	return turn == 0
 }
 
 func nonEmpty(value, fallback string) string {
