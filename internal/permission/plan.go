@@ -70,7 +70,6 @@ Produce plans only. Do NOT implement code changes while plan mode is active.`
 // Everything else still requires IsReadOnly (or an explicit session allow).
 var PlanModeExtraTools = []string{
 	tool.TodoWriteToolName,
-	tool.TaskToolName,
 	tool.ModeSwitchToolName,
 }
 
