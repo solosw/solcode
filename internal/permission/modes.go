@@ -11,6 +11,7 @@ const (
 	ModeBypass      Mode = "bypass"
 	ModePlan        Mode = "plan"
 	ModeGoal        Mode = "goal"
+	ModeUltrl       Mode = "ultrl" // Bypass permissions plus Task/workflow execution
 )
 
 func NormalizeMode(mode Mode) Mode {
@@ -25,6 +26,8 @@ func NormalizeMode(mode Mode) Mode {
 		return ModePlan
 	case string(ModeGoal):
 		return ModeGoal
+	case string(ModeUltrl), "ultra":
+		return ModeUltrl
 	default:
 		return mode
 	}
