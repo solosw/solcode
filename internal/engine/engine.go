@@ -646,6 +646,18 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 					},
 				},
 			}
+			// Dispatch batch child operations through this run's normal executor.
+			toolEnv.UseContext.BatchLookup = e.config.Tools.Find
+			toolEnv.UseContext.BatchDispatch = func(batchCtx context.Context, name string, childInput json.RawMessage) (*tool.ContentBlock, error) {
+				if name == tool.BatchToolName {
+					return nil, fmt.Errorf("nested batches are not supported")
+				}
+				child := executor.Execute(batchCtx, ToolCall{Name: name, Input: childInput}, toolEnv)
+				if child.Content == nil {
+					return tool.ErrorResult("tool produced no result"), nil
+				}
+				return child.Content, nil
+			}
 			toolResult := background.execute(ctx, backgroundSchedulingName(e.config.Tools, use.Name), use.ID, input, func(runCtx context.Context, onStart func()) ToolResult {
 				env := toolEnv
 				env.OnInvokeStart = onStart
