@@ -121,6 +121,10 @@ func timeoutForTool(selected tool.Tool) time.Duration {
 	case tool.WaitToolName:
 		// Wait is internal (not model-visible); same ceiling as Bash auto-wait.
 		return bashToolTimeout
+	case tool.BatchToolName:
+		// Allow the outer batch to wait for long-running children; each child
+		// still uses its individual executor timeout.
+		return bashToolTimeout
 	case tool.BashToolName:
 		// Foreground short runs and long auto-waits share MaxTimeout (24h).
 		return bashToolTimeout

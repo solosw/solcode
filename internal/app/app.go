@@ -259,7 +259,7 @@ func New(cfg config.Config, opts ...Option) (*App, error) {
 	eng := engine.NewEngine(engineCfg)
 	coordinator := agent.NewCoordinator(eng)
 	subagent := tool.NewSubagentTool(coordinator)
-	registry.Register(subagent, tool.NewTaskToolWithSubagent(subagent))
+	registry.Register(subagent, tool.NewTaskToolWithSubagent(subagent), tool.NewBatchTool())
 	registry.Register(tool.NewModeSwitchToolWithGoal(application.SwitchMode, application.startGoalFlow))
 	// When Jev is on, screen WebSearch hits against the search query itself.
 	if jev != nil && jev.decider != nil {
@@ -613,7 +613,7 @@ func (a *App) ReloadFeatures(cfg config.Config, mcpFactory mcp.ClientFactory) er
 	a.lspManager = lspManager
 	a.ChangeGraph = graphStore
 	subagent := tool.NewSubagentTool(a.Coordinator)
-	registry.Register(subagent, tool.NewTaskToolWithSubagent(subagent))
+	registry.Register(subagent, tool.NewTaskToolWithSubagent(subagent), tool.NewBatchTool())
 	// Rebuild the Jev decision layer from the new config. Without this a
 	// settings save would leave the router, guardrail, and memory judge wired to
 	// the previous config — or, when Jev was just enabled in the UI, wired to
