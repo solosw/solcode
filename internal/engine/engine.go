@@ -384,16 +384,19 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 		// tools list on the wire always starts from the shared core prefix so
 		// main and sub/task agents keep a common tools+system cache key.
 		// Runtime denials for disallowed tools happen in ToolExecutor.
-		visibleTools := allTools
-		if e.config.Permissions == nil || e.config.Permissions.Mode() != permission.ModeUltrl || !isMain {
-			// Do not advertise Task/child agents unless explicitly running Ultrl.
-			// Keep the complete registry for executor and permission checks.
-			visibleTools = make([]tool.Tool, 0, len(allTools))
-			for _, candidate := range allTools {
-				if candidate.Name() != tool.TaskToolName && candidate.Name() != tool.SubagentToolName {
-					visibleTools = append(visibleTools, candidate)
+		// Only expose BatchTool for routine coding operations. Atomic tools
+		// remain registered so batch children still pass the real executor.
+		visibleTools := make([]tool.Tool, 0, len(allTools))
+		for _, candidate := range allTools {
+			if tool.BatchWrapped(candidate.Name()) {
+				continue
+			}
+			if candidate.Name() == tool.TaskToolName || candidate.Name() == tool.SubagentToolName {
+				if e.config.Permissions == nil || e.config.Permissions.Mode() != permission.ModeUltrl || !isMain {
+					continue
 				}
 			}
+			visibleTools = append(visibleTools, candidate)
 		}
 		tools := SelectToolsForTurn(visibleTools, nil, selectionQuery(prompt, ""), enabledTools)
 		// When lexical matching resolved nothing beyond the core set, ask Jev
