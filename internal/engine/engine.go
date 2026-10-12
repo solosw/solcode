@@ -384,7 +384,18 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 		// tools list on the wire always starts from the shared core prefix so
 		// main and sub/task agents keep a common tools+system cache key.
 		// Runtime denials for disallowed tools happen in ToolExecutor.
-		tools := SelectToolsForTurn(allTools, nil, selectionQuery(prompt, ""), enabledTools)
+		visibleTools := allTools
+		if e.config.Permissions == nil || e.config.Permissions.Mode() != permission.ModeUltrl || !isMain {
+			// Do not advertise Task/child agents unless explicitly running Ultrl.
+			// Keep the complete registry for executor and permission checks.
+			visibleTools = make([]tool.Tool, 0, len(allTools))
+			for _, candidate := range allTools {
+				if candidate.Name() != tool.TaskToolName && candidate.Name() != tool.SubagentToolName {
+					visibleTools = append(visibleTools, candidate)
+				}
+			}
+		}
+		tools := SelectToolsForTurn(visibleTools, nil, selectionQuery(prompt, ""), enabledTools)
 		// When lexical matching resolved nothing beyond the core set, ask Jev
 		// which capability the request is actually describing. This only runs on
 		// the miss path, so prompts that name a tool keep their current behavior
@@ -395,7 +406,7 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 		// Sub/task agents skip Jev tool routing so they do not grow a different
 		// extras set from main on the same session prefix.
 		if e.config.Router != nil && !routingAttempted && isMain {
-			if misses := routerMisses(allTools, selectionQuery(prompt, ""), enabledTools, tools); len(misses) > 0 {
+			if misses := routerMisses(visibleTools, selectionQuery(prompt, ""), enabledTools, tools); len(misses) > 0 {
 				routingAttempted = true
 				for _, name := range e.config.Router.RouteTools(ctx, prompt, misses) {
 					if hiddenFromModel[name] {
@@ -408,10 +419,10 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 				// nothing extra is enabled; FoldedTools keeps the model-driven
 				// ToolSearch path without auto-opening MCP servers.
 				if !hasNonCoreEnabled(enabledTools) {
-					enableToolsFromQuery(allTools, prompt, enabledTools)
+					enableToolsFromQuery(visibleTools, prompt, enabledTools)
 				}
 				e.mergeStickyExtras(enabledTools)
-				tools = SelectToolsForTurn(allTools, nil, selectionQuery(prompt, ""), enabledTools)
+				tools = SelectToolsForTurn(visibleTools, nil, selectionQuery(prompt, ""), enabledTools)
 			}
 		}
 		// Mode policy is turn-local and must not rewrite the cached system
@@ -441,7 +452,7 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 		// Tell the model what exists beyond this turn's schema list. Without
 		// this it cannot know a capability is merely unloaded rather than
 		// absent, so it will not think to search for it.
-		builder.FoldedTools = foldedToolsSummary(allTools, tools)
+		builder.FoldedTools = foldedToolsSummary(visibleTools, tools)
 		req := builder.Build(BuildRequest{
 			Model:            modelName,
 			ProjectKnowledge: runReq.ProjectKnowledge,
