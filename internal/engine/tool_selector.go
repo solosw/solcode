@@ -16,6 +16,7 @@ const maxDynamicTools = 4
 var coreToolNames = map[string]bool{
 	tool.AskUserToolName:         true,
 	tool.BashToolName:            true,
+	tool.BatchToolName:            true,
 	tool.EditToolName:            true,
 	tool.MultiEditToolName:       true,
 	tool.MultiWriteToolName:      true,

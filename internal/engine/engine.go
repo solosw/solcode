@@ -15,6 +15,7 @@ import (
 	"github.com/solosw/solcode/internal/attach"
 	"github.com/solosw/solcode/internal/hook"
 	"github.com/solosw/solcode/internal/permission"
+	"github.com/solosw/solcode/internal/projectindex"
 	"github.com/solosw/solcode/internal/skill"
 	"github.com/solosw/solcode/internal/tokenest"
 	"github.com/solosw/solcode/internal/tool"
@@ -274,6 +275,14 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 	}
 	// modelText is the expanded text used for local token estimation.
 	prompt = modelText
+	// Discover candidate repository files locally, without spending an LLM turn.
+	// Paths are advisory: code contents still have to be read with BatchTool.
+	if cfg.Role == "" || cfg.Role == agent.AgentRoleMain {
+		if index := projectindex.Context(ctx, cfg.WorkDir, modelText); index != "" {
+			if runReq.ProjectKnowledge != "" { runReq.ProjectKnowledge += "\n\n" }
+			runReq.ProjectKnowledge += index
+		}
+	}
 
 	turnLimit := cfg.MaxTurns
 	if turnLimit <= 0 && !cfg.UnlimitedTurns {
@@ -384,16 +393,19 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 		// tools list on the wire always starts from the shared core prefix so
 		// main and sub/task agents keep a common tools+system cache key.
 		// Runtime denials for disallowed tools happen in ToolExecutor.
-		visibleTools := allTools
-		if e.config.Permissions == nil || e.config.Permissions.Mode() != permission.ModeUltrl || !isMain {
-			// Do not advertise Task/child agents unless explicitly running Ultrl.
-			// Keep the complete registry for executor and permission checks.
-			visibleTools = make([]tool.Tool, 0, len(allTools))
-			for _, candidate := range allTools {
-				if candidate.Name() != tool.TaskToolName && candidate.Name() != tool.SubagentToolName {
-					visibleTools = append(visibleTools, candidate)
+		// Only expose BatchTool for routine coding operations. Atomic tools
+		// remain registered so batch children still pass the real executor.
+		visibleTools := make([]tool.Tool, 0, len(allTools))
+		for _, candidate := range allTools {
+			if tool.BatchWrapped(candidate.Name()) {
+				continue
+			}
+			if candidate.Name() == tool.TaskToolName || candidate.Name() == tool.SubagentToolName {
+				if e.config.Permissions == nil || e.config.Permissions.Mode() != permission.ModeUltrl || !isMain {
+					continue
 				}
 			}
+			visibleTools = append(visibleTools, candidate)
 		}
 		tools := SelectToolsForTurn(visibleTools, nil, selectionQuery(prompt, ""), enabledTools)
 		// When lexical matching resolved nothing beyond the core set, ask Jev
@@ -645,6 +657,18 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 						e.config.OnTodosUpdated(todoCtx, nonEmpty(runReq.SessionID, string(cfg.ID)), cfg.WorkDir, todos)
 					},
 				},
+			}
+			// Dispatch batch child operations through this run's normal executor.
+			toolEnv.UseContext.BatchLookup = e.config.Tools.Find
+			toolEnv.UseContext.BatchDispatch = func(batchCtx context.Context, name string, childInput json.RawMessage) (*tool.ContentBlock, error) {
+				if name == tool.BatchToolName {
+					return nil, fmt.Errorf("nested batches are not supported")
+				}
+				child := executor.Execute(batchCtx, ToolCall{Name: name, Input: childInput}, toolEnv)
+				if child.Content == nil {
+					return tool.ErrorResult("tool produced no result"), nil
+				}
+				return child.Content, nil
 			}
 			toolResult := background.execute(ctx, backgroundSchedulingName(e.config.Tools, use.Name), use.ID, input, func(runCtx context.Context, onStart func()) ToolResult {
 				env := toolEnv

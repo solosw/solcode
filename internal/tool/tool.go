@@ -20,6 +20,9 @@ type TextFileSystem interface {
 }
 
 type UseContext struct {
+	BatchDispatch func(ctx context.Context, name string, input json.RawMessage) (*ContentBlock, error)
+	BatchLookup func(name string) Tool
+
 	SessionID string
 	MessageID string
 	WorkDir   string
