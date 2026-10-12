@@ -115,6 +115,10 @@ func (s *Service) Check(t tool.Tool, input json.RawMessage) Decision {
 	askFn := s.askFn
 	s.mu.RUnlock()
 
+	// Task and Subagent require explicit Ultrl mode, even with tool allowlists.
+	if (t.Name() == tool.TaskToolName || t.Name() == tool.SubagentToolName) && mode != ModeUltrl {
+		return Decision{Allowed: false, Reason: "Task and sub-agents require ultrl mode (bypass + task)"}
+	}
 	if denied {
 		return Decision{Allowed: false, Reason: fmt.Sprintf("tool denied for session: %s", t.Name())}
 	}
@@ -127,17 +131,17 @@ func (s *Service) Check(t tool.Tool, input json.RawMessage) Decision {
 	}
 
 	switch mode {
-	case ModeBypass, ModeGoal:
+	case ModeBypass, ModeGoal, ModeUltrl:
 		return Decision{Allowed: true}
 	case ModePlan:
 		if t.IsReadOnly(input) {
 			return Decision{Allowed: true}
 		}
-		// Planning session may use TodoWrite (checklist) and Task (explore via sub-agents).
+		// Planning session may use TodoWrite and ModeSwitch, but not Task.
 		if IsPlanModeExtraTool(t.Name()) {
 			return Decision{Allowed: true}
 		}
-		return Decision{Allowed: false, Reason: "plan mode only allows read-only tools, TodoWrite, and Task"}
+		return Decision{Allowed: false, Reason: "plan mode only allows read-only tools, TodoWrite, and ModeSwitch"}
 	case ModeAcceptEdits:
 		if isAcceptEditsTool(t) {
 			return Decision{Allowed: true}
