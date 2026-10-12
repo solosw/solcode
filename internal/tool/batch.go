@@ -99,6 +99,23 @@ func (*batchTool) Invoke(ctx context.Context, uctx *UseContext, input json.RawMe
   if !BatchWrapped(op.Tool) {return ErrorResult("tool not supported in batch: "+op.Tool),nil}
   if uctx.BatchLookup(op.Tool)==nil {return ErrorResult("tool unavailable: "+op.Tool),nil}
  }
+ // Reject cyclic graphs before any side-effecting operation executes.
+ visiting:=make([]uint8,len(req.Operations))
+ var visit func(int) bool
+ visit=func(i int) bool {
+  if visiting[i]==1 {return false}
+  if visiting[i]==2 {return true}
+  visiting[i]=1
+  for _,dep:=range req.Operations[i].DependsOn {
+   j,ok:=ids[dep]; if !ok {continue} // unknown dependencies reported below
+   if !visit(j) {return false}
+  }
+  visiting[i]=2
+  return true
+ }
+ for i:=range req.Operations {
+  if !visit(i) {return ErrorResult("batch has circular dependencies"),nil}
+ }
  for i,op:=range req.Operations {
   for _,dep:=range op.DependsOn {
    j,ok:=ids[dep]; if !ok {return ErrorResult("unknown dependency: "+dep),nil}
