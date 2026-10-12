@@ -448,7 +448,10 @@ func toolUsagePrompt() string {
 	return strings.Join([]string{
 		"Tool usage:",
 		"- Use the available tools when they are the most direct way to gather information, inspect code, make changes, or verify behavior.",
-		"- Match the tool input schema exactly and prefer the smallest tool call that completes the task.",
+		"- Prefer BatchTool for repository exploration, related file reads, searches, and edits. Submit independent operations together in one batch, not one model turn per file.",
+		"- Use the underlying tool names and their documented input fields inside BatchTool.operations. Failures are per operation; reuse successful outputs rather than repeating the batch.",
+		"- Make dependency edges explicit only when necessary. BatchTool runs independent safe reads concurrently; it serializes unsafe operations.",
+		"- Match input schemas exactly and prefer the smallest sufficient batch of operations that advances the task.",
 		"- You may call multiple independent tools in parallel in one turn (for example several View/Grep/Glob/LS/LSP reads). Do not parallelize edits that depend on each other.",
 		"- Only a compact core of tools is listed each turn. Additional MCP tools and less common builtins stay in a live registry and are not all sent as schemas.",
 		"- Treat the current tool list as incomplete. Do not assume a capability is unavailable just because it is not listed this turn.",
