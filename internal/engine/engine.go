@@ -15,6 +15,7 @@ import (
 	"github.com/solosw/solcode/internal/attach"
 	"github.com/solosw/solcode/internal/hook"
 	"github.com/solosw/solcode/internal/permission"
+	"github.com/solosw/solcode/internal/projectindex"
 	"github.com/solosw/solcode/internal/skill"
 	"github.com/solosw/solcode/internal/tokenest"
 	"github.com/solosw/solcode/internal/tool"
@@ -274,6 +275,14 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 	}
 	// modelText is the expanded text used for local token estimation.
 	prompt = modelText
+	// Discover candidate repository files locally, without spending an LLM turn.
+	// Paths are advisory: code contents still have to be read with BatchTool.
+	if cfg.Role == "" || cfg.Role == agent.AgentRoleMain {
+		if index := projectindex.Context(ctx, cfg.WorkDir, modelText); index != "" {
+			if runReq.ProjectKnowledge != "" { runReq.ProjectKnowledge += "\n\n" }
+			runReq.ProjectKnowledge += index
+		}
+	}
 
 	turnLimit := cfg.MaxTurns
 	if turnLimit <= 0 && !cfg.UnlimitedTurns {
