@@ -604,7 +604,7 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 	model.SetNewSessionHandler(func(name string, crossSessionMemory bool) tui.SelectResult {
 		return handleNewSessionCommand(&cfg, application, name, persistencePath, crossSessionMemory)
 	})
-	modeNames := []string{"auto", "accept_edits", "bypass", "plan"}
+	modeNames := []string{"auto", "accept_edits", "bypass", "plan", "ultrl"}
 	model.SetModeSwitchFn(modeNames, string(cfg.PermissionMode), func(mode string) {
 		permissionMode := permission.Mode(mode)
 		application.Permissions.SetMode(permissionMode)
@@ -1559,7 +1559,7 @@ func handleWorkflowsCommand(application *app.App) string {
 		}
 		b.WriteString(fmt.Sprintf("  %s  →  /%s  —  %s\n", def.Name, workflowSlashAlias(def.Name), desc))
 	}
-	b.WriteString("\nWorkflows are not exposed to the model. Starting a workflow switches permission mode to bypass.")
+	b.WriteString("\nWorkflows are not exposed to the model. Workflows require the ultrl (bypass + task) mode.")
 	b.WriteString("\nUse /workflow-edit to visually orchestrate and save workflows.")
 	return strings.TrimSpace(b.String())
 }
