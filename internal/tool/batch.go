@@ -60,7 +60,7 @@ type batchTool struct{ BaseTool }
 func NewBatchTool() Tool { return &batchTool{} }
 func (*batchTool) Name() string { return BatchToolName }
 func (*batchTool) Description() string {
- return "Execute up to 12 independent or dependency-ordered coding operations in one model round trip. Use a batch instead of separate View/Grep/Glob/Edit calls. Successful operations are kept when unrelated operations fail; dependent operations are skipped. Read-only concurrency is safe; writes are sequential. Each operation uses its normal permissions and hooks. atomic=true is not yet supported."
+ return "Batch up to 12 coding operations in one model request. Examples: View input {path,offset,limit}; Grep {pattern,path}; Glob {pattern,path}; LS {path}; Edit {path,old_string,new_string}; Write {path,content}; Bash {command}. Operation inputs must match the underlying tool schema. Use depends_on IDs for known dependencies, not for independent reads. Results keep successes and report independent errors separately. Read-only operations may run in parallel, writes are sequential. Each operation retains its normal permissions and hooks. atomic=true is unsupported."
 }
 func (*batchTool) IsReadOnly(json.RawMessage) bool { return false }
 func (*batchTool) IsConcurrencySafe(json.RawMessage) bool { return false }
@@ -96,7 +96,7 @@ func (*batchTool) Invoke(ctx context.Context, uctx *UseContext, input json.RawMe
   if strings.TrimSpace(op.ID)=="" || strings.TrimSpace(op.Tool)=="" || len(op.Input)==0 {return ErrorResult("each operation requires id, tool, and input"),nil}
   if _,ok:=ids[op.ID];ok {return ErrorResult("duplicate operation id: "+op.ID),nil}
   ids[op.ID]=i
-  if !batchAllowed(op.Tool) {return ErrorResult("tool not supported in batch: "+op.Tool),nil}
+  if !BatchWrapped(op.Tool) {return ErrorResult("tool not supported in batch: "+op.Tool),nil}
   if uctx.BatchLookup(op.Tool)==nil {return ErrorResult("tool unavailable: "+op.Tool),nil}
  }
  for i,op:=range req.Operations {
@@ -111,6 +111,7 @@ func (*batchTool) Invoke(ctx context.Context, uctx *UseContext, input json.RawMe
  completed:=0
  for completed<len(req.Operations) {
   ready:=[]int{}
+  skippedThisPass:=0
   for i,op:=range req.Operations {
    if done[i] {continue}
    blocked:=[]string{}
@@ -123,11 +124,14 @@ func (*batchTool) Invoke(ctx context.Context, uctx *UseContext, input json.RawMe
    if waiting {continue}
    if len(blocked)>0 {
     result[i]=batchItem{ID:op.ID,Tool:op.Tool,Status:"skipped",BlockedBy:blocked}
-    done[i]=true;completed++
+    done[i]=true;completed++;skippedThisPass++
    } else {ready=append(ready,i)}
   }
   if len(ready)==0 {
    if completed==len(req.Operations) {break}
+   // Skipped nodes may unblock their own downstream dependents on the
+   // next scheduler pass; only an iteration with no progress is a cycle.
+   if skippedThisPass>0 {continue}
    return ErrorResult("batch has circular dependencies"),nil
   }
   // A wave runs concurrently only if *all* calls are safe read-only
@@ -143,6 +147,7 @@ func (*batchTool) Invoke(ctx context.Context, uctx *UseContext, input json.RawMe
    item:=batchItem{ID:op.ID,Tool:op.Tool,Status:"success"}
    output,err:=uctx.BatchDispatch(ctx,op.Tool,op.Input)
    if err!=nil {item.Status="error";item.Error=&batchError{Code:"TOOL_ERROR",Message:err.Error()}}
+   if err==nil && output==nil {item.Status="error";item.Error=&batchError{Code:"NO_RESULT",Message:"tool produced no result"}}
    if output!=nil {
     if output.IsError {item.Status="error";item.Error=&batchError{Code:"TOOL_ERROR",Message:output.Text}}
     if output.Type=="image" {item.Status="error";item.Error=&batchError{Code:"UNSUPPORTED_OUTPUT",Message:"batch does not embed image payloads; call this tool directly"}}
@@ -177,7 +182,9 @@ func (*batchTool) Invoke(ctx context.Context, uctx *UseContext, input json.RawMe
  return Result(string(encoded)),nil
 }
 
-func batchAllowed(name string) bool {
+// BatchWrapped identifies the coding tools offered through BatchTool instead of
+// individually in the model tool schema.
+func BatchWrapped(name string) bool {
  switch name {
  case ViewToolName,GrepToolName,GlobToolName,LSToolName,EditToolName,MultiEditToolName,WriteToolName,MultiWriteToolName,PatchToolName,BashToolName,"LSP":
   return true
