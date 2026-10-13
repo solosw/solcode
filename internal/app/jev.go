@@ -141,10 +141,10 @@ func (j *jevRuntime) shouldInjectWorkingSet() func(context.Context, map[string]a
 	}
 	return func(ctx context.Context, state map[string]any) bool {
 		choice, _ := j.decider.Choose(ctx, state,
-			"Should the main coding agent receive the current task working set and efficiency note now? Inject only when it contains useful context for the changed task; skip redundant unchanged context.",
+			"A new user request changed the task. Should the coding agent receive the current local working set now? Inject only when the files or facts are relevant to the new task; skip unrelated or redundant context. Recovery and anti-loop signals are handled locally, not by this decision.",
 			map[string]string{
-				"inject": "Inject the current WorkingSet and EfficiencyNote because they contain relevant new task context.",
-				"skip":   "Skip them because the task context is unchanged or the information is not useful now.",
+				"inject": "Inject the current WorkingSet because its files or facts are relevant to the new task.",
+				"skip":   "Skip the WorkingSet because it is unrelated to the new task or adds nothing beyond retained context.",
 			}, j.routeConfidence(), "inject")
 		return choice == "inject"
 	}

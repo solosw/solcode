@@ -22,6 +22,7 @@ import (
 	"github.com/solosw/solcode/internal/config"
 	"github.com/solosw/solcode/internal/engine"
 	"github.com/solosw/solcode/internal/httpproxy"
+	contextmessage "github.com/solosw/solcode/internal/message"
 	"github.com/solosw/solcode/internal/organizer/yzma"
 	"github.com/solosw/solcode/internal/permission"
 	"github.com/solosw/solcode/internal/session"
@@ -1480,6 +1481,9 @@ func chatMessagesFromSession(s *session.Session) []tui.ChatMessage {
 	}
 	messages := []tui.ChatMessage{{Role: "system", Content: fmt.Sprintf("Loaded session: %s", s.Metadata.ID), TimeStamp: time.Now()}}
 	for index, msg := range s.Messages {
+		if contextmessage.IsDynamicContext(msg) {
+			continue
+		}
 		timestamp := s.MessageTimestamp(index)
 		role := string(msg.Role)
 		for _, block := range msg.Content {

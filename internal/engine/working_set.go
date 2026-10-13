@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strings"
@@ -41,13 +42,15 @@ type WorkingSet struct {
 // it fits the per-file budget; a nil/empty cache still keeps the version hash so
 // stale references can be detected.
 type workingFile struct {
-	path     string
-	hash     string
-	content  string
-	cached   bool
-	modified bool
-	verified bool
-	turn     int
+	path       string
+	hash       string
+	content    string
+	cached     bool
+	modified   bool
+	verified   bool
+	stale      bool
+	prefixHash bool
+	turn       int
 }
 
 const (
@@ -106,6 +109,8 @@ func (w *WorkingSet) ObserveFile(path string, content []byte, existed, mutated b
 		w.files[path] = entry
 	}
 	entry.turn = w.turn
+	entry.stale = false
+	entry.prefixHash = len(content) > w.maxCacheSize
 	if !existed {
 		// A deleted target: keep the path so dependents can invalidate, but drop
 		// content and mark it modified.
@@ -118,7 +123,11 @@ func (w *WorkingSet) ObserveFile(path string, content []byte, existed, mutated b
 		return
 	}
 	sum := sha256.Sum256(content)
-	entry.hash = hex.EncodeToString(sum[:])[:12]
+	hash := hex.EncodeToString(sum[:])[:12]
+	if entry.hash != hash {
+		entry.verified = false
+	}
+	entry.hash = hash
 	if len(content) <= w.maxCacheSize {
 		entry.content = string(content)
 		entry.cached = true
@@ -144,7 +153,7 @@ func (w *WorkingSet) Invalidate(path string) {
 	if entry := w.files[strings.TrimSpace(path)]; entry != nil {
 		entry.content = ""
 		entry.cached = false
-		entry.modified = true
+		entry.stale = true
 		entry.verified = false
 	}
 }
@@ -256,7 +265,18 @@ func (w *WorkingSet) evictLocked() {
 	}
 }
 
-// InjectionText renders the path/hash/fact view injected every turn. It never
+// HasContext excludes a goal-only working set: the user prompt already states
+// the goal, so injecting it again adds no task knowledge.
+func (w *WorkingSet) HasContext() bool {
+	if w == nil {
+		return false
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return len(w.files) > 0 || len(w.facts) > 0 || len(w.open) > 0
+}
+
+// InjectionText renders the path/hash/fact view at selected context boundaries. It never
 // includes file contents: code already retained in the session must not be
 // re-injected, and stale content is intentionally excluded.
 func (w *WorkingSet) InjectionText() string {
@@ -269,7 +289,7 @@ func (w *WorkingSet) InjectionText() string {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString("Task working set (local, from tool results — not re-read from the model):")
+	b.WriteString("Task working set (local snapshot, from tool results — not re-read from the model):\nMetadata only; hashes do not restore file contents. Read targeted ranges if needed content is no longer retained.")
 	if w.goal != "" {
 		b.WriteString("\nGoal: " + oneLine(w.goal, 200))
 	}
@@ -294,7 +314,14 @@ func (w *WorkingSet) InjectionText() string {
 			if hash == "" {
 				hash = "absent"
 			}
-			b.WriteString(fmt.Sprintf("\n- %s (hash %s)%s", path, hash, flags))
+			if entry.stale {
+				flags += " [stale metadata; re-read before use]"
+			}
+			hashKind := "hash"
+			if entry.prefixHash {
+				hashKind = "prefix hash"
+			}
+			b.WriteString(fmt.Sprintf("\n- %s (%s %s)%s", path, hashKind, hash, flags))
 		}
 	}
 	if len(w.facts) > 0 {
@@ -377,14 +404,13 @@ func ReadFileBounded(path string, limit int) ([]byte, bool) {
 		return nil, false
 	}
 	defer f.Close()
-	buf := make([]byte, limit+1)
-	n, _ := f.Read(buf)
-	if n > limit {
-		// Too large to cache; report existence with a truncated buffer so the
-		// caller records a hash over a stable prefix.
-		return buf[:limit], true
+	// Keep the overflow sentinel so ObserveFile does not cache a truncated
+	// prefix as if it were the whole file. Hashes of oversized files are labeled.
+	buf, err := io.ReadAll(io.LimitReader(f, int64(limit)+1))
+	if err != nil {
+		return nil, false
 	}
-	return buf[:n], true
+	return buf, true
 }
 
 func oneLine(text string, limit int) string {
@@ -398,9 +424,10 @@ func oneLine(text string, limit int) string {
 
 // observeWorkingSet records the local effect of one finished tool call. It
 // reads files from disk (never the transcript) so the recorded hash reflects
-// the post-call state, and it processes BatchTool children individually.
+// the post-call state, and it processes BatchTool children individually. Client-
+// owned files are not observed through unrelated server-local filesystem paths.
 func observeWorkingSet(ws *WorkingSet, toolName string, input []byte, uctx *tool.UseContext, result ToolResult) {
-	if ws == nil || uctx == nil {
+	if ws == nil || uctx == nil || uctx.TextFileSystem != nil {
 		return
 	}
 	if toolName == tool.BatchToolName {
@@ -417,11 +444,13 @@ func observeWorkingSet(ws *WorkingSet, toolName string, input []byte, uctx *tool
 		}
 		// View uses "path"; PathsForCheckpoint("Edit") reads the same key.
 	case tool.EditToolName, tool.WriteToolName, tool.MultiEditToolName, tool.MultiWriteToolName, tool.PatchToolName:
-		if result.IsError {
-			return
-		}
 		for _, path := range tool.PathsForCheckpoint(toolName, input) {
-			observeWorkingFilePath(ws, uctx, path, true)
+			if result.IsError {
+				// Partial writes may have happened; their exact state is unknown.
+				ws.Invalidate(tool.ResolvePath(uctx, path))
+			} else {
+				observeWorkingFilePath(ws, uctx, path, true)
+			}
 		}
 	}
 }
@@ -430,39 +459,31 @@ func observeWorkingSet(ws *WorkingSet, toolName string, input []byte, uctx *tool
 // file effect. Errors are still recorded so a failed edit invalidates a stale
 // cached read.
 func observeBatchWorkingSet(ws *WorkingSet, input []byte, uctx *tool.UseContext, result ToolResult) {
-	var req struct {
-		Operations []struct {
-			ID    string          `json:"id"`
-			Tool  string          `json:"tool"`
-			Input json.RawMessage `json:"input"`
-		} `json:"operations"`
-	}
-	if json.Unmarshal(input, &req) != nil {
-		return
-	}
+	operations := batchObservedOperations(input)
 	// Parse the response to learn which child failed.
-	type childStatus struct {
-		Status string `json:"status"`
-	}
 	statuses := map[string]string{}
 	if !result.IsError && result.Content != nil {
 		var resp struct {
 			Results []struct {
-				ID     string `json:"id"`
-				Status string `json:"status"`
+				ID       string `json:"id"`
+				Status   string `json:"status"`
+				Reverted bool   `json:"reverted"`
 			} `json:"results"`
 		}
 		if json.Unmarshal([]byte(result.Content.Text), &resp) == nil {
 			for _, r := range resp.Results {
 				statuses[r.ID] = r.Status
+				if r.Reverted {
+					statuses[r.ID] = "reverted"
+				}
 			}
 		}
 	}
-	for _, op := range req.Operations {
-		failed := statuses[op.ID] != "" && statuses[op.ID] != "success"
+	for _, op := range operations {
+		status := statuses[op.ID]
 		switch op.Tool {
 		case tool.ViewToolName, "LSP":
-			if failed {
+			if status != "success" {
 				continue
 			}
 			for _, path := range tool.PathsForCheckpoint(tool.EditToolName, op.Input) {
@@ -470,7 +491,13 @@ func observeBatchWorkingSet(ws *WorkingSet, input []byte, uctx *tool.UseContext,
 			}
 		case tool.EditToolName, tool.WriteToolName, tool.MultiEditToolName, tool.MultiWriteToolName, tool.PatchToolName:
 			for _, path := range tool.PathsForCheckpoint(op.Tool, op.Input) {
-				observeWorkingFilePath(ws, uctx, path, true)
+				if status == "success" {
+					observeWorkingFilePath(ws, uctx, path, true)
+				} else if status == "reverted" {
+					observeWorkingFilePath(ws, uctx, path, false)
+				} else if status != "skipped" {
+					ws.Invalidate(tool.ResolvePath(uctx, path))
+				}
 			}
 		}
 	}

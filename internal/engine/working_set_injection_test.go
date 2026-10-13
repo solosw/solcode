@@ -5,39 +5,36 @@ import (
 	"testing"
 )
 
-func TestWorkingSetInjectionAllowedWithoutJevOnlyAtRunStart(t *testing.T) {
+func TestWorkingSetInjectionAllowedLocalTaskBoundaries(t *testing.T) {
 	ctx := context.Background()
-	if !workingSetInjectionAllowed(ctx, 0, true, false, nil) {
-		t.Fatal("without Jev, the initial turn should inject")
+	if !workingSetInjectionAllowed(ctx, true, true, nil) {
+		t.Fatal("a changed task with useful state should inject without Jev")
 	}
-	if workingSetInjectionAllowed(ctx, 1, true, false, nil) {
-		t.Fatal("without Jev, later task changes in the same run should not inject")
+	if workingSetInjectionAllowed(ctx, false, true, nil) {
+		t.Fatal("ordinary tool rounds must not repeat the working set")
 	}
-	if workingSetInjectionAllowed(ctx, 0, true, true, nil) {
-		t.Fatal("consumed decision must not inject again")
+	if workingSetInjectionAllowed(ctx, true, false, nil) {
+		t.Fatal("a goal-only working set must not duplicate the user prompt")
 	}
 }
 
-func TestWorkingSetInjectionAllowedAsksJevOnlyForChangedTask(t *testing.T) {
+func TestWorkingSetInjectionAllowedAsksJevOnlyForUsefulChangedTask(t *testing.T) {
 	ctx := context.Background()
 	calls := 0
 	jev := func(context.Context) bool {
 		calls++
 		return true
 	}
-	if !workingSetInjectionAllowed(ctx, 0, true, false, jev) {
+	if !workingSetInjectionAllowed(ctx, true, true, jev) {
 		t.Fatal("Jev allow decision should inject")
+	}
+	if workingSetInjectionAllowed(ctx, false, true, jev) || workingSetInjectionAllowed(ctx, true, false, jev) {
+		t.Fatal("unchanged/empty working sets must not inject")
 	}
 	if calls != 1 {
 		t.Fatalf("Jev calls = %d, want 1", calls)
 	}
-	if workingSetInjectionAllowed(ctx, 1, false, false, jev) {
-		t.Fatal("unchanged task must not inject")
-	}
-	if calls != 1 {
-		t.Fatalf("Jev should not be called for unchanged task, calls = %d", calls)
-	}
-	if workingSetInjectionAllowed(ctx, 1, true, false, func(context.Context) bool { return false }) {
-		t.Fatal("Jev deny decision must skip injection")
+	if workingSetInjectionAllowed(ctx, true, true, func(context.Context) bool { return false }) {
+		t.Fatal("Jev deny decision must skip task-switch injection")
 	}
 }

@@ -24,6 +24,7 @@ import (
 	"github.com/solosw/solcode/internal/lsp"
 	"github.com/solosw/solcode/internal/mcp"
 	"github.com/solosw/solcode/internal/memory"
+	contextmessage "github.com/solosw/solcode/internal/message"
 	"github.com/solosw/solcode/internal/permission"
 	"github.com/solosw/solcode/internal/sandbox"
 	"github.com/solosw/solcode/internal/session"
@@ -261,10 +262,11 @@ func New(cfg config.Config, opts ...Option) (*App, error) {
 	coordinator := agent.NewCoordinator(eng)
 	subagent := tool.NewSubagentTool(coordinator)
 	registry.Register(subagent, tool.NewTaskToolWithSubagent(subagent), tool.NewBatchToolWithLimits(tool.BatchLimits{
-		MaxOperations:  cfg.Batch.MaxOperations,
-		MaxParallel:    cfg.Batch.MaxParallel,
-		MaxResultRunes: cfg.Batch.MaxResultRunes,
-		MaxReadRetries: cfg.Batch.MaxReadRetries,
+		MaxOperations:       cfg.Batch.MaxOperations,
+		MaxParallel:         cfg.Batch.MaxParallel,
+		MaxResultRunes:      cfg.Batch.MaxResultRunes,
+		MaxTotalResultRunes: cfg.Batch.MaxTotalResultRunes,
+		MaxReadRetries:      cfg.Batch.MaxReadRetries,
 	}))
 	registry.Register(tool.NewModeSwitchToolWithGoal(application.SwitchMode, application.startGoalFlow))
 	// When Jev is on, screen WebSearch hits against the search query itself.
@@ -619,7 +621,13 @@ func (a *App) ReloadFeatures(cfg config.Config, mcpFactory mcp.ClientFactory) er
 	a.lspManager = lspManager
 	a.ChangeGraph = graphStore
 	subagent := tool.NewSubagentTool(a.Coordinator)
-	registry.Register(subagent, tool.NewTaskToolWithSubagent(subagent), tool.NewBatchTool())
+	registry.Register(subagent, tool.NewTaskToolWithSubagent(subagent), tool.NewBatchToolWithLimits(tool.BatchLimits{
+		MaxOperations:       cfg.Batch.MaxOperations,
+		MaxParallel:         cfg.Batch.MaxParallel,
+		MaxResultRunes:      cfg.Batch.MaxResultRunes,
+		MaxTotalResultRunes: cfg.Batch.MaxTotalResultRunes,
+		MaxReadRetries:      cfg.Batch.MaxReadRetries,
+	}))
 	// Rebuild the Jev decision layer from the new config. Without this a
 	// settings save would leave the router, guardrail, and memory judge wired to
 	// the previous config — or, when Jev was just enabled in the UI, wired to
@@ -1254,7 +1262,7 @@ func (a *App) refreshSessionSummary(ctx context.Context, sessionID session.Sessi
 	}
 	unbindUsage := a.bindUsageSession(current)
 	defer unbindUsage()
-	transcript := session.Transcript(session.StripEphemeralContextMessages(current.CopyMessages()))
+	transcript := session.Transcript(contextmessage.WithoutDynamicContext(session.StripEphemeralContextMessages(current.CopyMessages())))
 	if strings.TrimSpace(transcript) == "" {
 		return fmt.Errorf("session summary transcript is empty")
 	}
@@ -1795,7 +1803,7 @@ func (a *App) compactSession(ctx context.Context, current *session.Session, forc
 		// project knowledge + session summary + latest user prompt.
 		current.Summary = result.Summary
 		if force || strings.TrimSpace(current.Summary) == "" || (current.Summary == previousSummary && strings.TrimSpace(result.OriginalTranscript) != "") {
-			current.Summary = conciseSessionSummary(result.OriginalTranscript, previousSummary)
+			current.Summary = conciseSessionSummary(session.Transcript(contextmessage.WithoutDynamicContext(cleanedMessages)), previousSummary)
 		}
 		if strings.TrimSpace(current.Summary) == "" {
 			a.recordCompactEvent("compact_skipped", map[string]any{
@@ -1838,7 +1846,7 @@ func (a *App) compactSession(ctx context.Context, current *session.Session, forc
 	}
 	nextSummary := strings.TrimSpace(result.Summary)
 	if force || nextSummary == "" {
-		nextSummary = conciseSessionSummary(result.OriginalTranscript, previousSummary)
+		nextSummary = conciseSessionSummary(session.Transcript(contextmessage.WithoutDynamicContext(cleanedMessages)), previousSummary)
 	}
 	if strings.TrimSpace(nextSummary) == "" {
 		a.recordCompactEvent("compact_skipped", map[string]any{
@@ -2014,7 +2022,7 @@ func (a *App) extractSessionMemories(ctx context.Context, current *session.Sessi
 	if a == nil || current == nil || a.MemoryManager == nil || !a.Config.Memory.Enabled {
 		return nil, nil
 	}
-	transcript := session.Transcript(session.StripEphemeralContextMessages(current.CopyMessages()))
+	transcript := session.Transcript(contextmessage.WithoutDynamicContext(session.StripEphemeralContextMessages(current.CopyMessages())))
 	if strings.TrimSpace(transcript) == "" {
 		return nil, nil
 	}

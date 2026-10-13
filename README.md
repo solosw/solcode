@@ -865,6 +865,69 @@ Set `background_tasks.enabled` to `false` to retain foreground-only execution.
 | `task` | Spawn sub-agents for independent work |
 | `skill` | Load and execute custom skills |
 
+### Batch coding operations
+
+`BatchTool` is the model-visible entry point for View, Grep, Glob, LS, LSP,
+Edit, MultiEdit, Write, MultiWrite, Patch and Bash. Its schema includes each
+child's real input fields; children still use their normal permissions and hooks.
+The builtin lossy compressor defers to BatchTool for its children and never
+rewrites the JSON envelope; user-defined post-tool hooks still run.
+
+```json
+{
+  "operations": [
+    {"tool": "View", "input": {"path": "internal/tool/batch.go", "offset": 0, "limit": 100}},
+    {"tool": "Grep", "input": {"pattern": "BatchTool", "path": "internal/engine"}}
+  ]
+}
+```
+
+- IDs are optional and default to `op_1`, `op_2`, etc. Use explicit unique IDs
+  with `depends_on`. Dependencies order execution, **not** result interpolation:
+  read unknown content first, then build exact replacements in a later call.
+- Read-only batches are allowed in plan mode. An agent allowlist containing
+  wrapped tools (e.g. `View`, `Grep`) automatically permits the BatchTool
+  container, but never additional children. Listing only `BatchTool` does not
+  grant permission to its underlying tools.
+- Independent safe reads run with bounded concurrency, even if the batch has
+  more reads than the parallelism limit. Mutations run sequentially.
+- Default `output_mode: "compact"` returns short receipts for Edit/Write/Patch
+  instead of repeating complete diffs. Read/search/Bash results remain available
+  within the text budget. `output_mode: "full"` retains diffs but **does not**
+  disable the limits. Long output keeps its beginning and end.
+- Summarized/truncated results include `full_output_path` for targeted View
+  reads using `offset`/`limit`. Local archives are private temporary files, not
+  repository edits; their lifetime depends on system temp-directory cleanup.
+  ACP archives use the client's filesystem when it supports both read and write.
+  If archival fails, `output_storage_error` explicitly reports that full output
+  is unavailable; no unusable archive path is returned.
+- MultiEdit is **atomic per file by default**: every replacement in a given file
+  must validate before that file changes, but a failed file no longer prevents
+  unrelated files from being edited. Its error result lists failed files and
+  retained successes. Retry only failed files. Use `MultiEdit.input.atomic: true`
+  for all-or-nothing editing across files.
+- `BatchTool.atomic: true` provides an all-or-nothing transaction for file tools
+  only. Ordered operations may edit the same file repeatedly; it is snapshotted
+  once and restored to its original state on failure.
+
+Configure the bounds in settings (zero/unset size limits use defaults):
+
+```json
+{
+  "batch": {
+    "max_operations": 12,
+    "max_parallel": 4,
+    "max_result_runes": 18000,
+    "max_total_result_runes": 24000,
+    "max_read_retries": 1
+  }
+}
+```
+
+The aggregate budget covers combined result/error text, excluding JSON metadata,
+and counts Unicode characters rather than tokens. Only transient safe read
+failures are retried; writes and exact-match failures are never replayed automatically.
+
 ## Checkpoints & Rewind
 
 solcode snapshots workspace files so you can restore code to an earlier turn.
@@ -893,6 +956,34 @@ Two memory layers exist, and they are not interchangeable:
 Pick by intent: "what happened in this session" → session memory; "a fact worth knowing in every future session" → `WriteMemory`. Most sessions write one session memory and zero to three `WriteMemory` entries.
 
 `WriteSessionMemory` takes `keywords`, `summary`, and `importance`; the runtime appends the checkpoint turn, the files changed this session, the timestamp, and the session id. `ReadSessionMemory` fuzzy-searches by keyword, or returns the most recent entries when called without a query.
+
+## Dynamic context scheduling
+
+Dynamic context is materialized as tagged conversation messages at model-call
+boundaries, after pending tool results. Unchanged mode, selected skill, folded-tool
+catalog, and bootstrap memory/knowledge sections are not reinserted on every
+round. Updates append to the transcript instead of moving earlier messages; the
+stable system prefix remains unchanged. Session reload recognizes these tags,
+without displaying internal overlays as user messages or counting them as new
+user turns during compaction.
+Leaving plan mode explicitly supersedes the earlier plan instructions.
+
+The local **WorkingSet** is not dumped after every tool call, and a goal-only set
+is not injected at startup. File/hash/fact metadata is supplied when a queued
+user request changes the task, after context compaction, or alongside an anti-loop
+signal. Optional Jev routing is consulted only for useful task-change snapshots;
+compaction recovery and efficiency reminders do not require an extra model call.
+Recovery restores metadata, not cached source code, so necessary targeted reads
+remain allowed.
+
+**Efficiency notes** are independent of task routing. Repeated identical reads,
+searches, and errors can trigger reminders; changed counters are coalesced with a
+four-round cooldown, while new signal types/targets can surface immediately.
+Each reminder has bounded reference lists. Different
+read windows/search options are distinct operations. Successful edits invalidate
+related read/search repetition counts; queued tasks and compaction reset the
+tracking window. Background completion notifications do not themselves count as
+a new user task.
 
 ## Permission Modes
 

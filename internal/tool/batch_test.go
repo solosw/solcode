@@ -97,7 +97,7 @@ func TestBatchDependencyFailureSkipsDownstream(t *testing.T) {
 	}
 }
 
-func TestBatchRejectsCycleAndUnknownTool(t *testing.T) {
+func TestBatchRejectsCycleAndReportsUnknownTool(t *testing.T) {
 	uctx, _ := batchTestContext(t)
 	out, _ := NewBatchTool().Invoke(context.Background(), uctx, json.RawMessage(`{
 		"operations":[
@@ -109,8 +109,15 @@ func TestBatchRejectsCycleAndUnknownTool(t *testing.T) {
 	}
 	out, _ = NewBatchTool().Invoke(context.Background(), uctx, json.RawMessage(`{
 		"operations":[{"id":"a","tool":"WriteMemory","input":{}}]}`))
-	if out == nil || !out.IsError || !strings.Contains(out.Text, "not supported in batch") {
-		t.Fatalf("unsupported tool must be rejected, got %+v", out)
+	if out == nil || out.IsError {
+		t.Fatalf("unsupported operation must have a structured result, got %+v", out)
+	}
+	var resp batchResponse
+	if err := json.Unmarshal([]byte(out.Text), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Status != "failed" || resp.Results[0].Error == nil || resp.Results[0].Error.Code != "UNSUPPORTED_TOOL" {
+		t.Fatalf("unsupported tool accepted: %+v", resp)
 	}
 }
 
@@ -171,8 +178,8 @@ func TestBatchAtomicRollbackRestoresOriginal(t *testing.T) {
 	}
 }
 
-func TestBatchAtomicRejectsBashAndOverlap(t *testing.T) {
-	uctx, _ := batchTestContext(t)
+func TestBatchAtomicRejectsBashButAllowsRepeatedFile(t *testing.T) {
+	uctx, dir := batchTestContext(t)
 	out, _ := NewBatchTool().Invoke(context.Background(), uctx, json.RawMessage(`{
 		"atomic":true,
 		"operations":[{"id":"b","tool":"Bash","input":{"command":"echo hi"}}]}`))
@@ -185,8 +192,12 @@ func TestBatchAtomicRejectsBashAndOverlap(t *testing.T) {
 			{"id":"a","tool":"Write","input":{"path":"same.txt","content":"1"}},
 			{"id":"b","tool":"Write","input":{"path":"same.txt","content":"2"}}
 		]}`))
-	if out == nil || !out.IsError || !strings.Contains(out.Text, "overlapping") {
-		t.Fatalf("atomic mode must reject overlapping paths, got %+v", out)
+	if out == nil || out.IsError {
+		t.Fatalf("atomic mode must allow repeated targets, got %+v", out)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "same.txt"))
+	if err != nil || string(got) != "2" {
+		t.Fatalf("repeated write = %q, %v", got, err)
 	}
 }
 
@@ -197,6 +208,8 @@ func TestClassifyChildErrorRetryability(t *testing.T) {
 		retryable bool
 	}{
 		{"no such file or directory", "FILE_NOT_FOUND", false},
+		{"old_string not found; it must match exactly", "EDIT_MISMATCH", false},
+		{"old_string appears multiple times", "EDIT_MISMATCH", false},
 		{"permission denied", "PERMISSION_DENIED", false},
 		{"invalid parameters: missing field", "INVALID_INPUT", false},
 		{"context deadline exceeded", "TRANSIENT", true},

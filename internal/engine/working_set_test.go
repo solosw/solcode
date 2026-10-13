@@ -1,6 +1,11 @@
 package engine
 
 import (
+	"bytes"
+	"fmt"
+	"github.com/solosw/solcode/internal/tool"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -70,4 +75,61 @@ func TestWorkingSetEvictionBounds(t *testing.T) {
 
 func filepathFor(i int) string {
 	return "/tmp/evict_" + string(rune('a'+i)) + ".go"
+}
+
+func TestWorkingSetGoalAloneHasNoContext(t *testing.T) {
+	ws := NewWorkingSet()
+	ws.SetGoal("task already in prompt")
+	if ws.HasContext() {
+		t.Fatal("goal alone should not cause injection")
+	}
+	ws.AddFact("confirmed tool result")
+	if !ws.HasContext() {
+		t.Fatal("confirmed facts should qualify for injection")
+	}
+}
+
+func TestWorkingSetLargeFileIsMetadataOnly(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "large.go")
+	if err := os.WriteFile(path, bytes.Repeat([]byte("x"), defaultWorkingSetCacheMax+100), 0600); err != nil {
+		t.Fatal(err)
+	}
+	ws := NewWorkingSet()
+	observeWorkingFilePath(ws, &tool.UseContext{}, path, false)
+	if _, ok := ws.Lookup(path); ok {
+		t.Fatal("an oversized prefix must not masquerade as the full cached file")
+	}
+	if ws.RecoveryText([]string{path}) != "" || !strings.Contains(ws.InjectionText(), "prefix hash") {
+		t.Fatal("oversized observations should retain clearly labeled metadata only")
+	}
+}
+
+func TestWorkingSetSkippedRevertedAndFailedWritesAreNotConfirmedMutations(t *testing.T) {
+	for _, status := range []string{"skipped", "reverted", "error"} {
+		t.Run(status, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "a.go")
+			if err := os.WriteFile(path, []byte("original"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			ws := NewWorkingSet()
+			ws.ObserveFile(path, []byte("original"), true, false)
+			actualStatus, reverted := status, false
+			if status == "reverted" {
+				actualStatus, reverted = "success", true
+			}
+			result := ToolResult{Content: tool.Result(fmt.Sprintf(`{"results":[{"id":"op_1","status":%q,"reverted":%t}]}`, actualStatus, reverted))}
+			observeBatchWorkingSet(ws, []byte(`{"operations":[{"tool":"Edit","input":{"path":"a.go"}}]}`), &tool.UseContext{WorkDir: dir}, result)
+			if len(ws.ModifiedPaths()) != 0 {
+				t.Fatal("failed/skipped/reverted writes are not confirmed mutations")
+			}
+			_, cached := ws.Lookup(path)
+			if cached != (status != "error") {
+				t.Fatalf("cache state for %s = %v", status, cached)
+			}
+			if status == "error" && !strings.Contains(ws.InjectionText(), "stale metadata") {
+				t.Fatal("uncertain file state should be explicit")
+			}
+		})
+	}
 }

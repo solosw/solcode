@@ -3,23 +3,25 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
+	"time"
 )
 
-// MultiEditParams applies ordered exact replacements. Edits targeting the same
-// file see the result of preceding edits, and no file is written until every
-// replacement has been validated.
+// MultiEditParams applies ordered replacements atomically per file by default.
+// Atomic opts into a transaction across every file.
 type MultiEditParams struct {
-	Edits []EditParams `json:"edits"`
+	Edits  []EditParams `json:"edits"`
+	Atomic bool         `json:"atomic,omitempty"`
 }
 
 const MultiEditToolName = "MultiEdit"
 
 type multiEditTool struct{ BaseTool }
 
-// NewMultiEditTool creates a transactional batch exact-replacement tool.
+// NewMultiEditTool creates a batch exact-replacement tool.
 func NewMultiEditTool() Tool { return &multiEditTool{} }
 
 func (t *multiEditTool) Name() string                         { return MultiEditToolName }
@@ -27,18 +29,21 @@ func (t *multiEditTool) IsDestructive(_ json.RawMessage) bool { return true }
 func (t *multiEditTool) IsReadOnly(_ json.RawMessage) bool    { return false }
 
 func (t *multiEditTool) Description() string {
-	return `Applies multiple exact text replacements atomically across one or more files.
+	return `Applies multiple exact text replacements with per-file atomicity by default.
 Use this when one file has multiple changes or several files need targeted edits.
 
 Input: edits is an ordered list of path, old_string, new_string, and optional desc.
 Each old_string must occur exactly once in the file state produced by preceding edits.
-All edits are validated before any file is written; if validation fails, no files change.`
+By default, a failed file is left unchanged while independent files are still applied.
+Edits within a file remain ordered and all-or-nothing. Do not resend successful files.
+Set atomic=true for all-or-nothing validation and commit across every file.`
 }
 
 func (t *multiEditTool) InputSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
+			"atomic": map[string]any{"type": "boolean", "description": "Default false: per-file atomicity, independent files continue. True: transaction across all files."},
 			"edits": map[string]any{
 				"type":        "array",
 				"description": "Ordered exact replacements to apply together.",
@@ -46,7 +51,7 @@ func (t *multiEditTool) InputSchema() map[string]any {
 				"items": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
-						"path":  map[string]any{"type": "string"},
+						"path":       map[string]any{"type": "string"},
 						"old_string": map[string]any{"type": "string"},
 						"new_string": map[string]any{"type": "string"},
 						"desc":       map[string]any{"type": "string"},
@@ -71,9 +76,6 @@ func (t *multiEditTool) ValidateInput(_ context.Context, input json.RawMessage) 
 		if strings.TrimSpace(edit.Path) == "" {
 			return fmt.Errorf("edits[%d].path is required", i)
 		}
-		if _, errText := validateChangeDescription(edit.Desc); errText != "" {
-			return fmt.Errorf("edits[%d]: %s", i, errText)
-		}
 	}
 	return nil
 }
@@ -95,9 +97,65 @@ func (t *multiEditTool) Invoke(ctx context.Context, uctx *UseContext, input json
 		return ErrorResult(err.Error()), nil
 	}
 
-	files := make([]*stagedEditFile, 0, len(params.Edits))
-	byPath := make(map[string]*stagedEditFile, len(params.Edits))
-	for index, edit := range params.Edits {
+	if params.Atomic {
+		return t.invokeAtomic(ctx, uctx, params.Edits)
+	}
+	// Group aliases resolving to the same file, preserving first-file order and
+	// per-file edit order. A failed file cannot taint unrelated files.
+	type group struct {
+		path    string
+		edits   []EditParams
+		indexes []int
+	}
+	groups := []*group{}
+	byPath := map[string]*group{}
+	for i, edit := range params.Edits {
+		path := ResolvePath(uctx, edit.Path)
+		g := byPath[path]
+		if g == nil {
+			g = &group{path: path}
+			byPath[path] = g
+			groups = append(groups, g)
+		}
+		g.edits = append(g.edits, edit)
+		g.indexes = append(g.indexes, i)
+	}
+	var messages []string
+	applied, failed := 0, 0
+	for _, g := range groups {
+		if ctx.Err() != nil {
+			failed++
+			messages = append(messages, fmt.Sprintf("FAILED %s (edits %v): %v", g.path, g.indexes, ctx.Err()))
+			continue
+		}
+		out, err := t.invokeAtomic(ctx, uctx, g.edits)
+		if err != nil {
+			return nil, err
+		}
+		if out.IsError {
+			failed++
+			messages = append(messages, fmt.Sprintf("FAILED %s (edits %v; file unchanged unless rollback failed): %s", g.path, g.indexes, out.Text))
+		} else {
+			applied += len(g.edits)
+			_, details, _ := strings.Cut(out.Text, "\n")
+			messages = append(messages, details)
+		}
+	}
+	text := fmt.Sprintf("Applied %d/%d edits; %d file(s) failed. Successful files remain changed; retry only failed files.\n%s", applied, len(params.Edits), failed, strings.Join(messages, "\n"))
+	if failed > 0 {
+		return ErrorResult(text), nil
+	}
+	return Result(fmt.Sprintf("Applied %d edits across %d files.\n%s", applied, len(groups), strings.Join(messages, "\n"))), nil
+}
+
+func (t *multiEditTool) invokeAtomic(ctx context.Context, uctx *UseContext, edits []EditParams) (*ContentBlock, error) {
+
+	files := make([]*stagedEditFile, 0, len(edits))
+	byPath := make(map[string]*stagedEditFile, len(edits))
+	for index, edit := range edits {
+		if _, errText := validateChangeDescription(edit.Desc); errText != "" {
+			return ErrorResult(fmt.Sprintf("edits[%d]: %s", index, errText)), nil
+		}
 		path := ResolvePath(uctx, edit.Path)
 		if err := CheckAllowedPath(uctx, path); err != nil {
 			return ErrorResult(fmt.Sprintf("edits[%d]: %v", index, err)), nil
@@ -126,7 +184,7 @@ func (t *multiEditTool) Invoke(ctx context.Context, uctx *UseContext, input json
 	}
 
 	var result strings.Builder
-	result.WriteString(fmt.Sprintf("Applied %d edits across %d files.\n", len(params.Edits), len(files)))
+	result.WriteString(fmt.Sprintf("Applied %d edits across %d files.\n", len(edits), len(files)))
 	for _, file := range files {
 		desc := strings.Join(file.descs, "; ")
 		if desc == "" {
@@ -162,25 +220,40 @@ func commitStagedEdits(ctx context.Context, uctx *UseContext, files []*stagedEdi
 	committed := make([]*stagedEditFile, 0, len(files))
 	for _, file := range files {
 		if err := WriteTextFileContent(ctx, uctx, file.path, file.after); err != nil {
-			rollbackStagedEdits(ctx, uctx, committed)
-			return fmt.Errorf("write %s: %w", file.path, err)
+			// A backend may fail after partially writing the current file. Restore
+			// it too, using a bounded cleanup context independent of cancellation.
+			rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			rollbackErr := rollbackStagedEdits(rollbackCtx, uctx, append(committed, file))
+			cancel()
+			if rollbackErr != nil {
+				return fmt.Errorf("write %s: %w; rollback failed: %v", file.path, err, rollbackErr)
+			}
+			return fmt.Errorf("write %s: %w (rolled back)", file.path, err)
 		}
 		committed = append(committed, file)
 	}
 	return nil
 }
 
-func rollbackStagedEdits(ctx context.Context, uctx *UseContext, files []*stagedEditFile) {
+func rollbackStagedEdits(ctx context.Context, uctx *UseContext, files []*stagedEditFile) error {
+	var failures []error
 	for index := len(files) - 1; index >= 0; index-- {
 		file := files[index]
 		if file.existed {
-			_ = WriteTextFileContent(ctx, uctx, file.path, file.before)
+			if err := WriteTextFileContent(ctx, uctx, file.path, file.before); err != nil {
+				failures = append(failures, fmt.Errorf("restore %s: %w", file.path, err))
+			}
 			continue
 		}
-		// ACP exposes no delete-text-file operation. For client-backed new files,
-		// retain the empty file rather than mutating the local filesystem.
+		// ACP exposes no delete-text-file operation. Never delete a local file
+		// in its place or claim that rollback fully restored the original state.
 		if uctx == nil || uctx.TextFileSystem == nil || !uctx.TextFileSystem.CanWriteTextFile() {
-			_ = os.Remove(file.path)
+			if err := os.Remove(file.path); err != nil && !os.IsNotExist(err) {
+				failures = append(failures, fmt.Errorf("remove %s: %w", file.path, err))
+			}
+		} else {
+			failures = append(failures, fmt.Errorf("cannot remove new client-backed file %s: delete capability unavailable", file.path))
 		}
 	}
+	return errors.Join(failures...)
 }

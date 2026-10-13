@@ -56,7 +56,7 @@ func TestMultiEditDoesNotWriteWhenAnyEditIsInvalid(t *testing.T) {
 	if err := os.WriteFile(second, []byte("before-second"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	input := `{"edits":[
+	input := `{"atomic":true,"edits":[
 		{"path":"first.txt","old_string":"before-first","new_string":"after-first"},
 		{"path":"second.txt","old_string":"missing","new_string":"after-second"}
 	]}`

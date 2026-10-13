@@ -62,3 +62,50 @@ func TestEfficiencySearchSignatureStable(t *testing.T) {
 		t.Fatalf("search signature unstable: %q vs %q", a, b)
 	}
 }
+
+func TestEfficiencyDifferentReadWindowsAreNotRepeats(t *testing.T) {
+	c := NewRequestEfficiencyController()
+	c.ObserveCall(tool.ViewToolName, []byte(`{"path":"a.go","offset":0,"limit":10}`), ToolResult{})
+	c.ObserveCall(tool.ViewToolName, []byte(`{"path":"a.go","offset":10,"limit":10}`), ToolResult{})
+	if hint := c.Hint(); hint != "" {
+		t.Fatalf("pagination is new information: %s", hint)
+	}
+	if readSignature(tool.ViewToolName, viewInput("a.go")) != readSignature(tool.ViewToolName, []byte(`{"path":"a.go","offset":0,"limit":2000}`)) {
+		t.Fatal("default read windows should normalize identically")
+	}
+}
+
+func TestEfficiencyEditsAllowFreshReadsAndSearches(t *testing.T) {
+	c := NewRequestEfficiencyController()
+	for i := 0; i < 2; i++ {
+		c.ObserveCall(tool.ViewToolName, viewInput("a.go"), ToolResult{})
+		c.ObserveCall(tool.GrepToolName, []byte(`{"pattern":"foo"}`), ToolResult{})
+	}
+	if c.Hint() == "" {
+		t.Fatal("expected repeats before mutation")
+	}
+	c.ObserveCall(tool.EditToolName, []byte(`{"path":"a.go"}`), ToolResult{})
+	c.ObserveCall(tool.ViewToolName, viewInput("a.go"), ToolResult{})
+	c.ObserveCall(tool.GrepToolName, []byte(`{"pattern":"foo"}`), ToolResult{})
+	if hint := c.Hint(); hint != "" {
+		t.Fatalf("new versions require fresh reads: %s", hint)
+	}
+}
+
+func TestEfficiencyBatchMatchesGeneratedIDsAndErrors(t *testing.T) {
+	c := NewRequestEfficiencyController()
+	input := []byte(`{"operations":[{"tool":"View","input":{"path":"a.go"}},{"id":"op_1","tool":"View","input":{"path":"b.go"}},{"tool":"Grep","input":{"pattern":"foo"}}]}`)
+	result := ToolResult{Content: tool.Result(`{"results":[{"id":"op_1_","status":"success"},{"id":"op_1","status":"error","error":{"message":"permission denied"}},{"id":"op_3","status":"success"}]}`)}
+	c.ObserveCall(tool.BatchToolName, input, result)
+	c.ObserveCall(tool.BatchToolName, input, result)
+	hint := c.Hint()
+	if !strings.Contains(hint, "a.go") || !strings.Contains(hint, "Repeated identical search") || !strings.Contains(hint, "permission denied") || strings.Contains(hint, "b.go") {
+		t.Fatalf("batch signals not correlated correctly: %s", hint)
+	}
+}
+
+func TestEfficiencySearchOptionsAffectSignature(t *testing.T) {
+	if searchSignature(tool.GrepToolName, []byte(`{"pattern":"foo","case_sensitive":true}`)) == searchSignature(tool.GrepToolName, []byte(`{"pattern":"foo","case_sensitive":false}`)) {
+		t.Fatal("different search options must not be treated as identical")
+	}
+}

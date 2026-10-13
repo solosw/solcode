@@ -12,6 +12,7 @@ import (
 	sdk "github.com/anthropics/anthropic-sdk-go"
 	appcore "github.com/solosw/solcode/internal/app"
 	"github.com/solosw/solcode/internal/config"
+	contextmessage "github.com/solosw/solcode/internal/message"
 	"github.com/solosw/solcode/internal/session"
 )
 
@@ -243,5 +244,18 @@ func TestLoadSanitizedSessionRewritesPollutedSummary(t *testing.T) {
 	}
 	if reloaded.Summary != loaded.Summary {
 		t.Fatalf("expected sanitized summary to persist to disk\nloaded:\n%s\nreloaded:\n%s", loaded.Summary, reloaded.Summary)
+	}
+}
+
+func TestChatMessagesFromSessionHidesDurableDynamicContext(t *testing.T) {
+	s := session.NewSession("main", "", "")
+	s.Messages = []sdk.MessageParam{
+		sdk.NewUserMessage(sdk.NewTextBlock("real task")),
+		sdk.NewUserMessage(sdk.NewTextBlock(contextmessage.DynamicContextText("working-set", "internal metadata"))),
+		sdk.NewAssistantMessage(sdk.NewTextBlock("real answer")),
+	}
+	messages := chatMessagesFromSession(s)
+	if len(messages) != 3 || messages[1].Content != "real task" || messages[2].Content != "real answer" {
+		t.Fatalf("internal overlays leaked into reloaded TUI history: %+v", messages)
 	}
 }

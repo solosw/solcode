@@ -10,6 +10,7 @@ import (
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
 	"github.com/solosw/solcode/internal/engine"
+	contextmessage "github.com/solosw/solcode/internal/message"
 	"github.com/solosw/solcode/internal/session"
 	"github.com/solosw/solcode/internal/tool"
 )
@@ -164,6 +165,9 @@ func sessionHistoryUpdates(s *session.Session) []SessionUpdate {
 	}
 	var updates []SessionUpdate
 	for _, msg := range s.Messages {
+		if contextmessage.IsDynamicContext(msg) {
+			continue
+		}
 		role := strings.ToLower(string(msg.Role))
 		for _, block := range msg.Content {
 			switch {

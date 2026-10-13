@@ -1,6 +1,7 @@
 package tool
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -8,15 +9,15 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // BatchToolName is the public coding-tool entrypoint. The underlying tools are
 // still run through Engine's normal executor with their own permissions/hooks.
 const BatchToolName = "BatchTool"
 
-// BatchLimits bounds a single batch. Defaults keep the original hard-coded
-// values so callers that use NewBatchTool are unaffected. Limits are
-// configurable rather than permanently fixed.
+// BatchLimits bounds a single batch. Per-operation and aggregate text limits
+// are configurable separately, as are operation count and read parallelism.
 type BatchLimits struct {
 	// MaxOperations caps how many operations one batch may contain.
 	MaxOperations int
@@ -25,18 +26,21 @@ type BatchLimits struct {
 	MaxParallel int
 	// MaxResultRunes truncates each operation's output text.
 	MaxResultRunes int
+	// MaxTotalResultRunes caps combined output/error text for the entire batch.
+	MaxTotalResultRunes int
 	// MaxReadRetries is the bounded retry count for read-only operations that
 	// fail with a transient error. Writes are never retried.
 	MaxReadRetries int
 }
 
-// DefaultBatchLimits mirror the values the tool shipped with before limits
-// became configurable.
+// DefaultBatchLimits keep each operation useful while bounding the aggregate
+// text budget independently of the operation count.
 var DefaultBatchLimits = BatchLimits{
-	MaxOperations:  12,
-	MaxParallel:    4,
-	MaxResultRunes: 18000,
-	MaxReadRetries: 1,
+	MaxOperations:       12,
+	MaxParallel:         4,
+	MaxResultRunes:      18000,
+	MaxTotalResultRunes: 24000,
+	MaxReadRetries:      1,
 }
 
 func (l BatchLimits) withDefaults() BatchLimits {
@@ -48,6 +52,9 @@ func (l BatchLimits) withDefaults() BatchLimits {
 	}
 	if l.MaxResultRunes <= 0 {
 		l.MaxResultRunes = DefaultBatchLimits.MaxResultRunes
+	}
+	if l.MaxTotalResultRunes <= 0 {
+		l.MaxTotalResultRunes = DefaultBatchLimits.MaxTotalResultRunes
 	}
 	// MaxReadRetries may legitimately be 0 (disable retry); only negative is
 	// treated as unset.
@@ -66,13 +73,16 @@ type batchOperation struct {
 
 type batchRequest struct {
 	FailurePolicy string           `json:"failure_policy,omitempty"`
+	OutputMode    string           `json:"output_mode,omitempty"`
 	Atomic        bool             `json:"atomic,omitempty"`
 	Operations    []batchOperation `json:"operations"`
 }
 
 type batchOutput struct {
-	Content   string `json:"content"`
-	Truncated bool   `json:"truncated,omitempty"`
+	Content        string `json:"content"`
+	Truncated      bool   `json:"truncated,omitempty"`
+	Summarized     bool   `json:"summarized,omitempty"`
+	FullOutputPath string `json:"full_output_path,omitempty"`
 }
 
 type batchItem struct {
@@ -85,9 +95,11 @@ type batchItem struct {
 	BlockedBy []string     `json:"blocked_by,omitempty"`
 }
 type batchError struct {
-	Code      string `json:"code"`
-	Message   string `json:"message"`
-	Retryable bool   `json:"retryable"`
+	Code           string `json:"code"`
+	Message        string `json:"message"`
+	Retryable      bool   `json:"retryable"`
+	Truncated      bool   `json:"truncated,omitempty"`
+	FullOutputPath string `json:"full_output_path,omitempty"`
 }
 type batchSummary struct {
 	Total     int `json:"total"`
@@ -100,11 +112,12 @@ type batchSummary struct {
 	Reverted int `json:"reverted"`
 }
 type batchResponse struct {
-	BatchID      string       `json:"batch_id"`
-	Status       string       `json:"status"`
-	AtomicStatus string       `json:"atomic_status,omitempty"`
-	Summary      batchSummary `json:"summary"`
-	Results      []batchItem  `json:"results"`
+	BatchID            string       `json:"batch_id"`
+	Status             string       `json:"status"`
+	AtomicStatus       string       `json:"atomic_status,omitempty"`
+	Summary            batchSummary `json:"summary"`
+	Results            []batchItem  `json:"results"`
+	OutputStorageError string       `json:"output_storage_error,omitempty"`
 }
 
 // fileSnapshot is the pre-transaction content of one atomic target.
@@ -133,25 +146,35 @@ func NewBatchToolWithLimits(limits BatchLimits) Tool {
 }
 
 func (*batchTool) Name() string { return BatchToolName }
-func (*batchTool) Description() string {
-	return "Batch up to 12 coding operations in one model request. Examples: View input {path,offset,limit}; Grep {pattern,path}; Glob {pattern,path}; LS {path}; Edit {path,old_string,new_string}; Write {path,content}; Bash {command}. Operation inputs must match the underlying tool schema. Use depends_on IDs for known dependencies, not for independent reads. Results keep successes and report independent errors separately by operation id. Read-only operations may run in parallel, writes are sequential. Each operation retains its normal permissions and hooks. Set atomic=true to apply file edits as one all-or-nothing transaction (Edit/MultiEdit/Write/MultiWrite/Patch only)."
+func (bt *batchTool) Description() string {
+	return fmt.Sprintf("Run 1-%d coding operations using the tool-specific input schemas below. IDs are optional (default op_1, op_2, ...); use explicit IDs for depends_on. Dependencies only order execution: they do NOT substitute results into later inputs. Only batch edits whose exact old_string is already known from a prior read. Independent safe reads run concurrently, mutations sequentially. In non-atomic batches, successful edits stay applied after unrelated failures, even when a MultiEdit partially fails. Default output_mode=compact omits repeated file diffs; read/search/Bash outputs remain useful within per-item and total text budgets. Truncated or summarized outputs include full_output_path; read it with View using offset/limit. output_mode=full keeps diffs but still obeys budgets. atomic=true attempts to roll back all file operations on any failure; supports Edit/MultiEdit/Write/MultiWrite/Patch, including repeated edits to the same file. Inspect atomic_status and reverted: after rolled_back, reapply the corrected transaction; after rollback_failed/unknown, read current targets first. Permissions and hooks still apply to each child.", bt.limits.MaxOperations)
 }
-func (*batchTool) IsReadOnly(json.RawMessage) bool        { return false }
+
+// Classify read batches for plan-mode permissions. Mutation permissions are
+// still checked separately by the real child executor, never by this wrapper.
+func (*batchTool) IsReadOnly(input json.RawMessage) bool {
+	var req batchRequest
+	if json.Unmarshal(input, &req) != nil || req.Atomic || len(req.Operations) == 0 {
+		return false
+	}
+	for _, op := range req.Operations {
+		switch op.Tool {
+		case ViewToolName, GrepToolName, GlobToolName, LSToolName, "LSP":
+		default:
+			return false
+		}
+	}
+	return true
+}
 func (*batchTool) IsConcurrencySafe(json.RawMessage) bool { return false }
 func (bt *batchTool) InputSchema() map[string]any {
 	return map[string]any{
-		"type": "object",
+		"type": "object", "additionalProperties": false,
 		"properties": map[string]any{
-			"failure_policy": map[string]any{"type": "string", "enum": []string{"continue_independent"}, "description": "Independent operations continue after a failure (the default)."},
-			"atomic":         map[string]any{"type": "boolean", "description": "Apply the file edits as one transaction: all targets are snapshotted, edits apply serially, and any failure rolls every target back. Only Edit, MultiEdit, Write, MultiWrite and Patch are allowed."},
-			"operations": map[string]any{"type": "array", "minItems": 1, "maxItems": bt.limits.MaxOperations, "items": map[string]any{
-				"type": "object", "properties": map[string]any{
-					"id":         map[string]any{"type": "string", "description": "Unique identifier within the batch."},
-					"tool":       map[string]any{"type": "string", "description": "Underlying tool name, e.g. View, Grep, Glob, LS, Edit, Write, Patch, Bash."},
-					"input":      map[string]any{"type": "object", "description": "Arguments matching the underlying tool's schema."},
-					"depends_on": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
-				}, "required": []string{"id", "tool", "input"},
-			}},
+			"failure_policy": map[string]any{"type": "string", "enum": []string{"continue_independent"}},
+			"output_mode":    map[string]any{"type": "string", "enum": []string{"compact", "full"}, "description": "Default compact: summaries for single-file edits; full retains diffs. Both modes obey output budgets."},
+			"atomic":         map[string]any{"type": "boolean", "description": "All-or-nothing transaction for file edits only; default false."},
+			"operations":     map[string]any{"type": "array", "minItems": 1, "maxItems": bt.limits.MaxOperations, "items": batchOperationSchema()},
 		}, "required": []string{"operations"},
 	}
 }
@@ -160,15 +183,40 @@ func (bt *batchTool) Invoke(ctx context.Context, uctx *UseContext, input json.Ra
 	if uctx == nil || uctx.BatchDispatch == nil || uctx.BatchLookup == nil {
 		return ErrorResult("batch execution is not configured"), nil
 	}
+	if !json.Valid(input) {
+		return ErrorResult("invalid batch request: expected a single valid JSON object"), nil
+	}
 	var req batchRequest
-	if err := json.Unmarshal(input, &req); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(input))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
 		return ErrorResult("invalid batch request: " + err.Error()), nil
+	}
+	if req.OutputMode != "" && req.OutputMode != "compact" && req.OutputMode != "full" {
+		return ErrorResult("output_mode must be compact or full"), nil
 	}
 	if req.FailurePolicy != "" && req.FailurePolicy != "continue_independent" {
 		return ErrorResult("unsupported failure_policy"), nil
 	}
 	if len(req.Operations) == 0 || len(req.Operations) > bt.limits.MaxOperations {
 		return ErrorResult(fmt.Sprintf("operations must contain 1-%d entries", bt.limits.MaxOperations)), nil
+	}
+	// Reserve explicit IDs before generating defaults to avoid collisions.
+	used := map[string]bool{}
+	for _, op := range req.Operations {
+		if op.ID != "" {
+			used[op.ID] = true
+		}
+	}
+	for i := range req.Operations {
+		if req.Operations[i].ID == "" {
+			id := fmt.Sprintf("op_%d", i+1)
+			for used[id] {
+				id += "_"
+			}
+			req.Operations[i].ID = id
+			used[id] = true
+		}
 	}
 	ids := map[string]int{}
 	for i, op := range req.Operations {
@@ -179,12 +227,6 @@ func (bt *batchTool) Invoke(ctx context.Context, uctx *UseContext, input json.Ra
 			return ErrorResult("duplicate operation id: " + op.ID), nil
 		}
 		ids[op.ID] = i
-		if !BatchWrapped(op.Tool) {
-			return ErrorResult("tool not supported in batch: " + op.Tool), nil
-		}
-		if uctx.BatchLookup(op.Tool) == nil {
-			return ErrorResult("tool unavailable: " + op.Tool), nil
-		}
 	}
 	// Reject cyclic graphs before any side-effecting operation executes.
 	visiting := make([]uint8, len(req.Operations))
@@ -288,11 +330,11 @@ func (bt *batchTool) invokeIndependent(ctx context.Context, uctx *UseContext, re
 		}
 		// A wave runs concurrently only if *all* calls are safe read-only
 		// operations. Otherwise execute sequentially to protect file mutations.
-		parallel := len(ready) > 1 && len(ready) <= bt.limits.MaxParallel
+		parallel := len(ready) > 1 && bt.limits.MaxParallel > 1
 		for _, i := range ready {
 			op := req.Operations[i]
 			t := uctx.BatchLookup(op.Tool)
-			if !t.IsReadOnly(op.Input) || !t.IsConcurrencySafe(op.Input) {
+			if t == nil || !BatchWrapped(op.Tool) || !t.IsReadOnly(op.Input) || !t.IsConcurrencySafe(op.Input) {
 				parallel = false
 				break
 			}
@@ -300,9 +342,11 @@ func (bt *batchTool) invokeIndependent(ctx context.Context, uctx *UseContext, re
 		run := func(i int) { result[i] = bt.runOperation(ctx, uctx, req.Operations[i]) }
 		if parallel {
 			var wg sync.WaitGroup
+			semaphore := make(chan struct{}, bt.limits.MaxParallel)
 			for _, i := range ready {
+				semaphore <- struct{}{}
 				wg.Add(1)
-				go func(i int) { defer wg.Done(); run(i) }(i)
+				go func(i int) { defer wg.Done(); defer func() { <-semaphore }(); run(i) }(i)
 			}
 			wg.Wait()
 		} else {
@@ -317,14 +361,29 @@ func (bt *batchTool) invokeIndependent(ctx context.Context, uctx *UseContext, re
 	}
 	response := batchResponse{BatchID: nextBatchID(), Results: result}
 	bt.finish(&response)
-	return bt.encode(response)
+	return bt.encode(ctx, uctx, response, req.OutputMode)
 }
 
 // runOperation executes one child call through the executor, applying the
 // bounded read-only retry policy and structured error classification.
 func (bt *batchTool) runOperation(ctx context.Context, uctx *UseContext, op batchOperation) batchItem {
 	item := batchItem{ID: op.ID, Tool: op.Tool, Status: "success"}
+	if !BatchWrapped(op.Tool) {
+		item.Status = "error"
+		item.Error = &batchError{Code: "UNSUPPORTED_TOOL", Message: "tool not supported in batch: " + op.Tool + "; use exact tool names from the schema"}
+		return item
+	}
 	t := uctx.BatchLookup(op.Tool)
+	if t == nil {
+		item.Status = "error"
+		item.Error = &batchError{Code: "TOOL_UNAVAILABLE", Message: "tool unavailable: " + op.Tool}
+		return item
+	}
+	if err := validateBatchChild(ctx, t, op.Input); err != nil {
+		item.Status = "error"
+		item.Error = &batchError{Code: "INVALID_INPUT", Message: fmt.Sprintf("%s input: %v", op.Tool, err)}
+		return item
+	}
 	readOnly := t != nil && t.IsReadOnly(op.Input) && t.IsConcurrencySafe(op.Input)
 
 	output, err := uctx.BatchDispatch(ctx, op.Tool, op.Input)
@@ -355,20 +414,18 @@ func (bt *batchTool) runOperation(ctx context.Context, uctx *UseContext, op batc
 		if output.IsError {
 			item.Status = "error"
 			code, retryable := classifyChildError(output.Text)
-			item.Error = &batchError{Code: code, Message: output.Text, Retryable: retryable}
+			message := output.Text
+			if code == "EDIT_MISMATCH" {
+				message += "\nRead the current failed target with View and use unique exact text. Retry only failed files/replacements; successful files remain changed unless atomic rollback is reported."
+			}
+			item.Error = &batchError{Code: code, Message: message, Retryable: retryable}
 		}
 		if output.Type == "image" {
 			item.Status = "error"
 			item.Error = &batchError{Code: "UNSUPPORTED_OUTPUT", Message: "batch does not embed image payloads; call this tool directly"}
 		}
 		if item.Status == "success" {
-			content := output.Text
-			truncated := false
-			if len([]rune(content)) > bt.limits.MaxResultRunes {
-				content = string([]rune(content)[:bt.limits.MaxResultRunes])
-				truncated = true
-			}
-			item.Output = &batchOutput{Content: content, Truncated: truncated}
+			item.Output = &batchOutput{Content: output.Text}
 		}
 	}
 	if ctx.Err() != nil {
@@ -391,6 +448,9 @@ func (bt *batchTool) invokeAtomic(ctx context.Context, uctx *UseContext, req bat
 		if !CheckpointableFileTool(op.Tool) {
 			return ErrorResult("atomic mode supports only file edits (Edit, MultiEdit, Write, MultiWrite, Patch); " + op.Tool + " is not allowed"), nil
 		}
+		if err := validateBatchChild(ctx, uctx.BatchLookup(op.Tool), op.Input); err != nil {
+			return ErrorResult(fmt.Sprintf("atomic operation %s: %v", op.ID, err)), nil
+		}
 		for _, dep := range op.DependsOn {
 			if ids[dep] >= i {
 				return ErrorResult("atomic mode requires depends_on to reference earlier operations: " + dep), nil
@@ -406,7 +466,7 @@ func (bt *batchTool) invokeAtomic(ctx context.Context, uctx *UseContext, req bat
 				return ErrorResult("atomic operation has an empty target path: " + op.ID), nil
 			}
 			if seen[abs] {
-				return ErrorResult("atomic mode rejects overlapping target paths: " + p), nil
+				continue // Snapshot once; ordered edits may legitimately share a file.
 			}
 			seen[abs] = true
 			paths = append(paths, abs)
@@ -480,34 +540,30 @@ func (bt *batchTool) invokeAtomic(ctx context.Context, uctx *UseContext, req bat
 	if response.AtomicStatus != "committed" {
 		response.Status = "failed"
 	}
-	return bt.encode(response)
+	return bt.encode(ctx, uctx, response, req.OutputMode)
 }
 
-// rollbackSnapshots restores every snapshot in reverse order. It reports
-// rolled_back only when every restore succeeded; a cancelled context leaves the
-// outcome unknown rather than misreporting success.
+// rollbackSnapshots shares MultiEdit's bounded, cancellation-independent
+// cleanup. ACP lacks deletion, so failed restoration must never delete a local
+// file in place of a client-owned file or claim a successful rollback.
 func rollbackSnapshots(ctx context.Context, uctx *UseContext, snapshots []fileSnapshot) string {
-	allOK := true
-	for i := len(snapshots) - 1; i >= 0; i-- {
-		snap := snapshots[i]
-		if snap.existed {
-			if err := WriteTextFileContent(ctx, uctx, snap.path, *snap.content); err != nil {
-				allOK = false
-			}
-			continue
+	files := make([]*stagedEditFile, 0, len(snapshots))
+	for _, snap := range snapshots {
+		file := &stagedEditFile{path: snap.path, existed: snap.existed}
+		if snap.content != nil {
+			file.before = *snap.content
 		}
-		if err := os.Remove(snap.path); err != nil && !os.IsNotExist(err) {
-			allOK = false
-		}
+		files = append(files, file)
 	}
-	switch {
-	case !allOK && ctx.Err() != nil:
-		return "unknown"
-	case allOK:
-		return "rolled_back"
-	default:
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if err := rollbackStagedEdits(cleanupCtx, uctx, files); err != nil {
+		if cleanupCtx.Err() != nil {
+			return "unknown"
+		}
 		return "rollback_failed"
 	}
+	return "rolled_back"
 }
 
 // finish computes the summary and overall batch status from the results.
@@ -542,7 +598,8 @@ func (bt *batchTool) finish(response *batchResponse) {
 	}
 }
 
-func (bt *batchTool) encode(response batchResponse) (*ContentBlock, error) {
+func (bt *batchTool) encode(ctx context.Context, uctx *UseContext, response batchResponse, mode string) (*ContentBlock, error) {
+	bt.compactOutputs(ctx, uctx, &response, mode)
 	encoded, err := json.Marshal(response)
 	if err != nil {
 		return nil, err
@@ -557,6 +614,8 @@ func (bt *batchTool) encode(response batchResponse) (*ContentBlock, error) {
 func classifyChildError(text string) (string, bool) {
 	lower := strings.ToLower(text)
 	switch {
+	case strings.Contains(lower, "old_string") && (strings.Contains(lower, "not found") || strings.Contains(lower, "multiple times") || strings.Contains(lower, "match exactly")):
+		return "EDIT_MISMATCH", false
 	case strings.Contains(lower, "no such file") || strings.Contains(lower, "not found") || strings.Contains(lower, "does not exist"):
 		return "FILE_NOT_FOUND", false
 	case strings.Contains(lower, "permission") || strings.Contains(lower, "denied") || strings.Contains(lower, "not allowed"):

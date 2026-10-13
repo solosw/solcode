@@ -50,25 +50,25 @@ expected return value.
 allowed_tools is a RUNTIME permission on the child executor only. It does not
 change the tools schema sent to the model: every agent (main and sub) shares
 the same core tools prefix for prompt-cache stability. Disallowed tools still
-appear in the schema but fail at invoke time if called.`
+appear in the schema but fail at invoke time if called. For BatchTool operations, list permitted child tool names (e.g. View/Grep) in allowed_tools; BatchTool alone does not authorize its children.`
 }
 
 func (t *subagentTool) InputSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"description":   map[string]any{"type": "string", "description": "Short label for this sub-agent"},
-			"prompt":        map[string]any{"type": "string", "description": "Detailed prompt for the sub-agent"},
+			"description": map[string]any{"type": "string", "description": "Short label for this sub-agent"},
+			"prompt":      map[string]any{"type": "string", "description": "Detailed prompt for the sub-agent"},
 			"allowed_tools": map[string]any{
-				"type": "array",
+				"type":  "array",
 				"items": map[string]any{"type": "string"},
 				"description": "Runtime allowlist for this sub-agent's executor. " +
 					"Does not change the shared tools schema prefix (core tools stay on the wire for prompt cache). " +
 					"Empty means unrestricted execution (subject to permission mode).",
 			},
-			"model":         map[string]any{"type": "string", "description": "Optional explicit model or 'fast'"},
-			"difficulty":    map[string]any{"type": "string", "enum": []string{"easy", "medium", "hard"}, "description": "Use easy for the configured fast model"},
-			"task_id":       map[string]any{"type": "string", "description": "Optional orchestration id from Task"},
+			"model":      map[string]any{"type": "string", "description": "Optional explicit model or 'fast'"},
+			"difficulty": map[string]any{"type": "string", "enum": []string{"easy", "medium", "hard"}, "description": "Use easy for the configured fast model"},
+			"task_id":    map[string]any{"type": "string", "description": "Optional orchestration id from Task"},
 		},
 		"required": []string{"description", "prompt"},
 	}

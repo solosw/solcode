@@ -6,6 +6,7 @@ import (
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
 	"github.com/solosw/solcode/internal/engine"
+	contextmessage "github.com/solosw/solcode/internal/message"
 	"github.com/solosw/solcode/internal/session"
 )
 
@@ -124,5 +125,16 @@ func TestSessionHistoryMapsThinkingToThoughtChunk(t *testing.T) {
 	}
 	if updates[1].SessionUpdate != "agent_message_chunk" || updates[1].Content == nil || updates[1].Content.Text != "answer" {
 		t.Fatalf("message = %#v", updates[1])
+	}
+}
+
+func TestSessionHistoryHidesDurableDynamicContext(t *testing.T) {
+	s := session.NewSession("main", "", "")
+	s.Append(sdk.NewUserMessage(sdk.NewTextBlock("task")))
+	s.Append(sdk.NewUserMessage(sdk.NewTextBlock(contextmessage.DynamicContextText("mode", "internal policy"))))
+	s.Append(sdk.NewAssistantMessage(sdk.NewTextBlock("answer")))
+	updates := sessionHistoryUpdates(s)
+	if len(updates) != 2 || updates[0].Content.Text != "task" || updates[1].Content.Text != "answer" {
+		t.Fatalf("internal overlays leaked into ACP history: %+v", updates)
 	}
 }

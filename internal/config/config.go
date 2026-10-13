@@ -192,6 +192,8 @@ type BatchConfig struct {
 	MaxParallel int `json:"max_parallel,omitempty"`
 	// MaxResultRunes truncates each operation's output text.
 	MaxResultRunes int `json:"max_result_runes,omitempty"`
+	// MaxTotalResultRunes bounds combined output/error text (excluding JSON metadata).
+	MaxTotalResultRunes int `json:"max_total_result_runes,omitempty"`
 	// MaxReadRetries is the bounded retry count for transient read failures.
 	// Negative is treated as unset; 0 disables retry.
 	MaxReadRetries int `json:"max_read_retries,omitempty"`
@@ -560,6 +562,7 @@ func Default() Config {
 		WorkDir:          wd,
 		MaxTurns:         0,
 		BackgroundTasks:  BackgroundTasksConfig{Enabled: true, YieldAfterMS: DefaultBackgroundYieldAfterMS},
+		Batch:            BatchConfig{MaxReadRetries: 1},
 		Stream:           true,
 		Thinking:         true,
 		ThinkingText:     false,
@@ -1326,6 +1329,10 @@ func applyJSONConfig(cfg *Config, data []byte) error {
 			}
 		case "system_prompt":
 			if err := json.Unmarshal(value, &cfg.SystemPrompt); err != nil {
+				return err
+			}
+		case "batch":
+			if err := json.Unmarshal(value, &cfg.Batch); err != nil {
 				return err
 			}
 		case "background_tasks":

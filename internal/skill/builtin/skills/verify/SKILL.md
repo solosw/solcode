@@ -24,6 +24,10 @@ Prove the change works. Verification is evidence, not a formality.
 
 ## Rules
 
+- Run repository checks as `Bash` operations in `BatchTool`; use read/search
+  operations for diagnostics. Batch only independent checks with known inputs.
+  If a result reports `running_in_background`, wait for its completion notification
+  before claiming verification succeeded; the acknowledgement is not a pass.
 - **Never claim success you did not observe.** If you did not run it, say so.
 - **Distinguish pre-existing failures from regressions.** Quote the baseline.
 - **Reproduce before fixing.** If a test fails, read the failure before changing

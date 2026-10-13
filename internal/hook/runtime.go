@@ -60,6 +60,9 @@ type Event struct {
 	ToolName   string          `json:"tool_name,omitempty"`
 	ToolInput  json.RawMessage `json:"tool_input,omitempty"`
 	ToolResult any             `json:"tool_result,omitempty"`
+	// OutputManaged means a parent tool supplies its own loss-aware output budget.
+	// Other hooks still run; only the builtin lossy compressor honors this flag.
+	OutputManaged bool `json:"output_managed,omitempty"`
 }
 
 type Result struct {

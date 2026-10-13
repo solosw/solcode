@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -35,6 +36,7 @@ type RequestEfficiencyController struct {
 	// idleTurns counts consecutive turns with no new information.
 	idleTurns int
 	turn      int
+	started   bool
 
 	// bounds so the controller itself cannot grow without limit.
 	maxTracked int
@@ -65,12 +67,13 @@ func (c *RequestEfficiencyController) BeginTurn(turn int) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.turn != 0 && !c.newThisTurn {
+	if c.started && !c.newThisTurn {
 		c.idleTurns++
-	} else if c.turn != 0 {
+	} else if c.started {
 		c.idleTurns = 0
 	}
 	c.turn = turn
+	c.started = true
 	c.newThisTurn = false
 }
 
@@ -83,25 +86,44 @@ func (c *RequestEfficiencyController) ObserveCall(name string, input []byte, res
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	c.observeCallLocked(name, input, result)
+	c.trimLocked()
+}
+
+func (c *RequestEfficiencyController) observeCallLocked(name string, input []byte, result ToolResult) {
 	switch name {
 	case tool.ViewToolName, "LSP":
-		for _, path := range tool.PathsForCheckpoint(tool.EditToolName, input) {
-			c.recordReadLocked(path, result.IsError)
-		}
+		c.recordReadLocked(readSignature(name, input), result.IsError)
 	case tool.GrepToolName, tool.GlobToolName:
+		if result.IsError {
+			break
+		}
 		sig := searchSignature(name, input)
 		if sig != "" {
 			c.searches[sig]++
-			c.newThisTurn = true
+			if c.searches[sig] == 1 {
+				c.newThisTurn = true
+			}
 		}
 	case tool.EditToolName, tool.WriteToolName, tool.MultiEditToolName, tool.MultiWriteToolName, tool.PatchToolName:
 		if !result.IsError {
-			// A successful mutation is always progress.
+			// A new file version makes previous reads/searches legitimate again.
 			c.newThisTurn = true
+			for _, path := range tool.PathsForCheckpoint(name, input) {
+				for sig := range c.reads {
+					if strings.HasPrefix(sig, strings.TrimSpace(path)+" [") {
+						delete(c.reads, sig)
+					}
+				}
+			}
+			c.searches = map[string]int{}
 		}
 	case tool.BashToolName:
 		if !result.IsError {
 			c.newThisTurn = true
+			// Shell commands may mutate files outside the edit tools.
+			c.reads = map[string]int{}
+			c.searches = map[string]int{}
 		}
 	case tool.BatchToolName:
 		c.observeBatchLocked(input, result)
@@ -112,46 +134,40 @@ func (c *RequestEfficiencyController) ObserveCall(name string, input []byte, res
 			c.errors[sig]++
 		}
 	}
-	c.trimLocked()
 }
 
 func (c *RequestEfficiencyController) observeBatchLocked(input []byte, result ToolResult) {
-	var req struct {
-		Operations []struct {
-			ID    string          `json:"id"`
-			Tool  string          `json:"tool"`
-			Input json.RawMessage `json:"input"`
-		} `json:"operations"`
-	}
-	if json.Unmarshal(input, &req) != nil {
+	if result.IsError || result.Content == nil {
 		return
 	}
-	success := map[string]bool{}
-	if !result.IsError && result.Content != nil {
-		var resp struct {
-			Results []struct {
-				ID     string `json:"id"`
-				Status string `json:"status"`
-			} `json:"results"`
-		}
-		if json.Unmarshal([]byte(result.Content.Text), &resp) == nil {
-			for _, r := range resp.Results {
-				success[r.ID] = r.Status == "success"
-			}
-		}
+	var resp struct {
+		Results []struct {
+			ID       string `json:"id"`
+			Status   string `json:"status"`
+			Reverted bool   `json:"reverted"`
+			Error    *struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		} `json:"results"`
 	}
-	for _, op := range req.Operations {
-		failed := !success[op.ID]
-		switch op.Tool {
-		case tool.ViewToolName, "LSP":
-			for _, path := range tool.PathsForCheckpoint(tool.EditToolName, op.Input) {
-				c.recordReadLocked(path, failed)
-			}
-		case tool.EditToolName, tool.WriteToolName, tool.MultiEditToolName, tool.MultiWriteToolName, tool.PatchToolName:
-			if !failed {
-				c.newThisTurn = true
-			}
+	if json.Unmarshal([]byte(result.Content.Text), &resp) != nil {
+		return
+	}
+	operations := batchObservedOperations(input)
+	byID := make(map[string]batchObservedOperation, len(operations))
+	for _, op := range operations {
+		byID[op.ID] = op
+	}
+	for _, child := range resp.Results {
+		op, exists := byID[child.ID]
+		if !exists || child.Status == "skipped" || child.Reverted {
+			continue
 		}
+		childResult := ToolResult{IsError: child.Status != "success"}
+		if child.Error != nil {
+			childResult.Content = tool.ErrorResult(child.Error.Message)
+		}
+		c.observeCallLocked(op.Tool, op.Input, childResult)
 	}
 }
 
@@ -179,21 +195,21 @@ func (c *RequestEfficiencyController) Hint() string {
 	var parts []string
 	if repeated := c.repeatedReadsLocked(); len(repeated) > 0 {
 		items := make([]string, 0, len(repeated))
-		for _, path := range repeated {
-			items = append(items, fmt.Sprintf("%s (read %d×)", path, c.reads[path]))
+		for _, path := range boundedEfficiencyItems(repeated) {
+			items = append(items, fmt.Sprintf("%s (read %d×)", oneLine(path, 200), c.reads[path]))
 		}
-		parts = append(parts, "Already read this run — reuse the earlier result instead of reading again: "+strings.Join(items, ", "))
+		parts = append(parts, "Repeated identical read window — reuse the earlier retained result if current and sufficient; changed files, truncated output, or new ranges may need another read: "+strings.Join(items, ", "))
 	}
 	if repeated := c.repeatedSearchesLocked(); len(repeated) > 0 {
 		items := make([]string, 0, len(repeated))
-		for _, sig := range repeated {
+		for _, sig := range boundedEfficiencyItems(repeated) {
 			items = append(items, fmt.Sprintf("%s (%d×)", sig, c.searches[sig]))
 		}
-		parts = append(parts, "Repeated search — results are unchanged: "+strings.Join(items, ", "))
+		parts = append(parts, "Repeated identical search — reuse the earlier retained result unless files or scope changed: "+strings.Join(items, ", "))
 	}
 	if repeated := c.repeatedErrorsLocked(); len(repeated) > 0 {
 		items := make([]string, 0, len(repeated))
-		for _, sig := range repeated {
+		for _, sig := range boundedEfficiencyItems(repeated) {
 			items = append(items, fmt.Sprintf("%s (%d×)", sig, c.errors[sig]))
 		}
 		parts = append(parts, "Error already seen — change the approach rather than retrying as-is: "+strings.Join(items, ", "))
@@ -205,6 +221,15 @@ func (c *RequestEfficiencyController) Hint() string {
 		return ""
 	}
 	return "Efficiency note (local, advisory):\n- " + strings.Join(parts, "\n- ")
+}
+
+// Summaries are bounded independently from the local tracking maps.
+func boundedEfficiencyItems(items []string) []string {
+	const maxItems = 8
+	if len(items) > maxItems {
+		return items[:maxItems]
+	}
+	return items
 }
 
 func (c *RequestEfficiencyController) repeatedReadsLocked() []string {
@@ -252,25 +277,50 @@ func (c *RequestEfficiencyController) trimLocked() {
 	}
 }
 
-// searchSignature normalizes a Grep/Glob call into a stable signature so the
-// same query is recognized regardless of parameter order.
-func searchSignature(name string, input []byte) string {
-	var params struct {
-		Pattern string `json:"pattern"`
-		Query   string `json:"query"`
-		Path    string `json:"path"`
-	}
+// readSignature distinguishes pagination and LSP queries. Two different
+// windows of the same file are new information, not a redundant file read.
+func readSignature(name string, input []byte) string {
+	var params map[string]any
 	if json.Unmarshal(input, &params) != nil {
 		return ""
 	}
-	term := strings.TrimSpace(params.Pattern)
-	if term == "" {
-		term = strings.TrimSpace(params.Query)
-	}
-	if term == "" {
+	path, _ := params["path"].(string)
+	path = strings.TrimSpace(path)
+	if path == "" {
 		return ""
 	}
-	return name + ":" + term + "@" + strings.TrimSpace(params.Path)
+	if name == tool.ViewToolName {
+		if offset, _ := params["offset"].(float64); offset == 0 {
+			delete(params, "offset")
+		}
+		if limit, _ := params["limit"].(float64); limit == 0 || limit == float64(tool.DefaultReadLimit) {
+			delete(params, "limit")
+		}
+	}
+	return path + " [" + name + ":" + observationSignature(params) + "]"
+}
+
+// Include all search options, not just term/path: changed case, output mode,
+// glob or pagination may be a necessary follow-up search.
+func searchSignature(name string, input []byte) string {
+	var params map[string]any
+	if json.Unmarshal(input, &params) != nil {
+		return ""
+	}
+	term, _ := params["pattern"].(string)
+	if term == "" {
+		term, _ = params["query"].(string)
+	}
+	if strings.TrimSpace(term) == "" {
+		return ""
+	}
+	path, _ := params["path"].(string)
+	return name + ":" + oneLine(term, 80) + "@" + oneLine(path, 80) + " [" + observationSignature(params) + "]"
+}
+
+func observationSignature(params map[string]any) string {
+	data, _ := json.Marshal(params)
+	return fmt.Sprintf("%x", sha256.Sum256(data))[:12]
 }
 
 // errorSignature reduces an error result to a short, stable signature.

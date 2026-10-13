@@ -32,8 +32,9 @@ type ContextBuilder struct {
 	// plan-mode instruction text is injected via ModeInstructions into the
 	// dynamic suffix, never into the system prompt (prompt-cache stability).
 	PlanMode bool
-	// ModeInstructions is turn-local policy (plan mode, etc.) placed in the
-	// ephemeral user context block. Empty means no mode overlay this turn.
+	// ModeInstructions is current policy (plan mode, etc.). The engine
+	// materializes changes as durable overlays; standalone Build callers use
+	// the ephemeral context block. Empty means no new mode overlay.
 	ModeInstructions string
 	// ForceSkill is the rendered activation text of a skill the router selected
 	// for this run. It is injected as a user message so the selection is applied
@@ -46,7 +47,7 @@ type ContextBuilder struct {
 	// version hashes, confirmed facts. It excludes contents of code already in
 	// the session so it never duplicates retained context.
 	WorkingSet string
-	// EfficiencyNote is an advisory anti-loop hint (§7): repeated reads/searches
+	// EfficiencyNote is an event-driven advisory anti-loop hint (§7): repeated reads/searches
 	// and turns without progress. Local only; never a model request.
 	EfficiencyNote string
 }
@@ -462,13 +463,17 @@ func toolUsagePrompt() string {
 		"Tool usage:",
 		"Minimize unnecessary model round trips while preserving correctness and required verification. A few sufficient calls beat many small sequential ones; never skip necessary work to save requests.",
 		"- Use the available tools when they are the most direct way to gather information, inspect code, make changes, or verify behavior.",
-		"- Prefer BatchTool for repository exploration, related file reads, searches, and edits. Submit independent operations together in one batch, not one model turn per file.",
-		"- Explore related repository files together in one batch, and prefer batch edit tools for related changes, so one response covers the whole edit.",
-		"- Use the WorkingSet facts already in context (goal, file hashes, confirmed facts) before repeating a search or re-reading a file that has not changed. Re-read only when the file was modified since it was cached.",
-		"- Use the underlying tool names and their documented input fields inside BatchTool.operations. Failures are per operation; reuse successful outputs rather than repeating the batch.",
-		"- Make dependency edges explicit only when necessary. BatchTool runs independent safe reads concurrently; it serializes unsafe operations.",
-		"- Match input schemas exactly and prefer the smallest sufficient batch of operations that advances the task.",
-		"- Express independent reads as multiple operations in ONE BatchTool call, where safe reads run concurrently. Do not parallelize edits that depend on each other.",
+		"- Use BatchTool.operations for repository reads, searches, edits, and shell commands. Batch independent operations with known inputs within each read/edit/verify phase; do not batch across phases that need new results. Only child tools defined in the BatchTool schema are supported; other capabilities remain standalone tools.",
+		"- Use exact child tool names and tool-specific input fields from the schema, not guessed aliases. Operation IDs are optional; use explicit unique IDs when depends_on is needed. Dependencies only order execution: they do not interpolate results or construct arguments. Read unknown content first, then build exact replacements in a later call.",
+		"- Dynamic <solcode-context> overlays are snapshots at their injection boundary. Later sections of the same kind supersede earlier ones; historical mode/skill/working-set instructions do not override the latest update, and newer tool results take precedence over snapshot metadata. Efficiency notes are advisory, not bans on necessary reads or verification.",
+		"- Reuse current WorkingSet facts and retained tool output. A file hash or truncated excerpt is not the full file content: make a targeted read when needed lines were omitted, compacted out, or changed. Never invent old_string from a summary, line-number prefixes, truncation markers, or stale content.",
+		"- MultiEdit defaults to per-file atomicity: all edits within a file validate together, but a failed file does not undo successful files. For per-edit partial success, use separate Edit operations in a non-atomic batch. A MultiEdit operation's input.atomic=true groups its files; BatchTool.atomic=true groups all file operations in the batch. Use either only when those changes must succeed together.",
+		"- Inspect per-operation status and mutation summaries, not just the overall batch status. In non-atomic batches, retain independent successes; a failed MultiEdit may still have changed other files. Retry only failed operations/files after correcting their cause, never replay successful mutations blindly.",
+		"- For atomic batches, check atomic_status and reverted before trusting any success: rolled_back means the changes were undone and the corrected transaction must be reapplied, not just its failed operation. If rollback_failed or unknown is reported, read current targets before further edits; do not assume either the old or new state.",
+		"- On INVALID_INPUT, correct the named fields using the schema; on EDIT_MISMATCH, re-read the failed target and use unique exact text. Do not repeat unchanged invalid calls or automatically retry writes. Respect permission/allowlist denials rather than bypassing them with another tool.",
+		"- Keep output_mode=compact by default; short successful mutation receipts are sufficient. Do not routinely retrieve every diff. If specific omitted information is needed and full_output_path is present, read that artifact through a targeted View operation with offset/limit. output_mode=full still obeys output budgets; if output_storage_error is reported, do not invent an archive path.",
+		"- Safe independent reads run with bounded concurrency; mutations run sequentially. Prefer the smallest sufficient batch. Agent allowed_tools lists must name permitted child tools (for example View/Grep); allowing only BatchTool does not authorize its children.",
+		"- If a Bash/Task result reports running_in_background, it is an acknowledgement, not successful completion. Continue independent work, but wait for its completion notification before dependent actions; do not poll or relaunch the same work.",
 		"- Keep routine tasks in the main agent. Delegate with Task only independent, substantial work when parallel execution clearly helps; do not delegate trivial exploration or file reads.",
 		"- Avoid repeated polling, redundant planning, and unnecessary tool discovery.",
 		"- Only a compact core of tools is listed each turn. Additional MCP tools and less common builtins stay in a live registry and are not all sent as schemas.",

@@ -9,6 +9,7 @@ import (
 
 	"github.com/solosw/solcode/internal/config"
 	"github.com/solosw/solcode/internal/memory"
+	contextmessage "github.com/solosw/solcode/internal/message"
 	"github.com/solosw/solcode/internal/organizer"
 	"github.com/solosw/solcode/internal/organizer/yzma"
 	"github.com/solosw/solcode/internal/session"
@@ -90,7 +91,7 @@ func (a *App) runOrganizerAfterTurn(ctx context.Context, current *session.Sessio
 	// thin user/assistant pair so the local model sees what actually happened.
 	transcript := ""
 	if current != nil {
-		transcript = strings.TrimSpace(session.Transcript(session.StripEphemeralContextMessages(current.CopyMessages())))
+		transcript = strings.TrimSpace(session.Transcript(contextmessage.WithoutDynamicContext(session.StripEphemeralContextMessages(current.CopyMessages()))))
 	}
 	if transcript == "" {
 		transcript = buildOrganizerTurnTranscript(prompt, assistantOutput)

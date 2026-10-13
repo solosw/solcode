@@ -20,6 +20,9 @@ type ToolCall struct {
 
 type ToolEnv struct {
 	UseContext *tool.UseContext
+	// OutputManaged delegates builtin compression to the parent BatchTool.
+	// Permissions, checkpoints and all other hooks still run normally.
+	OutputManaged bool
 	// OnInvokeStart runs after permissions, validation, hooks, and checkpoint
 	// setup. Foreground yielding must not time out an approval dialog.
 	OnInvokeStart func()
@@ -82,7 +85,8 @@ func (x *ToolExecutor) WithGuardrail(guardrail ToolGuardrail) *ToolExecutor {
 
 // WithAllowedTools restricts which tools may actually run. Names are matched
 // case-sensitively against Tool.Name(). Empty/nil leaves execution unrestricted
-// (the shared wire schema is unaffected either way).
+// (the shared wire schema is unaffected either way). Allowing a wrapped coding
+// tool also permits the BatchTool container; its children still obey this list.
 func (x *ToolExecutor) WithAllowedTools(names []string) *ToolExecutor {
 	if x == nil {
 		return nil
@@ -98,6 +102,11 @@ func (x *ToolExecutor) WithAllowedTools(names []string) *ToolExecutor {
 			continue
 		}
 		allow[name] = true
+		// Wrapped primitives are absent from the model schema. Permit the
+		// BatchTool container, but do not grant any additional child capability.
+		if tool.BatchWrapped(name) {
+			allow[tool.BatchToolName] = true
+		}
 	}
 	if len(allow) == 0 {
 		x.allowedTools = nil
@@ -218,11 +227,12 @@ func (x *ToolExecutor) Execute(ctx context.Context, call ToolCall, env ToolEnv) 
 	captureFingerprintAfterInvoke(selected, env.UseContext, beforeFP)
 	if x.hooks != nil {
 		result, err := x.hooks.Run(ctx, hook.Event{
-			Name:       hook.EventPostToolUse,
-			WorkDir:    env.UseContext.WorkDir,
-			ToolName:   call.Name,
-			ToolInput:  input,
-			ToolResult: content,
+			Name:          hook.EventPostToolUse,
+			WorkDir:       env.UseContext.WorkDir,
+			ToolName:      call.Name,
+			ToolInput:     input,
+			ToolResult:    content,
+			OutputManaged: env.OutputManaged,
 		})
 		if err != nil {
 			postHookError := tool.ErrorResult("post-tool hook failed: " + err.Error())

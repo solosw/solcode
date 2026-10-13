@@ -144,3 +144,38 @@ func TestMaterializeBuiltinSkillsRequiresCacheDir(t *testing.T) {
 		t.Fatal("expected an error for an empty cache dir")
 	}
 }
+
+func TestBuiltinWorkflowInstructionsUseBatchContract(t *testing.T) {
+	defs, err := builtin.MaterializeBuiltinSkills(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	required := map[string][]string{
+		"implement": {"BatchTool", "depends_on", "atomic per file by default", "input.atomic: true", "BatchTool.atomic: true", "confirmed rollback", "its state is unknown"},
+		"explore":   {"read-only", "BatchTool", "known inputs", "dependent inputs"},
+		"verify":    {"Bash", "BatchTool", "running_in_background", "acknowledgement is not a pass"},
+	}
+	found := map[string]bool{}
+	for _, def := range defs {
+		phrases, ok := required[def.Name]
+		if !ok {
+			continue
+		}
+		found[def.Name] = true
+		body, err := def.ReadInstructions()
+		if err != nil {
+			t.Fatal(err)
+		}
+		body = strings.Join(strings.Fields(body), " ")
+		for _, phrase := range phrases {
+			if !strings.Contains(body, phrase) {
+				t.Errorf("%s instructions missing %q", def.Name, phrase)
+			}
+		}
+	}
+	for name := range required {
+		if !found[name] {
+			t.Errorf("workflow %s not materialized", name)
+		}
+	}
+}

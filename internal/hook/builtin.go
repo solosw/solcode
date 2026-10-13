@@ -82,6 +82,12 @@ func compressToolResultHook(event Event, opts CompressToolResultOptions) (Result
 	if block == nil {
 		return Result{Decision: DecisionAllow}, nil
 	}
+	// BatchTool owns a structured, budgeted envelope. Its children must reach
+	// that budgeter without builtin lossy folding, so archived outputs remain
+	// recoverable. This does not bypass user-defined post-tool hooks.
+	if event.OutputManaged || strings.TrimSpace(event.ToolName) == tool.BatchToolName {
+		return Result{Decision: DecisionAllow}, nil
+	}
 	// Never rewrite errors, multimodal images, or empty text.
 	if block.IsError || block.Type == "image" || strings.TrimSpace(block.Text) == "" {
 		return Result{Decision: DecisionAllow}, nil

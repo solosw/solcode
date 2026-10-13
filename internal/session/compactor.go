@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
+	contextmessage "github.com/solosw/solcode/internal/message"
 	"github.com/solosw/solcode/internal/permission"
 	"github.com/solosw/solcode/internal/tokenest"
 	headroom "github.com/superops-team/headroom-go"
@@ -212,7 +213,8 @@ func previousTurnBoundary(messages []sdk.MessageParam, start int) int {
 }
 
 func messageStartsUserTurn(message sdk.MessageParam) bool {
-	if string(message.Role) != "user" {
+	if string(message.Role) != "user" || contextmessage.IsDynamicContext(message) ||
+		contextmessage.IsBackgroundToolNotification(message) || IsCompactedSummaryMessage(message) || IsCompactedProjectKnowledgeMessage(message) {
 		return false
 	}
 	for _, block := range message.Content {
@@ -315,7 +317,7 @@ func isEphemeralContextMessage(message sdk.MessageParam) bool {
 	if string(message.Role) != "user" || len(message.Content) == 0 {
 		return false
 	}
-	if IsCompactedProjectKnowledgeMessage(message) || IsCompactedSummaryMessage(message) {
+	if IsCompactedProjectKnowledgeMessage(message) || IsCompactedSummaryMessage(message) || contextmessage.IsDynamicContext(message) {
 		return false
 	}
 	text := strings.TrimSpace(messageText(message))
@@ -429,9 +431,17 @@ func perContentBlockBudget(messages []sdk.MessageParam, tokenBudget int) int {
 func compressContentBlockWithHeadroom(block sdk.ContentBlockParamUnion, tokenBudget int, role string, toolNamesByID map[string]string) (sdk.ContentBlockParamUnion, bool, error) {
 	if block.OfText != nil {
 		textBlock := *block.OfText
-		compressed, err := compressTextWithHeadroom(textBlock.Text, tokenBudget, role)
+		text := textBlock.Text
+		kind, body, dynamic := contextmessage.ParseDynamicContextText(text)
+		if dynamic {
+			text = body
+		}
+		compressed, err := compressTextWithHeadroom(text, tokenBudget, role)
 		if err != nil {
 			return block, true, err
+		}
+		if dynamic {
+			compressed = contextmessage.DynamicContextText(kind, compressed)
 		}
 		textBlock.Text = compressed
 		block.OfText = &textBlock

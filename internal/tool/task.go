@@ -57,12 +57,12 @@ func (t *taskTool) Description() string {
 	return `Launches one or more sub-agents to complete independent or dependent tasks and returns their results. Available only in explicit ultrl mode (bypass + task).
 When enabled by the host (default), the main agent yields long-running Task calls after the host foreground interval (default 10s). Set run_in_background=true to yield immediately when background scheduling is enabled. The entire task graph keeps running, and its final result is delivered automatically as a completion notification. Continue only independent work; do not poll, relaunch the task, or use unfinished results.
 Use a single prompt for one bounded task, or pass tasks with dependency edges. Independent tasks run in parallel; dependency chains run serially by level. Set difficulty=easy or model=fast to use the configured fast model when available.
-Each leaf task runs through the internal Subagent tool (including retries). Give each sub-agent a self-contained prompt with paths, constraints, and the expected return. Do not use Task for a single cheap file read you can do with View/Grep.
+Each leaf task runs through the internal Subagent tool (including retries). Give each sub-agent a self-contained prompt with paths, constraints, and the expected return. Do not use Task for a single cheap file read you can do with View/Grep operations in BatchTool.
 
 allowed_tools is a RUNTIME permission on the child executor only. It does not
 change the tools schema sent to the model: every agent (main and sub) shares
 the same core tools prefix for prompt-cache stability. Disallowed tools still
-appear in the schema but fail at invoke time if called.`
+appear in the schema but fail at invoke time if called. For BatchTool operations, list permitted child tool names (e.g. View/Grep) in allowed_tools; BatchTool alone does not authorize its children.`
 }
 func (t *taskTool) InputSchema() map[string]any {
 	taskSchema := map[string]any{

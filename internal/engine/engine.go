@@ -17,7 +17,6 @@ import (
 	"github.com/solosw/solcode/internal/permission"
 	"github.com/solosw/solcode/internal/projectindex"
 	"github.com/solosw/solcode/internal/skill"
-	"github.com/solosw/solcode/internal/tokenest"
 	"github.com/solosw/solcode/internal/tool"
 )
 
@@ -112,7 +111,9 @@ type Config struct {
 	// Nil keeps selection purely lexical.
 	Router *Router
 	// ShouldInjectWorkingSet lets an optional Jev decider choose whether the
-	// current task summary is useful enough to inject. Nil means Jev is off.
+	// changed task summary is useful enough to inject. Only meaningful task
+	// switches consult it; compaction recovery and efficiency hints are local.
+	// Nil uses the local event-driven policy.
 	ShouldInjectWorkingSet func(ctx context.Context, state map[string]any) bool
 	// Guardrail optionally holds a tool call for escalation before it runs.
 	// It is advisory: permissions remain the control that grants access.
@@ -236,7 +237,7 @@ func (e *Engine) runLegacyModel(ctx context.Context, req RunRequest) RunResult {
 	messages := append([]sdk.MessageParam(nil), req.Messages...)
 	prompt := cfg.Prompt
 	prompt, blocked, errText := e.runUserPromptHook(ctx, cfg, prompt)
-	// Plan-mode instructions live in the ephemeral user context block
+	// Plan-mode instructions live in dynamic context messages
 	// (ModeInstructions), never in the user prompt text or the system prefix.
 	prompt = permission.StripPlanModePrompt(prompt)
 	userMsg, modelText := userMessageFromPrompt(prompt, cfg.WorkDir)
@@ -267,7 +268,7 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 	messages := append([]sdk.MessageParam(nil), runReq.Messages...)
 	prompt := cfg.Prompt
 	prompt, blocked, errText := e.runUserPromptHook(ctx, cfg, prompt)
-	// Plan-mode instructions live in the ephemeral user context block
+	// Plan-mode instructions live in dynamic context messages
 	// (ModeInstructions), never in the user prompt text or the system prefix.
 	// Also strip any historical plan-mode prefix from older sessions / mode switches.
 	prompt = permission.StripPlanModePrompt(prompt)
@@ -307,9 +308,8 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 	// routingAttempted keeps the semantic router to one advisory request per
 	// run instead of one per turn.
 	routingAttempted := false
-	// skillRouteResolved caches the skill routing answer. The prompt is fixed
-	// for the whole run, so unlike tool routing this is computed once and reused
-	// even when Jev declines (an empty result is itself the answer).
+	// skillRouteResolved caches the skill routing answer until a queued user
+	// request changes the task. An empty result is itself a resolved answer.
 	skillRouteResolved := false
 	var skillRoute []SkillInfo
 	// skillRouteText is the rendered instructions of the selected skill, loaded
@@ -332,10 +332,13 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 	// Efficiency controller (§7): local anti-loop signals. Advisory only; it
 	// never issues requests, executes operations, or ends the run.
 	efficiency := NewRequestEfficiencyController()
-	// WorkingSet/EfficiencyNote are evaluated only when the task context changes.
-	// Without Jev, the initial task is the sole injection point.
+	// Ordinary tool results already carry fresh state: do not repeat the working
+	// set after every read/edit. Summarize at task switches, recovery boundaries,
+	// or when a local anti-loop signal needs it. A goal alone is not useful context.
 	workingSetTaskChanged := true
-	workingSetDecisionConsumed := false
+	dynamic := newDynamicContext(runReq.Messages)
+	var advisory efficiencyInjection
+	currentTask := prompt
 
 	var finalText string
 	// The most recently activated skill owns relative resource paths for the
@@ -371,11 +374,16 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 			}
 			msg, _ := userMessageFromPrompt(queued, cfg.WorkDir)
 			messages = append(messages, msg)
+			currentTask = queued
+			workingSet.SetGoal(queued)
 			count++
 		}
 		if count > 0 {
 			workingSetTaskChanged = true
-			workingSetDecisionConsumed = false
+			skillRouteResolved = false
+			// New tasks may legitimately re-read files or repeat earlier searches.
+			efficiency = NewRequestEfficiencyController()
+			advisory = efficiencyInjection{}
 		}
 		return count
 	}
@@ -459,14 +467,19 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 			}
 		}
 		// Mode policy is turn-local and must not rewrite the cached system
-		// prefix. Plan mode (and future mode overlays) go into the ephemeral
-		// user context block via ModeInstructions.
+		// prefix. Plan mode (and future mode overlays) are materialized as
+		// changed context messages via ModeInstructions.
 		builder.ModeInstructions = ""
 		if e.config.Permissions != nil && e.config.Permissions.Mode() == permission.ModePlan {
 			builder.ModeInstructions = planModeSystemPrompt()
 			builder.PlanMode = true
 		} else {
 			builder.PlanMode = false
+			mode := permission.ModeDefault
+			if e.config.Permissions != nil {
+				mode = e.config.Permissions.Mode()
+			}
+			builder.ModeInstructions = fmt.Sprintf("Current permission mode: %s. Plan mode is inactive; earlier plan-mode instructions are superseded. Tool execution remains subject to runtime permissions.", mode)
 		}
 		// Skill routing: keep the FULL catalog in the stable system prompt so
 		// main and sub/task agents share the same skills section (prompt-cache
@@ -474,9 +487,9 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 		// context via ForceSkill — narrowing builder.Skills would rewrite system
 		// and bust the tools+system cache across agents/turns.
 		if !skillRouteResolved {
-			skillRoute = e.routedSkills(ctx, prompt)
+			skillRoute = e.routedSkills(ctx, currentTask)
 			skillRouteResolved = true
-			skillRouteText = e.forceLoadedSkill(ctx, prompt, skillRoute)
+			skillRouteText = e.forceLoadedSkill(ctx, currentTask, skillRoute)
 		}
 		// Always advertise the full configured catalog on the wire.
 		builder.Skills = e.config.Skills
@@ -489,64 +502,54 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 		workingSet.BeginTurn(turn)
 		efficiency.BeginTurn(turn)
 		builder.WorkingSet = ""
-		builder.EfficiencyNote = ""
-		if workingSetTaskChanged && !workingSetDecisionConsumed {
+		builder.EfficiencyNote = advisory.next(turn, efficiency.Hint())
+		if workingSetTaskChanged && workingSet.HasContext() {
 			var jevDecision func(context.Context) bool
 			if e.config.ShouldInjectWorkingSet != nil {
 				jevDecision = func(decisionCtx context.Context) bool {
 					return e.config.ShouldInjectWorkingSet(decisionCtx, map[string]any{
-						"task":              prompt,
+						"task":              currentTask,
 						"session_summary":   runReq.SessionSummary,
 						"project_knowledge": runReq.ProjectKnowledge,
 						"working_set":       workingSet.InjectionText(),
-						"efficiency_note":   efficiency.Hint(),
+						"efficiency_note":   builder.EfficiencyNote,
 						"turn":              turn,
+						"reason":            "task_changed",
 					})
 				}
 			}
-			if workingSetInjectionAllowed(ctx, turn, workingSetTaskChanged, workingSetDecisionConsumed, jevDecision) {
+			if workingSetInjectionAllowed(ctx, true, true, jevDecision) {
 				builder.WorkingSet = workingSet.InjectionText()
-				builder.EfficiencyNote = efficiency.Hint()
 			}
-			workingSetDecisionConsumed = true
-			workingSetTaskChanged = false
 		}
-		req := builder.Build(BuildRequest{
-			Model:            modelName,
-			ProjectKnowledge: runReq.ProjectKnowledge,
-			MaxTokens:        e.config.MaxTokens,
-			WorkDir:          cfg.WorkDir,
-			Messages:         messages,
-			Tools:            tools,
-			Thinking:         e.config.Thinking,
-			ThinkingText:     e.config.ThinkingText,
-			Effort:           e.config.Effort,
-			Stream:           e.config.Stream,
-			SessionSummary:   runReq.SessionSummary,
-			MemoryContext:    runReq.MemoryContext,
-		})
-		if isMain {
-			req.OnTextDelta = e.config.OnTextDelta
-			req.OnThinkingDelta = e.config.OnThinkingDelta
+		if builder.EfficiencyNote != "" && workingSet.HasContext() {
+			builder.WorkingSet = workingSet.InjectionText()
 		}
-
-		// Mid-run guard: if composed context already fills the window, compact
-		// before Create so the request does not fail with a context-length error.
+		messages = dynamic.append(messages, builder, runReq, workingSetTaskChanged)
+		workingSetTaskChanged = false
+		// Overlays are now durable messages; Build must not add a transient copy
+		// before the latest user/tool_result message on every request.
+		requestBuilder := builder
+		requestBuilder.ModeInstructions = ""
+		requestBuilder.ForceSkill = ""
+		requestBuilder.FoldedTools = ""
+		requestBuilder.WorkingSet = ""
+		requestBuilder.EfficiencyNote = ""
+		buildReq := BuildRequest{
+			Model:        modelName,
+			MaxTokens:    e.config.MaxTokens,
+			WorkDir:      cfg.WorkDir,
+			Messages:     messages,
+			Tools:        tools,
+			Thinking:     e.config.Thinking,
+			ThinkingText: e.config.ThinkingText,
+			Effort:       e.config.Effort,
+			Stream:       e.config.Stream,
+		}
+		// Mid-run guard uses the actual materialized transcript, including all
+		// newly appended context. Recovery metadata is restored before Create.
 		if e.config.MaxContextTokens > 0 && e.config.CompactMessages != nil {
-			est := builder.EstimateContextTokens(BuildRequest{
-				Model:            modelName,
-				ProjectKnowledge: runReq.ProjectKnowledge,
-				MaxTokens:        e.config.MaxTokens,
-				WorkDir:          cfg.WorkDir,
-				Messages:         messages,
-				Tools:            tools,
-				Thinking:         e.config.Thinking,
-				ThinkingText:     e.config.ThinkingText,
-				Effort:           e.config.Effort,
-				Stream:           e.config.Stream,
-				SessionSummary:   runReq.SessionSummary,
-				MemoryContext:    runReq.MemoryContext,
-			})
+			est := requestBuilder.EstimateContextTokens(buildReq)
 			if est >= e.config.MaxContextTokens {
 				compacted, cerr := e.config.CompactMessages(ctx, messages)
 				if cerr != nil {
@@ -554,41 +557,37 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 				}
 				if len(compacted) > 0 {
 					messages = compacted
-					// Compaction already materializes durable summary /
-					// project-knowledge messages. Do not re-inject the
-					// pre-compact ephemeral fields on top of them.
-					req = builder.Build(BuildRequest{
-						Model:        modelName,
-						MaxTokens:    e.config.MaxTokens,
-						WorkDir:      cfg.WorkDir,
-						Messages:     messages,
-						Tools:        tools,
-						Thinking:     e.config.Thinking,
-						ThinkingText: e.config.ThinkingText,
-						Effort:       e.config.Effort,
-						Stream:       e.config.Stream,
-					})
+					// The compactor materializes summary/knowledge. Forget the old
+					// request fields permanently, not just for this one request.
+					runReq.SessionSummary = ""
+					runReq.MemoryContext = nil
+					runReq.ProjectKnowledge = ""
+					dynamic = newDynamicContext(messages)
+					delete(dynamic.last, "efficiency")
+					builder.WorkingSet = ""
+					if workingSet.HasContext() {
+						builder.WorkingSet = workingSet.InjectionText()
+					}
+					// Reads from the discarded transcript are no longer reusable.
+					efficiency = NewRequestEfficiencyController()
+					efficiency.BeginTurn(turn)
+					advisory = efficiencyInjection{}
+					builder.EfficiencyNote = ""
+					messages = dynamic.append(messages, builder, runReq, false)
+					buildReq.Messages = messages
 				}
 			}
+		}
+		req := requestBuilder.Build(buildReq)
+		if isMain {
+			req.OnTextDelta = e.config.OnTextDelta
+			req.OnThinkingDelta = e.config.OnThinkingDelta
 		}
 		message, err := e.config.Client.Create(ctx, req)
 		if err != nil {
 			return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: err.Error()}, Messages: messages}
 		}
-		estimatedContextTokens := builder.EstimateContextTokens(BuildRequest{
-			Model:            modelName,
-			ProjectKnowledge: runReq.ProjectKnowledge,
-			MaxTokens:        e.config.MaxTokens,
-			WorkDir:          cfg.WorkDir,
-			Messages:         messages[:len(messages)-1],
-			Tools:            tools,
-			Thinking:         e.config.Thinking,
-			ThinkingText:     e.config.ThinkingText,
-			Effort:           e.config.Effort,
-			Stream:           e.config.Stream,
-			SessionSummary:   runReq.SessionSummary,
-			MemoryContext:    runReq.MemoryContext,
-		}) + int64(tokenest.Text(prompt))
+		estimatedContextTokens := requestBuilder.EstimateContextTokens(buildReq)
 		// Report billing usage for main and task/subagent turns. Only the main
 		// agent supplies EstimatedContextTokens so occupancy stays tied to the
 		// parent context window; task turns send 0 and must not clobber it.
@@ -710,7 +709,9 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 				if name == tool.BatchToolName {
 					return nil, fmt.Errorf("nested batches are not supported")
 				}
-				child := executor.Execute(batchCtx, ToolCall{Name: name, Input: childInput}, toolEnv)
+				childEnv := toolEnv
+				childEnv.OutputManaged = true
+				child := executor.Execute(batchCtx, ToolCall{Name: name, Input: childInput}, childEnv)
 				if child.Content == nil {
 					return tool.ErrorResult("tool produced no result"), nil
 				}
@@ -806,14 +807,14 @@ func toolResultToAPI(toolUseID string, toolResult ToolResult) cpanthropic.ToolRe
 	return out
 }
 
-func workingSetInjectionAllowed(ctx context.Context, turn int, taskChanged, decisionConsumed bool, jevDecision func(context.Context) bool) bool {
-	if !taskChanged || decisionConsumed {
+func workingSetInjectionAllowed(ctx context.Context, taskChanged, meaningful bool, jevDecision func(context.Context) bool) bool {
+	if !taskChanged || !meaningful {
 		return false
 	}
 	if jevDecision != nil {
 		return jevDecision(ctx)
 	}
-	return turn == 0
+	return true
 }
 
 func nonEmpty(value, fallback string) string {

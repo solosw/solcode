@@ -20,8 +20,10 @@ reconnaissance. If they want a design without edits, that is plan mode, not this
 
 ## Workflow
 
-1. **Orient.** `LS` the tree, then `Glob` for the language's file patterns to see
-   the shape of the project. Read the README and any architecture docs.
+1. **Orient.** Use read-only `LS` / `Glob` operations in `BatchTool` to see
+   the tree and language's file patterns. Batch independent reads/searches with
+   known inputs; wait for discoveries before constructing dependent inputs.
+   Read the README and any architecture docs.
 2. **Find entry points.** Locate `main`, routes, handlers, or the exported API
    surface. `Grep` for the user's nouns, not for likely English descriptions.
 3. **Trace the path.** Follow the call chain one hop at a time with `Grep` plus
