@@ -104,7 +104,6 @@ func (m *Model) handleSlashCommand(input string) (bool, tea.Cmd) {
 				m.refreshViewport()
 				return true, nil
 			}
-			m.permissionMode = "bypass"
 			m.status = fmt.Sprintf("Running workflow %s...", workflowName)
 			m.spinnerActive = true
 			m.loadingStart = time.Now()
@@ -244,7 +243,6 @@ func (m *Model) handleSlashCommand(input string) (bool, tea.Cmd) {
 			m.appendCommandResult("Usage: /workflow <name> [args]\nList loaded workflows with /workflows.")
 		} else {
 			name, rest, _ := strings.Cut(strings.TrimSpace(cmd.Args), " ")
-			m.permissionMode = "bypass"
 			m.status = fmt.Sprintf("Running workflow %s...", name)
 			m.spinnerActive = true
 			m.loadingStart = time.Now()
@@ -411,27 +409,27 @@ func (m *Model) slashSkillPrompt(input string) (string, bool) {
 }
 
 var builtinCommands = map[string]bool{
-	"help":          true,
-	"status":        true,
-	"clear":         true,
-	"model":         true,
-	"provider":      true,
-	"effort":        true,
-	"sessions":      true,
-	"compact":          true,
-	"checkpoints":      true,
-	"checkpoint-name":  true,
-	"rewind":           true,
-	"fix-session":      true,
-	"new-session":   true,
-	"skills":        true,
-	"mcp":           true,
-	"proxy":         true,
-	"goal":          true,
-	"workflows":     true,
-	"workflow":      true,
-	"workflow-edit": true,
-	"web-ui":        true,
+	"help":            true,
+	"status":          true,
+	"clear":           true,
+	"model":           true,
+	"provider":        true,
+	"effort":          true,
+	"sessions":        true,
+	"compact":         true,
+	"checkpoints":     true,
+	"checkpoint-name": true,
+	"rewind":          true,
+	"fix-session":     true,
+	"new-session":     true,
+	"skills":          true,
+	"mcp":             true,
+	"proxy":           true,
+	"goal":            true,
+	"workflows":       true,
+	"workflow":        true,
+	"workflow-edit":   true,
+	"web-ui":          true,
 }
 
 func isBuiltinSlashCommand(name string) bool {

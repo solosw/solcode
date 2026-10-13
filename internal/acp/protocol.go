@@ -192,6 +192,10 @@ type SessionLoadParams struct {
 	MCPServers []MCPServerSpec `json:"mcpServers,omitempty"`
 }
 
+type SessionLoadResult struct {
+	Modes *SessionModeState `json:"modes,omitempty"`
+}
+
 type SessionPromptParams struct {
 	SessionID string         `json:"sessionId"`
 	Prompt    []ContentBlock `json:"prompt"`
@@ -526,13 +530,11 @@ func payloadHasKey(payload map[string]json.RawMessage, key string) bool {
 }
 
 func availableModes() []SessionMode {
-	return []SessionMode{
-		{ID: string(permission.ModeAuto), Name: "Auto", Description: "Ask before destructive tools"},
-		{ID: string(permission.ModeAcceptEdits), Name: "Accept edits", Description: "Auto-approve file edits; ask for other destructive tools"},
-		{ID: string(permission.ModePlan), Name: "Plan", Description: "Read-only tools plus planning tools"},
-		{ID: string(permission.ModeBypass), Name: "Bypass", Description: "Skip permission prompts"},
-		{ID: string(permission.ModeGoal), Name: "Goal", Description: "Work from goal.md until complete"},
+	var modes []SessionMode
+	for _, info := range permission.AvailableModes() {
+		modes = append(modes, SessionMode{ID: string(info.ID), Name: info.Name, Description: info.Description})
 	}
+	return modes
 }
 
 func modeState(current permission.Mode) *SessionModeState {

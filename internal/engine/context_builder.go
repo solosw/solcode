@@ -484,7 +484,7 @@ func toolUsagePrompt() string {
 		"- File tools may read and write any directory. Relative paths still resolve against the project WorkDir, then configured skill roots.",
 		"- Prefer specialized operations over Bash: use View/Grep/Glob/LS/LSP as BatchTool operations for files and code intelligence, and WebSearch/Fetch (via ToolSearch if hidden) for the network. Bash is banned from curl/wget and similar downloaders.",
 		"- Use AskUser for real product/requirement choices (2-4 options). Do not use it for facts you can discover with tools.",
-		"- Use ModeSwitch only when the user wants plan/bypass/goal/ultrl, or when a large design should be planned before edits. Do not switch modes unprompted for ordinary coding. Task and Task-graph workflows require explicit ultrl mode (bypass + task); in all other modes perform the work in the main agent.",
+		"- Use ModeSwitch only when the user wants plan/bypass/goal/ultra, or when a large design should be planned before edits. Do not switch modes unprompted for ordinary coding. Task and Task-graph workflows require explicit ultra mode (bypass + task); in all other modes perform the work in the main agent.",
 		"- When a reusable workflow matches the task, use the Skill tool before continuing with other tools. Skill names may also be found via ToolSearch.",
 	}, "\n")
 }

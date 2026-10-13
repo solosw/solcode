@@ -333,12 +333,19 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 		app.WithStatusCallback(onStatus),
 		app.WithAgentProgressCallback(onAgentProgress),
 		app.WithModeChangeCallback(func(mode permission.Mode) error {
-			cfg.PermissionMode = mode
-			cfg.Permissions.Mode = mode
-			return config.SaveLocalOverrides(persistencePath, map[string]any{
+			mode = permission.NormalizeMode(mode)
+			if err := config.SaveLocalOverrides(persistencePath, map[string]any{
 				"permission_mode": mode,
 				"permissions":     map[string]any{"mode": mode},
-			})
+			}); err != nil {
+				return err
+			}
+			cfg.PermissionMode = mode
+			cfg.Permissions.Mode = mode
+			if program != nil {
+				program.Send(tui.PermissionModeChangedMsg{Mode: string(mode)})
+			}
+			return nil
 		}),
 		app.WithAskUserCallback(onAskUser),
 		app.WithQueuedPrompts(drainQueuedPrompts),
@@ -605,10 +612,12 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 	model.SetNewSessionHandler(func(name string, crossSessionMemory bool) tui.SelectResult {
 		return handleNewSessionCommand(&cfg, application, name, persistencePath, crossSessionMemory)
 	})
-	modeNames := []string{"auto", "accept_edits", "bypass", "plan", "ultrl"}
+	modeNames := permission.CycleModeNames()
 	model.SetModeSwitchFn(modeNames, string(cfg.PermissionMode), func(mode string) {
-		permissionMode := permission.Mode(mode)
+		permissionMode := permission.NormalizeMode(permission.Mode(mode))
 		application.Permissions.SetMode(permissionMode)
+		application.Config.PermissionMode = permissionMode
+		application.Config.Permissions.Mode = permissionMode
 		cfg.PermissionMode = permissionMode
 		cfg.Permissions.Mode = permissionMode
 		if err := config.SaveLocalOverrides(persistencePath, map[string]any{
@@ -1563,7 +1572,7 @@ func handleWorkflowsCommand(application *app.App) string {
 		}
 		b.WriteString(fmt.Sprintf("  %s  →  /%s  —  %s\n", def.Name, workflowSlashAlias(def.Name), desc))
 	}
-	b.WriteString("\nWorkflows are not exposed to the model. Workflows require the ultrl (bypass + task) mode.")
+	b.WriteString("\nWorkflows are not exposed to the model. Workflows require the ultra (bypass + task) mode.")
 	b.WriteString("\nUse /workflow-edit to visually orchestrate and save workflows.")
 	return strings.TrimSpace(b.String())
 }

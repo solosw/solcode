@@ -38,12 +38,12 @@ func (f *clientTextFileSystem) sessionMode() permission.Mode {
 }
 
 // clientWriteEnabled reports whether writes should go through the client FS.
-// Bypass/Goal already skip agent-side permission prompts; routing writes through
+// Bypass/Goal/Ultra already skip agent-side permission prompts; routing writes through
 // fs/write_text_file would still let many clients show a second accept dialog.
-// Falling back to local disk keeps bypass/goal prompt-free.
+// Falling back to local disk keeps these modes prompt-free.
 func (f *clientTextFileSystem) clientWriteEnabled() bool {
 	switch f.sessionMode() {
-	case permission.ModeBypass, permission.ModeGoal:
+	case permission.ModeBypass, permission.ModeGoal, permission.ModeUltra:
 		return false
 	default:
 		return true

@@ -240,7 +240,7 @@ func (s *Server) handleSessionLoad(ctx context.Context, msg jsonrpcMessage) erro
 		}
 		return s.conn.ReplyError(msg.ID, JSONRPCInternalError, err.Error())
 	}
-	if err := s.conn.Reply(msg.ID, map[string]any{}); err != nil {
+	if err := s.conn.Reply(msg.ID, SessionLoadResult{Modes: modeState(sess.application.Permissions.Mode())}); err != nil {
 		return err
 	}
 	s.emitSessionBootstrap(sess)
@@ -295,10 +295,14 @@ func (s *Server) handleSessionPrompt(ctx context.Context, msg jsonrpcMessage) er
 		runPrompt = defaultPromptFunc
 	}
 	result, err := runPrompt(runCtx, sess.application, sess.persistID(), prompt, sess.workDir, s.maxTurns, StreamEmitter{
-		Text:      func(text string) { s.emitText(sess, "agent_message_chunk", text) },
-		Thinking:  func(text string) { s.emitText(sess, "agent_thought_chunk", text) },
-		ToolStart: func(name string, input json.RawMessage, toolUseID string) { s.emitToolStart(sess, name, input, toolUseID) },
-		ToolDone:  func(name string, output string, isError bool, toolUseID string) { s.emitToolDone(sess, name, output, isError, toolUseID) },
+		Text:     func(text string) { s.emitText(sess, "agent_message_chunk", text) },
+		Thinking: func(text string) { s.emitText(sess, "agent_thought_chunk", text) },
+		ToolStart: func(name string, input json.RawMessage, toolUseID string) {
+			s.emitToolStart(sess, name, input, toolUseID)
+		},
+		ToolDone: func(name string, output string, isError bool, toolUseID string) {
+			s.emitToolDone(sess, name, output, isError, toolUseID)
+		},
 		Usage: func(usage engine.Usage) {
 			s.emitUpdate(sess.id, SessionUpdate{SessionUpdate: "usage_update", Usage: usageUpdate(usage)})
 		},
@@ -342,11 +346,11 @@ func (s *Server) handleSessionSetMode(msg jsonrpcMessage) error {
 	if sess == nil {
 		return s.conn.ReplyError(msg.ID, JSONRPCInvalidParams, "unknown session")
 	}
-	next := permission.NormalizeMode(permission.Mode(params.ModeID))
-	if next == "" {
+	if !permission.IsSupportedMode(permission.Mode(params.ModeID)) {
 		return s.conn.ReplyError(msg.ID, JSONRPCInvalidParams, "invalid mode")
 	}
-	if err := applyMode(sess.application, next); err != nil {
+	next := permission.NormalizeMode(permission.Mode(params.ModeID))
+	if err := sess.setMode(next); err != nil {
 		return s.conn.ReplyError(msg.ID, JSONRPCInvalidParams, err.Error())
 	}
 	s.emitUpdate(sess.id, SessionUpdate{
@@ -360,15 +364,27 @@ func applyMode(application *app.App, next permission.Mode) error {
 	if application == nil || application.Permissions == nil {
 		return fmt.Errorf("permission service is not configured")
 	}
-	switch next {
-	case permission.ModeAuto, permission.ModeAcceptEdits, permission.ModePlan, permission.ModeBypass, permission.ModeGoal, permission.ModeDefault:
-		application.Permissions.SetMode(next)
-		application.Config.PermissionMode = next
-		application.Config.Permissions.Mode = next
-		return nil
-	default:
+	if !permission.IsSupportedMode(next) {
 		return fmt.Errorf("unsupported mode %q", next)
 	}
+	next = permission.NormalizeMode(next)
+	application.Permissions.SetMode(next)
+	application.Config.PermissionMode = next
+	application.Config.Permissions.Mode = next
+	return nil
+}
+
+func (sess *acpSession) setMode(next permission.Mode) error {
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	if err := applyMode(sess.application, next); err != nil {
+		return err
+	}
+	// Reloading providers, models, or skills starts from this session config.
+	// Keep it in sync or a later reload silently restores the previous mode.
+	sess.cfg.PermissionMode = sess.application.Permissions.Mode()
+	sess.cfg.Permissions.Mode = sess.cfg.PermissionMode
+	return nil
 }
 
 func defaultPromptFunc(ctx context.Context, application *app.App, sessionID, prompt, workDir string, maxTurns int, _ StreamEmitter) (agent.AgentResult, error) {
@@ -417,8 +433,12 @@ func (s *Server) createSession(ctx context.Context, id, cwd string) (*acpSession
 			func(text string) { s.emitText(sess, "agent_thought_chunk", text) },
 		),
 		app.WithToolCallbacks(
-			func(name string, input json.RawMessage, toolUseID string) { s.emitToolStart(sess, name, input, toolUseID) },
-			func(name string, output string, isError bool, toolUseID string) { s.emitToolDone(sess, name, output, isError, toolUseID) },
+			func(name string, input json.RawMessage, toolUseID string) {
+				s.emitToolStart(sess, name, input, toolUseID)
+			},
+			func(name string, output string, isError bool, toolUseID string) {
+				s.emitToolDone(sess, name, output, isError, toolUseID)
+			},
 		),
 		app.WithUsageCallback(func(usage engine.Usage) {
 			s.emitUpdate(sess.id, SessionUpdate{
@@ -434,6 +454,18 @@ func (s *Server) createSession(ctx context.Context, id, cwd string) (*acpSession
 		}),
 		app.WithAgentProgressCallback(func(event tool.AgentProgressEvent) {
 			s.emitAgentProgress(sess, event)
+		}),
+		app.WithModeChangeCallback(func(mode permission.Mode) error {
+			mode = permission.NormalizeMode(mode)
+			sess.mu.Lock()
+			sess.cfg.PermissionMode = mode
+			sess.cfg.Permissions.Mode = mode
+			sess.mu.Unlock()
+			s.emitUpdate(sess.id, SessionUpdate{
+				SessionUpdate: "current_mode_update",
+				CurrentModeID: string(mode),
+			})
+			return nil
 		}),
 		app.WithAskUserCallback(func(ctx context.Context, params tool.AskUserParams) (map[string]string, error) {
 			return s.askUser(ctx, sess, params)

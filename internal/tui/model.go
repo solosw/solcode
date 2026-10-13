@@ -14,6 +14,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/atotto/clipboard"
 	"github.com/solosw/solcode/internal/attach"
+	"github.com/solosw/solcode/internal/permission"
 	"github.com/solosw/solcode/internal/tokenest"
 )
 
@@ -84,6 +85,12 @@ type AgentProgressMsg struct {
 	ToolInput       string
 	Output          string
 	IsError         bool
+}
+
+// PermissionModeChangedMsg synchronizes the displayed mode after an approved
+// model-initiated transition without invoking the user mode-switch callback.
+type PermissionModeChangedMsg struct {
+	Mode string
 }
 
 type PermissionRequestMsg struct {
@@ -723,6 +730,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.refreshViewport()
 		return m, nil
+	case PermissionModeChangedMsg:
+		if permission.IsSupportedMode(permission.Mode(msg.Mode)) {
+			m.permissionMode = string(permission.NormalizeMode(permission.Mode(msg.Mode)))
+			m.refreshViewport()
+		}
+		return m, nil
 	case StatusTextMsg:
 		text := strings.TrimSpace(msg.Text)
 		if text == "" {
@@ -1017,15 +1030,12 @@ func setTextareaValue(ta *textarea.Model, value string) {
 // Permission mode cycling
 func (m *Model) cyclePermissionMode() {
 	if len(m.modeNames) == 0 {
-		m.modeNames = []string{"auto", "accept_edits", "bypass", "plan"}
+		m.modeNames = permission.CycleModeNames()
 	}
 	if m.modeSwitchFn == nil {
 		return
 	}
-	current := m.permissionMode
-	if current == "" {
-		current = "auto"
-	}
+	current := string(permission.NormalizeMode(permission.Mode(m.permissionMode)))
 	idx := -1
 	for i, name := range m.modeNames {
 		if name == current {
@@ -1042,10 +1052,21 @@ func (m *Model) cyclePermissionMode() {
 }
 
 func (m *Model) SetModeSwitchFn(modeNames []string, currentMode string, fn func(mode string)) {
-	m.modeNames = modeNames
-	m.permissionMode = currentMode
-	if m.permissionMode == "" {
-		m.permissionMode = modeNames[0]
+	if len(modeNames) == 0 {
+		modeNames = permission.CycleModeNames()
+	}
+	m.modeNames = nil
+	seen := make(map[string]bool)
+	for _, name := range modeNames {
+		name = string(permission.NormalizeMode(permission.Mode(name)))
+		if !seen[name] {
+			m.modeNames = append(m.modeNames, name)
+			seen[name] = true
+		}
+	}
+	m.permissionMode = string(permission.NormalizeMode(permission.Mode(currentMode)))
+	if strings.TrimSpace(currentMode) == "" {
+		m.permissionMode = m.modeNames[0]
 	}
 	m.modeSwitchFn = fn
 }

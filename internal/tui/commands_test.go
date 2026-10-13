@@ -125,11 +125,11 @@ func TestShiftTabCyclesPermissionMode(t *testing.T) {
 
 	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab, Mod: tea.ModShift}))
 	got := updated.(Model)
-	if switched != "auto" {
-		t.Fatalf("switched mode = %q, want auto", switched)
+	if switched != "ultra" {
+		t.Fatalf("switched mode = %q, want ultra", switched)
 	}
-	if got.permissionMode != "auto" {
-		t.Fatalf("permission mode = %q, want auto", got.permissionMode)
+	if got.permissionMode != "ultra" {
+		t.Fatalf("permission mode = %q, want ultra", got.permissionMode)
 	}
 }
 

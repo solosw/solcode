@@ -378,6 +378,7 @@ func TestPromptToTextAndHistory(t *testing.T) {
 }
 
 type harnessClient struct {
+	server           *Server
 	conn             *Conn
 	permissionOption string
 	mu               sync.Mutex
@@ -431,6 +432,7 @@ func newACPHarnessWithConfig(t *testing.T, mutate func(config.Config) config.Con
 	})
 
 	client := &harnessClient{
+		server:           server,
 		conn:             NewConn(clientReader, clientWriter),
 		permissionOption: PermissionAllowOnce,
 	}

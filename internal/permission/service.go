@@ -115,9 +115,9 @@ func (s *Service) Check(t tool.Tool, input json.RawMessage) Decision {
 	askFn := s.askFn
 	s.mu.RUnlock()
 
-	// Task and Subagent require explicit Ultrl mode, even with tool allowlists.
-	if (t.Name() == tool.TaskToolName || t.Name() == tool.SubagentToolName) && mode != ModeUltrl {
-		return Decision{Allowed: false, Reason: "Task and sub-agents require ultrl mode (bypass + task)"}
+	// Task and Subagent require explicit Ultra mode, even with tool allowlists.
+	if (t.Name() == tool.TaskToolName || t.Name() == tool.SubagentToolName) && mode != ModeUltra {
+		return Decision{Allowed: false, Reason: "Task and sub-agents require ultra mode (bypass + task)"}
 	}
 	if denied {
 		return Decision{Allowed: false, Reason: fmt.Sprintf("tool denied for session: %s", t.Name())}
@@ -131,7 +131,7 @@ func (s *Service) Check(t tool.Tool, input json.RawMessage) Decision {
 	}
 
 	switch mode {
-	case ModeBypass, ModeGoal, ModeUltrl:
+	case ModeBypass, ModeGoal, ModeUltra:
 		return Decision{Allowed: true}
 	case ModePlan:
 		if t.IsReadOnly(input) {

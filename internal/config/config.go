@@ -698,13 +698,10 @@ func (cfg *Config) Normalize() error {
 	// Apply process-wide so all outbound HTTP clients pick up settings.json / runtime overrides.
 	httpproxy.Apply(cfg.Proxy)
 	cfg.PermissionMode = permission.NormalizeMode(cfg.PermissionMode)
-	cfg.Permissions.Mode = permission.NormalizeMode(cfg.Permissions.Mode)
-	if cfg.Permissions.Mode == "" {
+	if strings.TrimSpace(string(cfg.Permissions.Mode)) == "" {
 		cfg.Permissions.Mode = cfg.PermissionMode
 	}
-	if cfg.Permissions.Mode == "" {
-		cfg.Permissions.Mode = permission.ModeAuto
-	}
+	cfg.Permissions.Mode = permission.NormalizeMode(cfg.Permissions.Mode)
 	cfg.PermissionMode = cfg.Permissions.Mode
 	cfg.Permissions.Allow = cleanStringSlice(cfg.Permissions.Allow)
 	cfg.Permissions.AllowBash = cleanStringSlice(cfg.Permissions.AllowBash)
@@ -1437,6 +1434,20 @@ func applyJSONConfig(cfg *Config, data []byte) error {
 			if err := json.Unmarshal(value, &cfg.Providers); err != nil {
 				return err
 			}
+		}
+	}
+	// The legacy top-level field is still supported. Synchronize it only when
+	// this config layer does not explicitly set permissions.mode; otherwise
+	// the nested field takes precedence regardless of map iteration order.
+	if _, ok := raw["permission_mode"]; ok {
+		var permissions map[string]json.RawMessage
+		if value, ok := raw["permissions"]; ok {
+			if err := json.Unmarshal(value, &permissions); err != nil {
+				return err
+			}
+		}
+		if _, hasMode := permissions["mode"]; !hasMode {
+			cfg.Permissions.Mode = cfg.PermissionMode
 		}
 	}
 	return nil

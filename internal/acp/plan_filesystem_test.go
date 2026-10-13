@@ -111,3 +111,24 @@ func TestClientTextFileSystemDisablesWriteInBypassMode(t *testing.T) {
 		t.Fatal("write capability should return when leaving bypass")
 	}
 }
+
+func TestClientTextFileSystemUltraAvoidsDuplicateWriteApproval(t *testing.T) {
+	server := &Server{sessions: make(map[string]*acpSession)}
+	perms := permission.NewService(permission.ModeAuto)
+	sess := &acpSession{id: "session-ultra", application: &app.App{Permissions: perms}}
+	server.sessions[sess.id] = sess
+	fs := &clientTextFileSystem{
+		server: server, sessionID: sess.id,
+		capabilities: FSClientCapabilities{ReadTextFile: true, WriteTextFile: true},
+	}
+	for _, mode := range []permission.Mode{permission.ModeUltra, "ultrl", permission.ModeBypass, permission.ModeGoal} {
+		perms.SetMode(mode)
+		if !fs.CanReadTextFile() || fs.CanWriteTextFile() {
+			t.Fatalf("mode %s: client read=%v write=%v; want read-only client FS to avoid duplicate approval", mode, fs.CanReadTextFile(), fs.CanWriteTextFile())
+		}
+	}
+	perms.SetMode(permission.ModeAuto)
+	if !fs.CanWriteTextFile() {
+		t.Fatal("client writes should return when leaving ultra")
+	}
+}

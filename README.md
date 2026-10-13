@@ -19,7 +19,7 @@ A terminal-based coding agent powered by Claude (Anthropic API) that can read, w
 - **Computer Use (optional)** — Opt-in desktop GUI automation (`ComputerUse` tool + bundled skill). Enable in settings, rebuild with CGO and `-tags computeruse` to link [robotgo](https://github.com/go-vgo/robotgo). The tool is **not** core: discover it via `/computer-use` / Skill or ToolSearch.
 - **Project rules** — Markdown instructions in `<project>/.solcode/rules.md` and `.solcode/rules/*.md` are injected into the system prompt at startup.
 - **Hook system** — Execute shell commands on agent events (tool calls, results, completion).
-- **Permission modes** — `auto`, `accept_edits`, `bypass`, `yolo`, `plan` — control how tools are authorized.
+- **Permission modes** — `auto`, `accept_edits`, `bypass`, `plan`, `goal`, `ultra` — control how tools are authorized.
 - **Sub-agent coordinator** — The `task` tool spawns isolated sub-agents for parallel or independent work.
 - **LSP integration** — Multi-language code intelligence via Language Server Protocol: go-to-definition, find references, hover, document/workspace symbols, and go-to-implementation. When enabled, `LSP` is a core model-visible tool on every turn. Language servers are launched by file extension (gopls, pyright, typescript-language-server, …); binaries on `PATH` are auto-detected, and you can override commands in settings.
 - **Inline diff rendering** — File edits (Edit/Write/Patch) show colored unified diffs directly in the TUI.
@@ -990,14 +990,26 @@ a new user task.
 | Mode | Behavior |
 |------|----------|
 | `auto` | Ask for destructive operations, auto-approve reads |
-| `accept_edits` | Auto-approve edits, ask for bash |
-| `bypass` | Skip all permission prompts |
-| `yolo` | Full auto-pilot with no confirmations (alias of bypass) |
-| `plan` | Plan-only: read-only tools + `TodoWrite` + `Task`; each user message gets plan instructions (prefer sub-agent exploration, no file edits) |
+| `accept_edits` | Auto-approve file edits, ask for other destructive tools |
+| `bypass` | Skip permission prompts; `Task` and sub-agents remain disabled |
+| `plan` | Read-only tools plus `TodoWrite` and `ModeSwitch`; no `Task` or sub-agents |
+| `goal` | Work from `goal.md` until complete; `Task` and sub-agents remain disabled |
+| `ultra` | Bypass permissions and enable `Task`, sub-agents, and task workflows |
 
-Switch modes at runtime with `Shift+Tab`.
+Switch permission modes at runtime with `Shift+Tab`; start a goal workflow through `/goal`.
+ACP advertises all six modes in `session/new` and `session/load` and supports switching
+through `session/set_mode`. Mode changes are preserved when switching models or reloading features.
 
-In **plan** mode, solcode prepends a planning system-style brief to every user message (not shown as a separate TUI bubble beyond the model transcript). Mutating tools (`Edit` / `Write` / `Patch` / `Bash` / …) are blocked; use `Task` to explore via sub-agents and `TodoWrite` to track the plan.
+Legacy `ultrl` settings and requests are accepted as an alias of `ultra`; mode lists,
+current-mode updates, and saved runtime settings use the canonical `ultra` name.
+`yolo` remains an alias of `bypass`.
+
+In **plan** mode, planning instructions are supplied through dynamic context. Mutating
+tools (`Edit` / `Write` / `Patch` / …) are blocked; explore with read-only tools or
+read-only `BatchTool` children and use `TodoWrite` to track the plan. Model-initiated
+`ModeSwitch` transitions require user approval; entering `bypass`, `goal`, or `ultra`
+also requires the current mode to be `plan`. Direct user mode selection in the TUI
+or ACP does not use this model-initiated gateway.
 
 ## Project Structure
 

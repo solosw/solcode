@@ -59,7 +59,7 @@ func TestSwitchModeDoesNotChangeModeWhenApprovalIsDenied(t *testing.T) {
 }
 
 func TestSwitchModeDeniedPlanExitsDoNotPersist(t *testing.T) {
-	for _, target := range []string{"bypass", "goal"} {
+	for _, target := range []string{"bypass", "goal", "ultra", "ultrl"} {
 		t.Run(target, func(t *testing.T) {
 			persisted := 0
 			application := &App{
@@ -85,9 +85,9 @@ func TestSwitchModeDeniedPlanExitsDoNotPersist(t *testing.T) {
 }
 
 func TestSwitchModeRequiresPlanForEveryNonPlanOrigin(t *testing.T) {
-	for _, origin := range []permission.Mode{permission.ModeAuto, permission.ModeAcceptEdits, permission.ModeBypass, permission.ModeGoal} {
-		for _, target := range []string{"bypass", "goal"} {
-			if string(origin) == target {
+	for _, origin := range []permission.Mode{permission.ModeAuto, permission.ModeAcceptEdits, permission.ModeBypass, permission.ModeGoal, permission.ModeUltra} {
+		for _, target := range []string{"bypass", "goal", "ultra", "ultrl"} {
+			if origin == permission.NormalizeMode(permission.Mode(target)) {
 				continue
 			}
 			t.Run(string(origin)+"_to_"+target, func(t *testing.T) {
@@ -201,5 +201,28 @@ func TestModeSwitchToolPersistsTransitionAndRefreshesNextEngineRequest(t *testin
 	// 详细 ACTIVE 指令只在动态上下文中出现，不进 system prompt。
 	if strings.Contains(client.systems[1], "(ACTIVE)") {
 		t.Fatalf("active plan instructions leaked into system prefix: %s", client.systems[1])
+	}
+}
+
+func TestSwitchModePersistsCanonicalUltra(t *testing.T) {
+	for _, target := range []string{"ultra", "ultrl"} {
+		t.Run(target, func(t *testing.T) {
+			var persisted permission.Mode
+			approvals := 0
+			application := &App{
+				Permissions: permission.NewService(permission.ModePlan),
+				onModeChange: func(mode permission.Mode) error {
+					persisted = mode
+					return nil
+				},
+			}
+			application.Permissions.SetAskFunc(func(string, string) bool { approvals++; return true })
+			if err := application.SwitchMode(context.Background(), target); err != nil {
+				t.Fatal(err)
+			}
+			if approvals != 1 || persisted != permission.ModeUltra || application.Permissions.Mode() != permission.ModeUltra || application.Config.PermissionMode != permission.ModeUltra || application.Config.Permissions.Mode != permission.ModeUltra {
+				t.Fatalf("approvals = %d, persisted = %q, mode = %q, config = %+v", approvals, persisted, application.Permissions.Mode(), application.Config)
+			}
+		})
 	}
 }

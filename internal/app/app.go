@@ -517,8 +517,8 @@ func (a *App) SwitchMode(ctx context.Context, target string) error {
 		return fmt.Errorf("permission service is not configured")
 	}
 	next := permission.NormalizeMode(permission.Mode(target))
-	if next != permission.ModePlan && next != permission.ModeBypass && next != permission.ModeGoal && next != permission.ModeUltrl {
-		return fmt.Errorf("mode must be plan, bypass, goal, or ultrl")
+	if next != permission.ModePlan && next != permission.ModeBypass && next != permission.ModeGoal && next != permission.ModeUltra {
+		return fmt.Errorf("mode must be plan, bypass, goal, or ultra")
 	}
 	current := a.Permissions.Mode()
 	if current == next {
@@ -3570,15 +3570,15 @@ func loadWorkflows(cfg config.Config) *workflow.Registry {
 }
 
 // RunWorkflow executes a named user-authored Task graph explicitly.
-// Workflows are not exposed as model tools and require explicit Ultrl mode.
+// Workflows are not exposed as model tools and require explicit Ultra mode.
 // Results are returned as text only; nothing is written to memory.
 func (a *App) RunWorkflow(ctx context.Context, name, args string) (string, error) {
 	if a == nil {
 		return "", fmt.Errorf("app is nil")
 	}
 	// A workflow must never elevate the session into bypass implicitly.
-	if a.Permissions == nil || a.Permissions.Mode() != permission.ModeUltrl {
-		return "", fmt.Errorf("workflow execution requires ultrl mode (bypass + task)")
+	if a.Permissions == nil || a.Permissions.Mode() != permission.ModeUltra {
+		return "", fmt.Errorf("workflow execution requires ultra mode (bypass + task)")
 	}
 	if a.Coordinator == nil {
 		return "", fmt.Errorf("agent coordinator is not configured")
