@@ -66,6 +66,9 @@ type acpSession struct {
 	// lastToolInput caches the most recent input per tool name for permission diffs.
 	lastToolInput  map[string]json.RawMessage
 	fsCapabilities FSClientCapabilities
+	// Client-supplied MCP configuration is scoped to this session and never persisted.
+	clientMCPNames map[string]bool
+	baseMCPServers []config.MCPServerConfig
 	// agentToolCalls maps nested subagent activity to ACP toolCallIds.
 	agentToolCalls map[string]string
 	// agentProgressLines accumulates process lines keyed by subagent toolCallId.
@@ -182,7 +185,8 @@ func (s *Server) handleInitialize(msg jsonrpcMessage) error {
 			Version: s.version,
 		},
 		AgentCapabilities: AgentCapabilities{
-			LoadSession: true,
+			LoadSession:     true,
+			MCPCapabilities: MCPCapabilities{HTTP: true},
 			PromptCapabilities: PromptCapabilities{
 				Image:           true,
 				EmbeddedContext: true,
@@ -200,8 +204,12 @@ func (s *Server) handleSessionNew(ctx context.Context, msg jsonrpcMessage) error
 	if err := decodeParams(msg.Params, &params); err != nil {
 		return s.conn.ReplyError(msg.ID, JSONRPCInvalidParams, err.Error())
 	}
+	mcpServers, err := parseMCPServers(params.MCPServers)
+	if err != nil {
+		return s.conn.ReplyError(msg.ID, JSONRPCInvalidParams, err.Error())
+	}
 	id := s.nextSessionID()
-	sess, err := s.createSession(ctx, id, params.Cwd)
+	sess, err := s.createSession(ctx, id, params.Cwd, mcpServers)
 	if err != nil {
 		return s.conn.ReplyError(msg.ID, JSONRPCInternalError, err.Error())
 	}
@@ -228,7 +236,11 @@ func (s *Server) handleSessionLoad(ctx context.Context, msg jsonrpcMessage) erro
 	if strings.TrimSpace(params.SessionID) == "" {
 		return s.conn.ReplyError(msg.ID, JSONRPCInvalidParams, "sessionId is required")
 	}
-	sess, err := s.createSession(ctx, params.SessionID, params.Cwd)
+	mcpServers, err := parseMCPServers(params.MCPServers)
+	if err != nil {
+		return s.conn.ReplyError(msg.ID, JSONRPCInvalidParams, err.Error())
+	}
+	sess, err := s.createSession(ctx, params.SessionID, params.Cwd, mcpServers)
 	if err != nil {
 		return s.conn.ReplyError(msg.ID, JSONRPCInternalError, err.Error())
 	}
@@ -394,10 +406,20 @@ func defaultPromptFunc(ctx context.Context, application *app.App, sessionID, pro
 	return application.RunPromptWithSession(ctx, sessionID, prompt, workDir, maxTurns)
 }
 
-func (s *Server) createSession(ctx context.Context, id, cwd string) (*acpSession, error) {
+func (s *Server) createSession(ctx context.Context, id, cwd string, mcpServers []config.MCPServerConfig) (*acpSession, error) {
 	cfg := s.cfg
 	if cwd = strings.TrimSpace(cwd); cwd != "" {
 		applyWorkDir(&cfg, cwd)
+	}
+	baseMCPServers := cloneMCPServers(cfg.MCP.Servers)
+	if len(cfg.MCPServers) > 0 {
+		baseMCPServers = cloneMCPServers(cfg.MCPServers)
+	}
+	cfg.MCP.Servers = mergeMCPServers(baseMCPServers, mcpServers)
+	cfg.MCPServers = cloneMCPServers(cfg.MCP.Servers)
+	clientMCPNames := make(map[string]bool, len(mcpServers))
+	for _, server := range mcpServers {
+		clientMCPNames[server.Name] = true
 	}
 	if id == "" {
 		id = s.nextSessionID()
@@ -422,6 +444,8 @@ func (s *Server) createSession(ctx context.Context, id, cwd string) (*acpSession
 		toolCallsByID:      make(map[string]string),
 		lastToolInput:      make(map[string]json.RawMessage),
 		fsCapabilities:     fsCapabilities,
+		clientMCPNames:     clientMCPNames,
+		baseMCPServers:     baseMCPServers,
 		agentToolCalls:     make(map[string]string),
 		agentProgressLines: make(map[string][]string),
 	}

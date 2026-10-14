@@ -827,68 +827,23 @@ Turn memory: 继续
 
 Organizer: 用户要求移除工具目录限制，允许任意目录访问。当前 Solcode 引擎已支持任意目录访问，无需修改。
 
-## 2026-10-13 14:17:29 · session acp-1791801508971727000-1 · turn 10 · importance 0.40
-- keywords: todolist, todo-write, turn
+## 2026-10-13 14:19:34 · session acp-1791801508971727000-1 · turn 10 · importance 0.50
+- keywords: todolist, todo-write, turn, organizer, archival, retrieval, terms, permission
 - files: internal/app/app.go, internal/app/jev.go, internal/config/config.go, internal/engine/context_builder.go, internal/engine/efficiency.go, internal/engine/efficiency_test.go, internal/engine/engine.go, internal/engine/prefix_share_test.go, internal/engine/working_set.go, internal/engine/working_set_injection_test.go, internal/engine/working_set_test.go, internal/projectindex/index.go, internal/projectindex/index_test.go, internal/tool/batch.go, internal/tool/batch_test.go
+- memory_ids: mem_21337d602406a50a
 
-Turn memory: 检查完了。当前缓存前缀整体设计是对的，但有一个比较明显的跨 Agent 风险。
-## 当前缓存分层
-Anthropic 请求目前有两个显式缓存断点：
-```go
-System: []systemBlock{
-{
-Text: systemPrompt,
-CacheControl: ephemeral,
-},
-}
-Tools: withLastToolCacheBreakpoint(tools)
-```
-也就是说，主要缓存内容是：
-```text
-稳定 System Prompt
-+
-Tools schema 列表
-```
-动态上下文放在 `messages`，不会直接改写 system/tools 前缀。
----
-## 不会影响 system/tools 缓存前缀的内容
-这些现在都通过 `dynamicContext.append()` 追加到消息尾部，不会改变已有 system/tools 前缀：
-- `ModeInstructions`
-- `ForceSkill`
-- `ProjectKnowledge`
-- `SessionSummary`
-- `MemoryContext`
-- `FoldedTools`
-- `WorkingSet`
-- `EfficiencyNote`
-- `<solcode-context kind="...">` 动态上下文块
-- 工具调用结果
-- 新的用户消息
-- Jev 是否决定注入 WorkingSet
-当前代码会把动态块物化成：
-```text
-旧消息
-旧工具结果
-旧动态上下文
-新动态上下文
-最新请求
-```
-不会把它们塞回 `systemPrompt()`，这一点对缓存是正确的。
-特别是：
-```go
-requestBuilder.ModeInstructions = ""
-requestBuilder.ForceSkill = … fix |
-| Tool registry 顺序 | 是 | 当前已排序，稳定 |
-| Ultra Main vs Task 的 Task 工具 | 是 | **当前存在风险** |
-## 建议下一步
-优先补一个测试：
-```text
-TestUltraMainAndTaskShareToolsPrefix
-```
-确认 Ultra 模式下 Main 和 Task 的 tools schema 是否一致。
-如果目标是最大化缓存共享，我建议调整为：
-```text
-Task schema 在 Ultra Main/Task 两者都存在；
-是否允许实际执行 Task 由 ToolExecutor 的 runtime permission 决定。
-```
-除此之外，目前 `WorkingSet`、`EfficiencyNote`、Jev、动态上下文没有破坏 system/tools 缓存前缀。
+Organizer: 用户要求移除工具目录限制，允许任意目录访问。用户已提供修改文件列表，包括 internal/app/app.go、internal/app/jev.go、internal/config/config.go、internal/engine/context_builder.go、internal/engine/efficiency.go、internal/engine/efficiency_test.go、internal/engine/engine.go、internal/ee
+
+## 2026-10-14 19:18:09 · session acp-1791801508971727000-1 · turn 11 · importance 0.90
+- keywords: turn, todolist, organizer, archival, cache, prefix, tool_selector, batch_tool
+- files: internal/app/app.go, internal/app/jev.go, internal/config/config.go, internal/engine/context_builder.go, internal/engine/efficiency.go, internal/engine/efficiency_test.go, internal/engine/engine.go, internal/engine/prefix_share_test.go, internal/engine/working_set.go, internal/engine/working_set_injection_test.go, internal/engine/working_set_test.go, internal/projectindex/index.go, internal/projectindex/index_test.go, internal/tool/batch.go, internal/tool/batch_test.go
+- memory_ids: mem_b7b1f5dee978d4f4
+
+Organizer: 用户要求检查影响缓存前缀的文件，发现内部工具目录结构已变更，需更新缓存前缀映射。已检查 `internal/tool/` 目录，发现 `batch.go` 已包含 BatchTool 实现，但 `internal/engine/tool_selector.go` 中仍引用旧工具名称，导致缓存前缀不一致。需更新 `tool_selector.go` 以匹配 BatchTool 的 public 名称，并验证 `internal/engine/working_set.go` 中已
+
+## 2026-10-14 19:36:23 · session acp-1791801508971727000-1 · turn 12 · importance 0.50
+- keywords: todolist, todo-write, turn, organizer, archival, retrieval, terms, mcp
+- files: internal/acp/commands.go, internal/acp/mcp.go, internal/acp/mcp_test.go, internal/acp/protocol.go, internal/acp/server.go, internal/app/app.go, internal/app/jev.go, internal/config/config.go, internal/engine/context_builder.go, internal/engine/efficiency.go, internal/engine/efficiency_test.go, internal/engine/engine.go, internal/engine/prefix_share_test.go, internal/engine/working_set.go, internal/engine/working_set_injection_test.go, internal/engine/working_set_test.go, internal/projectindex/index.go, internal/projectindex/index_test.go, internal/tool/batch.go, internal/tool/batch_test.go
+- memory_ids: mem_5bf2839bfc1994fb
+
+Organizer: 用户要求解析 ACP 协议带过来的 mcp 并注册为工具。已完成 MCP 配置解析、连接建立、工具注册及测试验证。所有测试通过，无错误。用户后续未明确指令，当前会话处于等待状态。

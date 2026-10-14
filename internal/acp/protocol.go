@@ -147,9 +147,12 @@ type SessionNewParams struct {
 
 type MCPServerSpec struct {
 	Name    string         `json:"name"`
+	Type    string         `json:"type,omitempty"`
 	Command string         `json:"command,omitempty"`
 	Args    []string       `json:"args,omitempty"`
 	Env     MCPEnvironment `json:"env,omitempty"`
+	URL     string         `json:"url,omitempty"`
+	Headers MCPHeaders     `json:"headers,omitempty"`
 }
 
 // MCPEnvironment accepts both ACP's [{"name":"KEY","value":"VALUE"}]
@@ -157,10 +160,33 @@ type MCPServerSpec struct {
 type MCPEnvironment map[string]string
 
 func (e *MCPEnvironment) UnmarshalJSON(data []byte) error {
+	values, err := decodeMCPNameValues(data, "env")
+	if err == nil {
+		*e = MCPEnvironment(values)
+	}
+	return err
+}
+
+// MCPHeaders accepts ACP name/value entries and legacy object-form headers.
+type MCPHeaders map[string]string
+
+func (h *MCPHeaders) UnmarshalJSON(data []byte) error {
+	values, err := decodeMCPNameValues(data, "headers")
+	if err == nil {
+		*h = MCPHeaders(values)
+	}
+	return err
+}
+
+func decodeMCPNameValues(data []byte, field string) (map[string]string, error) {
 	var object map[string]string
 	if err := json.Unmarshal(data, &object); err == nil {
-		*e = MCPEnvironment(object)
-		return nil
+		for name := range object {
+			if strings.TrimSpace(name) == "" {
+				return nil, fmt.Errorf("%s entry name is required", field)
+			}
+		}
+		return object, nil
 	}
 
 	var entries []struct {
@@ -168,17 +194,16 @@ func (e *MCPEnvironment) UnmarshalJSON(data []byte) error {
 		Value string `json:"value"`
 	}
 	if err := json.Unmarshal(data, &entries); err != nil {
-		return fmt.Errorf("env must be an object or an array of name/value entries: %w", err)
+		return nil, fmt.Errorf("%s must be an object or an array of name/value entries: %w", field, err)
 	}
-	env := make(MCPEnvironment, len(entries))
+	values := make(map[string]string, len(entries))
 	for _, entry := range entries {
-		if entry.Name == "" {
-			return fmt.Errorf("env entry name is required")
+		if strings.TrimSpace(entry.Name) == "" {
+			return nil, fmt.Errorf("%s entry name is required", field)
 		}
-		env[entry.Name] = entry.Value
+		values[entry.Name] = entry.Value
 	}
-	*e = env
-	return nil
+	return values, nil
 }
 
 type SessionNewResult struct {

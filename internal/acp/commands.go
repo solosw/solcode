@@ -3,6 +3,7 @@ package acp
 import (
 	"context"
 	"fmt"
+	"maps"
 	"strings"
 	"time"
 
@@ -769,7 +770,10 @@ func (s *Server) toggleMCP(sess *acpSession, serverName, persistencePath string)
 	if servers[index].Disabled {
 		msg = fmt.Sprintf("Disabled MCP server %s.", serverName)
 	}
-	if err := config.SaveLocalOverrides(persistencePath, map[string]any{"mcp": map[string]any{"servers": next.MCP.Servers}}); err != nil {
+	if sess.clientMCPNames[serverName] {
+		return msg + " (current ACP session only)", nil
+	}
+	if err := config.SaveLocalOverrides(persistencePath, map[string]any{"mcp": map[string]any{"servers": sess.persistentMCPServers(next.MCP.Servers)}}); err != nil {
 		msg += fmt.Sprintf("\nWarning: could not persist MCP toggle: %v", err)
 	}
 	return msg, nil
@@ -877,7 +881,12 @@ func cloneMCPServers(servers []config.MCPServerConfig) []config.MCPServerConfig 
 		return nil
 	}
 	out := make([]config.MCPServerConfig, len(servers))
-	copy(out, servers)
+	for i, server := range servers {
+		server.Args = append([]string(nil), server.Args...)
+		server.Env = maps.Clone(server.Env)
+		server.Headers = maps.Clone(server.Headers)
+		out[i] = server
+	}
 	return out
 }
 
