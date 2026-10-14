@@ -186,6 +186,8 @@ const DefaultBackgroundYieldAfterMS = 10_000
 // BatchConfig bounds the BatchTool. Zero values fall back to the built-in
 // defaults, so an omitted block preserves the shipped behavior.
 type BatchConfig struct {
+	// PTC enables a programmatic JavaScript BatchTool instead of static operations.
+	PTC BatchPTCConfig `json:"ptc,omitempty"`
 	// MaxOperations caps how many operations one batch may contain.
 	MaxOperations int `json:"max_operations,omitempty"`
 	// MaxParallel caps concurrent read-only operations in one wave.
@@ -197,6 +199,11 @@ type BatchConfig struct {
 	// MaxReadRetries is the bounded retry count for transient read failures.
 	// Negative is treated as unset; 0 disables retry.
 	MaxReadRetries int `json:"max_read_retries,omitempty"`
+}
+
+// BatchPTCConfig gates the embedded, Node-free BatchTool program runtime.
+type BatchPTCConfig struct {
+	Enabled bool `json:"enabled,omitempty"`
 }
 
 // ComputerUseConfig gates the ComputerUse tool and bundled computer-use skill.
