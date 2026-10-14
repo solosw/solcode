@@ -134,11 +134,17 @@ func nextBatchID() string {
 }
 
 type batchTool struct {
+	ptcEnabled bool
 	BaseTool
 	limits BatchLimits
 }
 
 func NewBatchTool() Tool { return &batchTool{limits: DefaultBatchLimits} }
+
+// NewBatchToolWithPTC selects one wire schema and execution mode for this tool instance.
+func NewBatchToolWithPTC(limits BatchLimits, enabled bool) Tool {
+	return &batchTool{limits: limits.withDefaults(), ptcEnabled: enabled}
+}
 
 // NewBatchToolWithLimits builds the batch tool with caller-supplied limits.
 func NewBatchToolWithLimits(limits BatchLimits) Tool {
@@ -147,12 +153,14 @@ func NewBatchToolWithLimits(limits BatchLimits) Tool {
 
 func (*batchTool) Name() string { return BatchToolName }
 func (bt *batchTool) Description() string {
+	if bt.ptcEnabled { return "Run a bounded JavaScript program with tools.View/Grep/Glob/LS/Edit/MultiEdit/Write/MultiWrite/Patch/Bash/LSP. Use tools.Name({args}) to call a tool; results are {ok, content}. Intermediate results remain inside the program; console.log prints only required findings. async/await works, but child tool calls currently execute synchronously (Promise.all is not concurrent). No Node APIs or direct filesystem/network access. At most 32 child calls. Use only trusted tools and print concise output." }
 	return fmt.Sprintf("Run 1-%d coding operations using the tool-specific input schemas below. IDs are optional (default op_1, op_2, ...); use explicit IDs for depends_on. Dependencies only order execution: they do NOT substitute results into later inputs. Only batch edits whose exact old_string is already known from a prior read. Independent safe reads run concurrently, mutations sequentially. In non-atomic batches, successful edits stay applied after unrelated failures, even when a MultiEdit partially fails. Default output_mode=compact omits repeated file diffs; read/search/Bash outputs remain useful within per-item and total text budgets. Truncated or summarized outputs include full_output_path; read it with View using offset/limit. output_mode=full keeps diffs but still obeys budgets. atomic=true attempts to roll back all file operations on any failure; supports Edit/MultiEdit/Write/MultiWrite/Patch, including repeated edits to the same file. Inspect atomic_status and reverted: after rolled_back, reapply the corrected transaction; after rollback_failed/unknown, read current targets first. Permissions and hooks still apply to each child.", bt.limits.MaxOperations)
 }
 
 // Classify read batches for plan-mode permissions. Mutation permissions are
 // still checked separately by the real child executor, never by this wrapper.
-func (*batchTool) IsReadOnly(input json.RawMessage) bool {
+func (bt *batchTool) IsReadOnly(input json.RawMessage) bool {
+	if bt.ptcEnabled { return false }
 	var req batchRequest
 	if json.Unmarshal(input, &req) != nil || req.Atomic || len(req.Operations) == 0 {
 		return false
@@ -168,6 +176,7 @@ func (*batchTool) IsReadOnly(input json.RawMessage) bool {
 }
 func (*batchTool) IsConcurrencySafe(json.RawMessage) bool { return false }
 func (bt *batchTool) InputSchema() map[string]any {
+	if bt.ptcEnabled { return map[string]any{"type":"object","additionalProperties":false,"properties":map[string]any{"code":map[string]any{"type":"string","minLength":1,"maxLength":65536}},"required":[]string{"code"}} }
 	return map[string]any{
 		"type": "object", "additionalProperties": false,
 		"properties": map[string]any{
@@ -180,6 +189,7 @@ func (bt *batchTool) InputSchema() map[string]any {
 }
 
 func (bt *batchTool) Invoke(ctx context.Context, uctx *UseContext, input json.RawMessage) (*ContentBlock, error) {
+	if bt.ptcEnabled { return bt.invokePTC(ctx, uctx, input) }
 	if uctx == nil || uctx.BatchDispatch == nil || uctx.BatchLookup == nil {
 		return ErrorResult("batch execution is not configured"), nil
 	}
