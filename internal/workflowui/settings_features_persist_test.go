@@ -158,15 +158,8 @@ func TestSettingsPersistFeaturesThroughDisk(t *testing.T) {
 	if reloaded.Jev.TimeoutSec != 30 || reloaded.Jev.RouteMinConfidence != 0.7 {
 		t.Fatalf("reloaded jev = %+v", reloaded.Jev)
 	}
-	ortBlock, ok := persisted["ort"].(map[string]any)
-	if !ok || ortBlock["gpu"] != true {
-		t.Fatalf("persisted ort = %#v", persisted["ort"])
-	}
-	if ortBlock["cuda_device_id"] != float64(1) {
-		t.Fatalf("persisted ort.cuda_device_id = %v", ortBlock["cuda_device_id"])
-	}
-	if !reloaded.ORT.GPU || reloaded.ORT.CudaDeviceID != 1 {
-		t.Fatalf("reloaded ort = %+v", reloaded.ORT)
+	if _, ok := persisted["ort"]; ok {
+		t.Fatal("obsolete ORT block persisted")
 	}
 	if !reloaded.EmbeddingEnabled() {
 		t.Fatalf("reloaded Embedding should be active: %+v", reloaded.Memory.Embedding)

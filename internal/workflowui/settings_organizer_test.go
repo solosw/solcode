@@ -12,7 +12,12 @@ import (
 // API mode, so the payload reports filesystem probes instead of keys.
 func TestSettingsExposeMemoryOrganizerBlock(t *testing.T) {
 	dir := t.TempDir()
-	modelPath := filepath.Join(dir, "model.gguf")
+	t.Setenv("HOME", dir)
+	t.Setenv("YZMA_LIB", filepath.Join(dir, "libs"))
+	modelPath := config.LocalModelPath("model.gguf")
+	if err := os.MkdirAll(filepath.Dir(modelPath), 0755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(modelPath, []byte("placeholder"), 0o644); err != nil {
 		t.Fatalf("write model: %v", err)
 	}
@@ -53,14 +58,16 @@ func TestSettingsExposeMemoryOrganizerBlock(t *testing.T) {
 	if got := org["context_size"]; got != float64(4096) {
 		t.Fatalf("context_size = %#v, want 4096", got)
 	}
-	if got := org["gpu_layers"]; got != float64(12) {
-		t.Fatalf("gpu_layers = %#v, want 12", got)
+	if got := org["gpu_layers"]; got != float64(-1) {
+		t.Fatalf("gpu_layers = %#v, want -1", got)
 	}
 }
 
 // A partial update must not reset the rest of the organizer configuration.
 func TestSettingsMemoryOrganizerPartialUpdatePreservesOtherFields(t *testing.T) {
 	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("YZMA_LIB", filepath.Join(dir, "libs"))
 	cfg := config.Default()
 	cfg.WorkDir = dir
 	cfg.Memory.Organizer.Enabled = true
@@ -81,13 +88,13 @@ func TestSettingsMemoryOrganizerPartialUpdatePreservesOtherFields(t *testing.T) 
 	if applied.Memory.Organizer.Enabled {
 		t.Fatal("enabled should have been turned off")
 	}
-	if got := applied.Memory.Organizer.ModelPath; got != filepath.Join(dir, "model.gguf") {
+	if got := applied.Memory.Organizer.ModelPath; got != config.LocalModelPath("model.gguf") {
 		t.Fatalf("model path was reset to %q", got)
 	}
 	if got := applied.Memory.Organizer.ContextSize; got != 4096 {
 		t.Fatalf("context size was reset to %d", got)
 	}
-	if got := applied.Memory.Organizer.LibDir; got != filepath.Join(dir, "libs") {
+	if got := applied.Memory.Organizer.LibDir; got != "" {
 		t.Fatalf("lib dir was reset to %q", got)
 	}
 }
@@ -125,8 +132,8 @@ func TestSettingsMemoryOrganizerAppliesAllFields(t *testing.T) {
 	if !org.Enabled {
 		t.Fatal("enabled was not applied")
 	}
-	if org.Processor != "vulkan" {
-		t.Fatalf("processor = %q, want vulkan", org.Processor)
+	if org.Processor != config.GPUProcessor() {
+		t.Fatalf("processor = %q, want platform GPU", org.Processor)
 	}
 	if org.ContextSize != 4096 {
 		t.Fatalf("context size = %d, want 4096", org.ContextSize)
@@ -156,7 +163,7 @@ func TestSettingsMemoryOrganizerAppliesAllFields(t *testing.T) {
 	if org.ModelPath == "" || org.ModelPath[0] == '~' {
 		t.Fatalf("model path was not expanded: %q", org.ModelPath)
 	}
-	if org.LibDir == "" || org.LibDir[0] == '~' {
+	if org.LibDir != "" {
 		t.Fatalf("lib dir was not expanded: %q", org.LibDir)
 	}
 }
@@ -165,6 +172,8 @@ func TestSettingsMemoryOrganizerAppliesAllFields(t *testing.T) {
 // rather than requiring a specific version.
 func TestMemoryOrganizerLibraryProbe(t *testing.T) {
 	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("YZMA_LIB", filepath.Join(dir, "libs"))
 	if memoryOrganizerLibraryPresent(dir) {
 		t.Fatal("an empty directory must not report a library")
 	}

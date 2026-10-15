@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/solosw/solcode/internal/config"
 	"github.com/solosw/solcode/internal/engine"
@@ -23,10 +24,8 @@ import (
 // optional: when Jev is disabled or its backend is not ready this returns nil
 // and the callers keep their deterministic behavior.
 //
-// type=api builds the hosted HTTP evaluator. type=local builds a LocalEvaluator
-// over OpenJev/Laya artifacts. Local defaults to engine=ort, which loads ONNX
-// Runtime in the background so startup is not blocked; Ask falls back until the
-// session is Ready. Explicit jev.engine=stub keeps the unimplemented backend.
+// type=local reads a GGUF decision head in-process through llama.cpp.
+// Models load lazily on GPU; errors use deterministic decision fallbacks.
 //
 // Each subsystem is opt-in independently so a deployment can adopt routing
 // without adopting the guardrail, or vice versa.
@@ -38,36 +37,16 @@ func buildJev(cfg config.Config) (*jevRuntime, error) {
 	var closer func() error
 	switch cfg.JevType() {
 	case config.JevBackendLocal:
-		local, err := jevlocal.New(jevlocal.Options{
-			ModelDir:     cfg.Jev.ModelDir,
-			Model:        cfg.Jev.Model,
-			DType:        cfg.Jev.DType,
-			EngineName:   cfg.Jev.Engine,
-			ORTLib:       cfg.ORTLibraryPath(),
-			GPU:          cfg.ORTGPUEnabled(),
-			CudaDeviceID: cfg.ORT.CudaDeviceID,
-		})
+		local, err := jevlocal.NewGGUF(config.LocalModelPath(cfg.Jev.Model))
 		if err != nil {
 			// Artifacts disappeared between JevEnabled and here — stay silent.
 			jevLog("jev local disabled: " + err.Error())
 			return nil, nil
 		}
+		local.Timeout = time.Duration(cfg.Jev.TimeoutSec) * time.Second
 		eval = local
 		closer = local.Close
-		if !local.EngineReady() {
-			jevLog("jev local ort loading in background")
-			local.OnEngineReady(func(ready bool, err error) {
-				if ready {
-					jevLog("jev local ort ready")
-					return
-				}
-				if err != nil {
-					jevLog("jev local ort failed: " + err.Error())
-					return
-				}
-				jevLog("jev local ort not ready")
-			})
-		}
+
 	default:
 		eval = systemone.NewClient(systemone.Options{
 			BaseURL:    cfg.Jev.BaseURL,
@@ -78,11 +57,6 @@ func buildJev(cfg config.Config) (*jevRuntime, error) {
 	}
 	decider := systemone.NewDecider(eval).WithErrorHandler(func(err error) {
 		if err == nil {
-			return
-		}
-		// While ORT is still loading, Decider falls back on every call; one
-		// startup log is enough — avoid spamming stderr each turn.
-		if strings.Contains(err.Error(), "ort loading") {
 			return
 		}
 		jevLog("jev decision fell back: " + err.Error())

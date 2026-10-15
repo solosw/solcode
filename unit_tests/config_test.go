@@ -172,60 +172,27 @@ func TestJevTypeDefaultsToAPI(t *testing.T) {
 	}
 }
 
-// Local settings normalize model_dir / dtype. Without OpenJev artifacts on disk
-// JevEnabled stays false; with a complete model_dir it turns on.
+// Local Jev accepts a GGUF filename only; old ONNX controls cannot select a backend.
 func TestJevLocalNormalizesAndRequiresArtifacts(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	cfg := config.Default()
-	cfg.Jev = config.JevConfig{
-		Enabled: true,
-		Type:    config.JevBackendLocal,
-		Model:   "open-jev-deberta-v3-large",
-		Routing: true,
-	}
+	cfg.Jev = config.JevConfig{Enabled: true, Type: config.JevBackendLocal, Model: "Kev-4B-Q8_0", Engine: "ort", DType: "q4", ModelDir: t.TempDir()}
 	if err := cfg.Normalize(); err != nil {
 		t.Fatal(err)
 	}
-	wantDir := filepath.Join(config.UserConfigDir(), "models", "open-jev-deberta-v3-large")
-	if cfg.Jev.ModelDir != wantDir {
-		t.Fatalf("ModelDir = %q, want %q", cfg.Jev.ModelDir, wantDir)
+	if cfg.Jev.Model != "Kev-4B-Q8_0.gguf" || cfg.Jev.Engine != "gguf" || cfg.Jev.ModelDir != "" || cfg.Jev.DType != "" {
+		t.Fatalf("Jev = %+v", cfg.Jev)
 	}
-	if cfg.Jev.DType != "q4" {
-		t.Fatalf("DType = %q, want q4", cfg.Jev.DType)
+	if cfg.JevEnabled() {
+		t.Fatal("missing GGUF must not enable Jev")
 	}
-	if cfg.Jev.Engine != "ort" {
-		t.Fatalf("Engine = %q, want ort default for local", cfg.Jev.Engine)
-	}
-
-	empty := config.Default()
-	empty.Jev = config.JevConfig{
-		Enabled:  true,
-		Type:     config.JevBackendLocal,
-		Model:    "missing",
-		ModelDir: t.TempDir(),
-		DType:    "q4",
-	}
-	if err := empty.Normalize(); err != nil {
+	path := config.LocalModelPath(cfg.Jev.Model)
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		t.Fatal(err)
 	}
-	if empty.JevEnabled() {
-		t.Fatal("local without artifacts must stay disabled")
-	}
-	if empty.Jev.Engine != "ort" {
-		t.Fatalf("empty Engine should normalize to ort, got %q", empty.Jev.Engine)
-	}
-
-	stub := config.Default()
-	stub.Jev = config.JevConfig{
-		Enabled: true,
-		Type:    config.JevBackendLocal,
-		Model:   "open-jev-deberta-v3-large",
-		Engine:  "stub",
-	}
-	if err := stub.Normalize(); err != nil {
-		t.Fatal(err)
-	}
-	if stub.Jev.Engine != "stub" {
-		t.Fatalf("explicit stub must be preserved, got %q", stub.Jev.Engine)
+	writeFile(t, path, "GGUF")
+	if !cfg.JevEnabled() {
+		t.Fatal("GGUF file should enable lazy local evaluator")
 	}
 }
 
@@ -274,7 +241,7 @@ func TestEmbeddingNormalizesAndEnabled(t *testing.T) {
 	if gguf.Memory.Embedding.Dir != config.DefaultEmbeddingDir(gguf.WorkDir) {
 		t.Fatalf("gguf Dir = %q", gguf.Memory.Embedding.Dir)
 	}
-	if !strings.HasSuffix(filepath.ToSlash(gguf.Memory.Embedding.ModelPath), "embeddinggemma-300m_Q4_k_m.gguf") {
+	if !strings.HasSuffix(filepath.ToSlash(gguf.Memory.Embedding.ModelPath), "embeddinggemma-300m.gguf") {
 		t.Fatalf("ModelPath = %q", gguf.Memory.Embedding.ModelPath)
 	}
 	if !gguf.EmbeddingEnabled() {
@@ -325,17 +292,8 @@ func TestLoadJevLocalSettings(t *testing.T) {
 	if cfg.Jev.Type != config.JevBackendLocal {
 		t.Fatalf("Type = %q", cfg.Jev.Type)
 	}
-	if cfg.Jev.Model != "open-jev-deberta-v3-large" || cfg.Jev.DType != "q4f16" {
+	if cfg.Jev.Model != "open-jev-deberta-v3-large.gguf" || cfg.Jev.DType != "" || cfg.Jev.Engine != "gguf" || cfg.Jev.ModelDir != "" || cfg.Jev.ORTLib != "" {
 		t.Fatalf("Jev = %+v", cfg.Jev)
-	}
-	if cfg.Jev.Engine != "ort" {
-		t.Fatalf("Engine = %q", cfg.Jev.Engine)
-	}
-	if !strings.Contains(filepath.ToSlash(cfg.Jev.ModelDir), "/models/open-jev") {
-		t.Fatalf("ModelDir = %q, want expanded ~/models/open-jev", cfg.Jev.ModelDir)
-	}
-	if !strings.Contains(filepath.ToSlash(cfg.Jev.ORTLib), "/lib/onnxruntime.dll") {
-		t.Fatalf("ORTLib = %q", cfg.Jev.ORTLib)
 	}
 	// ~/models/open-jev is almost certainly missing artifacts in the test env.
 	if cfg.JevEnabled() {
@@ -345,7 +303,7 @@ func TestLoadJevLocalSettings(t *testing.T) {
 
 // Laya uses rl_agent_config.json rather than open_jev_config.json; JevEnabled
 // must treat a complete Laya layout as local artifacts present.
-func TestJevEnabledRecognizesLayaArtifacts(t *testing.T) {
+func TestJevEnabledRejectsLegacyLayaArtifacts(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "rl_agent_config.json"), `{"max_len":512}`)
 	writeFile(t, filepath.Join(dir, "tokenizer.json"), `{}`)
@@ -362,8 +320,8 @@ func TestJevEnabledRecognizesLayaArtifacts(t *testing.T) {
 	if err := cfg.Normalize(); err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.JevEnabled() {
-		t.Fatal("Laya layout should enable local Jev")
+	if cfg.JevEnabled() {
+		t.Fatal("ONNX layout must not enable GGUF Jev")
 	}
 }
 

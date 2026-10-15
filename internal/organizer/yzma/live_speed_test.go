@@ -43,7 +43,7 @@ func TestLiveQwenSpeedProbe(t *testing.T) {
 		t.Skipf("llama lib not found: %s", libDir)
 	}
 
-	gpuLayers := 0
+	gpuLayers := -1
 	if v := os.Getenv("SOLCODE_ORGANIZER_GPU_LAYERS"); v != "" {
 		fmt.Sscanf(v, "%d", &gpuLayers)
 	}

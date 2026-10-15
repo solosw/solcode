@@ -138,8 +138,8 @@ func TestMemoryOrganizerLibraryInstallStartsBackgroundDownload(t *testing.T) {
 	installer.mu.Lock()
 	processor := installer.lastProcessor
 	installer.mu.Unlock()
-	if processor != "vulkan" {
-		t.Fatalf("processor = %q, want vulkan", processor)
+	if processor != config.GPUProcessor() {
+		t.Fatalf("processor = %q, want platform GPU", processor)
 	}
 }
 

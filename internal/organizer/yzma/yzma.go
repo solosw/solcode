@@ -83,6 +83,7 @@ func New(cfg Config) organizer.LocalGenerator {
 }
 
 func normalizeConfig(cfg Config) Config {
+	cfg.GPULayers = -1
 	if cfg.ContextSize <= 0 {
 		cfg.ContextSize = defaultContextSize
 	}
@@ -254,40 +255,25 @@ func (g *generator) ensureLoaded() {
 	LogNative("organizer_load_ok", map[string]any{"model_path": modelPath, "gpu": usedGPU, "gpu_fallback": wantGPU && !usedGPU})
 }
 
-// loadOrganizerModel loads a GGUF + context. GPU is tried first when gpuLayers != 0;
-// InitFromModel / ModelLoad failures fall back to CPU-only so memory writes still work.
+// loadOrganizerModel requires GPU; native failures never retry on CPU.
 func loadOrganizerModel(modelPath string, gpuLayers, contextSize, batchSize, threads int) (llama.Model, llama.Context, bool, error) {
-	tryGPU := gpuLayers != 0
-	model, modelCtx, err := initOrganizerHandles(modelPath, tryGPU, gpuLayers, contextSize, batchSize, threads)
-	if err == nil {
-		return model, modelCtx, tryGPU, nil
+	if !llama.SupportsGpuOffload() {
+		return 0, 0, false, fmt.Errorf("yzma: GPU required but unavailable")
 	}
-	if !tryGPU {
-		return 0, 0, false, err
-	}
-	LogNativeErr("organizer_gpu_fail_fallback_cpu", err, map[string]any{"model_path": modelPath})
-	model, modelCtx, err = initOrganizerHandles(modelPath, false, 0, contextSize, batchSize, threads)
-	if err != nil {
-		return 0, 0, false, err
-	}
-	LogNative("organizer_cpu_fallback_ok", map[string]any{"model_path": modelPath})
-	return model, modelCtx, false, nil
+	model, modelCtx, err := initOrganizerHandles(modelPath, contextSize, batchSize, threads)
+	return model, modelCtx, err == nil, err
 }
 
-func initOrganizerHandles(modelPath string, useGPU bool, gpuLayers, contextSize, batchSize, threads int) (llama.Model, llama.Context, error) {
+func initOrganizerHandles(modelPath string, contextSize, batchSize, threads int) (llama.Model, llama.Context, error) {
 	modelParams := llama.ModelDefaultParams()
 	// mmap keeps weights file-backed so the OS can share the same GGUF pages
 	// across multiple solcode workspaces instead of each process private-copying.
 	modelParams.LoadMode = llama.LoadModeMmap
 	modelParams.LazyMode = llama.LazyModeOn
-	if !useGPU {
-		modelParams.SetCPUOnly()
-	} else {
-		modelParams.NGpuLayers = int32(gpuLayers)
-	}
+	modelParams.NGpuLayers = -1
 	model, err := llama.ModelLoadFromFile(modelPath, modelParams)
 	if err != nil {
-		LogNativeErr("organizer_load_model", err, map[string]any{"model_path": modelPath, "gpu": useGPU})
+		LogNativeErr("organizer_load_model", err, map[string]any{"model_path": modelPath, "gpu": true})
 		return 0, 0, fmt.Errorf("yzma: load GGUF %s: %w", modelPath, err)
 	}
 
@@ -299,20 +285,17 @@ func initOrganizerHandles(modelPath string, useGPU bool, gpuLayers, contextSize,
 		ctxParams.NUbatch = ctxParams.NBatch
 	}
 	ctxParams.TypeK = llama.GGMLTypeQ8_0
-	ctxParams.TypeV = llama.GGMLTypeQ8_0
+	// Flash attention is disabled below; quantized V is invalid in that mode.
+	ctxParams.TypeV = llama.GGMLTypeF16
 	// Disable flash-attn on GPU: dual-model / graph-reuse has crashed Windows.
-	if useGPU {
-		ctxParams.FlashAttentionType = llama.FlashAttentionTypeDisabled
-	} else {
-		ctxParams.FlashAttentionType = llama.FlashAttentionTypeAuto
-	}
+	ctxParams.FlashAttentionType = llama.FlashAttentionTypeDisabled
 	if threads > 0 {
 		ctxParams.NThreads = int32(threads)
 		ctxParams.NThreadsBatch = int32(threads)
 	}
 	modelCtx, err := llama.InitFromModel(model, ctxParams)
 	if err != nil {
-		LogNativeErr("organizer_init_ctx", err, map[string]any{"model_path": modelPath, "gpu": useGPU})
+		LogNativeErr("organizer_init_ctx", err, map[string]any{"model_path": modelPath, "gpu": true})
 		_ = llama.ModelFree(model)
 		return 0, 0, fmt.Errorf("yzma: create context: %w", err)
 	}

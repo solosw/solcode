@@ -202,20 +202,11 @@ func TestPostSettingsAppliesLocalJev(t *testing.T) {
 	if applied.Jev.Type != config.JevBackendLocal {
 		t.Fatalf("type = %q", applied.Jev.Type)
 	}
-	if applied.Jev.Model != "open-jev-deberta-v3-large" || applied.Jev.DType != "q4" {
+	if applied.Jev.Model != "open-jev-deberta-v3-large.gguf" || applied.Jev.Engine != "gguf" {
 		t.Fatalf("jev = %+v", applied.Jev)
 	}
-	if applied.Jev.Engine != "ort" {
-		t.Fatalf("engine = %q", applied.Jev.Engine)
-	}
-	if applied.Jev.ORTLib != `C:\ort\onnxruntime.dll` {
-		t.Fatalf("ort_lib = %q", applied.Jev.ORTLib)
-	}
-	if !applied.ORT.GPU || applied.ORT.CudaDeviceID != 1 {
-		t.Fatalf("ort = %+v", applied.ORT)
-	}
-	if !strings.Contains(filepath.ToSlash(applied.Jev.ModelDir), "/models/open-jev-deberta-v3-large") {
-		t.Fatalf("model_dir = %q", applied.Jev.ModelDir)
+	if applied.Jev.DType != "" || applied.Jev.ORTLib != "" || applied.Jev.ModelDir != "" {
+		t.Fatalf("legacy ONNX settings survived: %+v", applied.Jev)
 	}
 }
 
@@ -234,22 +225,8 @@ func TestSettingsExposeORT(t *testing.T) {
 	_, url, _ := settingsServer(t, cfg)
 
 	body := decodeSettings(t, url)
-	ort, ok := body["ort"].(map[string]any)
-	if !ok {
-		t.Fatalf("ort = %#v", body["ort"])
-	}
-	if ort["gpu"] != true {
-		t.Fatalf("ort.gpu = %v", ort["gpu"])
-	}
-	if ort["cuda_device_id"] != float64(2) {
-		t.Fatalf("ort.cuda_device_id = %v", ort["cuda_device_id"])
-	}
-	jev, ok := body["jev"].(map[string]any)
-	if !ok {
-		t.Fatalf("jev = %#v", body["jev"])
-	}
-	if jev["ort_lib"] != `C:\ort\onnxruntime.dll` {
-		t.Fatalf("jev.ort_lib = %v", jev["ort_lib"])
+	if _, ok := body["ort"]; ok {
+		t.Fatal("obsolete ORT block exposed")
 	}
 }
 
@@ -433,7 +410,7 @@ func TestPostSettingsAppliesEmbeddingAPIAndLocal(t *testing.T) {
 	if applied.Memory.Embedding.Type != config.EmbeddingBackendGGUF {
 		t.Fatalf("type = %q", applied.Memory.Embedding.Type)
 	}
-	if applied.Memory.Embedding.Model != "embeddinggemma-300m" {
+	if applied.Memory.Embedding.Model != "embeddinggemma-300m_Q4_k_m.gguf" {
 		t.Fatalf("model = %q", applied.Memory.Embedding.Model)
 	}
 	if applied.Memory.Embedding.GPULayers != -1 {

@@ -10,10 +10,10 @@ solcode reads JSON config (usually `settings.json` / `settings.local.json`).
 | [`settings.responses.example.json`](settings.responses.example.json) | OpenAI Responses (`/v1/responses`); replace `YOUR_RESPONSES_MODEL` with your provider's model ID |
 | [`settings.multimodel.example.json`](settings.multimodel.example.json) | Multiple models / second provider (proxy) |
 | [`settings.full.example.json`](settings.full.example.json) | Models + skills + MCP stub + hooks + memory + hosted Jev (`type=api`) |
-| [`settings.jev.local.example.json`](settings.jev.local.example.json) | Local OpenJev/Laya ONNX (`type=local`; empty `engine` defaults to `ort`) — merge into your settings |
+| [`settings.jev.local.example.json`](settings.jev.local.example.json) | Local Kev GGUF (GPU only, filename under ~/.solcode/models) — merge into your settings |
 | [`settings.embedding.example.json`](settings.embedding.example.json) | Vector embeddings API (`type=api` OpenAI-compatible) |
 | [`settings.embedding.local.example.json`](settings.embedding.local.example.json) | Local ONNX (`type=local` EmbeddingGemma; index under `ProjectStateDir/embeddings`, models fall back to `~/.solcode/embeddings`) |
-| [`settings.ort.gpu.example.json`](settings.ort.gpu.example.json) | Shared `ort.gpu=true` (CUDA) for local Jev + local embeddings; install a GPU ORT build yourself (see root README) |
+| [`settings.ort.gpu.example.json`](settings.ort.gpu.example.json) | Legacy filename retained: now a GPU-only GGUF Jev + embedding example (no ORT) |
 | [`settings.memory.organizer.example.json`](settings.memory.organizer.example.json) | Local memory organizer: in-process `llama.cpp` (GGUF) via `yzma`. Needs a GGUF model you supply plus the llama.cpp shared library; download the library from the Web UI or with `yzma install` |
 
 Also: repo-root [`../config.multimodel.json`](../config.multimodel.json) is a short multimodel sample (legacy path).
@@ -58,9 +58,8 @@ Switch at runtime: `/model`, `/provider`, `/effort`.
 - **hooks.events** — `UserPromptSubmit` / `PreToolUse` / `PostToolUse` / … (see [`../hooks/`](../hooks/))
 - **mcp_servers** — stdio or HTTP MCP tools (`/mcp` to toggle)
 - **lsp** — language servers for the `LSP` tool (`enabled`, `include_defaults`, `servers[]` with `language` / `extensions` / `command`). Defaults auto-detect `gopls`, `pyright-langserver`, etc. when on `PATH`. See root [README LSP section](../../README.md#lsp-language-server-protocol) and [`settings.full.example.json`](settings.full.example.json).
-- **jev** — TypeSafe System One decision layer (`type=api` hosted, or `type=local` OpenJev/Laya ONNX; local defaults to `engine=ort`, loaded asynchronously). See root [README Jev section](../../README.md#jev-decision-layer-optional) and [`settings.jev.local.example.json`](settings.jev.local.example.json).
+- **jev** — TypeSafe System One decision layer (`type=api` hosted, or `type=local` Kev GGUF; local runs in-process on GPU, filename under ~/.solcode/models). See root [README Jev section](../../README.md#jev-decision-layer-optional) and [`settings.jev.local.example.json`](settings.jev.local.example.json).
 - **embedding** — Optional vector embeddings for semantic search (`type=api` OpenAI-compatible, or `type=local` ONNX). Project index lives beside `knowledge.db`; shared model weights use `~/.solcode/embeddings`. See [`settings.embedding.example.json`](settings.embedding.example.json).
-- **ort** — Shared ONNX Runtime for local Jev and local embeddings. Default CPU; `gpu=true` enables CUDA (manual GPU ORT package). Library path: `jev.ort_lib` or `~/.solcode/lib`. See root [Local ORT GPU](../../README.md#local-ort-gpu-optional) and [`settings.ort.gpu.example.json`](settings.ort.gpu.example.json).
 - **memory.organizer** — Optional **fully local** GGUF model intended to summarize sessions and extract durable memory, running in-process through `llama.cpp` (via `yzma`, purego FFI — no CGO, no external server, no remote fallback). Off by default. Supply your own GGUF and get the llama.cpp shared library from the Web UI (*Settings → Memory Organizer*) or with `yzma install --processor cpu`. **Partially wired:** config, settings card, and library download work today; the loader and summarize/extract pipeline are built and tested but not yet invoked by the agent. See root [Memory organizer](../../README.md#memory-organizer-optional) and [`settings.memory.organizer.example.json`](settings.memory.organizer.example.json).
 
 Hook `command` strings run via the host shell (`bash -c` / `cmd /c`) with **cwd = agent workdir**, so relative paths like `node examples/hooks/...` work when you start solcode from the repo root. For installed binaries, use absolute paths or copy scripts into `~/.solcode/hooks/`.

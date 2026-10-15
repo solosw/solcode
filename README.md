@@ -332,13 +332,8 @@ Off by default.
   "memory": {
     "organizer": {
       "enabled": true,
-      "runtime": "yzma",
-      "model_path": "~/.solcode/models/qwen2.5-3b-instruct-q4_k_m.gguf",
-      "lib_dir": "",
-      "processor": "cpu",
+      "model": "Qwen3.5-0.8B-BF16.gguf",
       "context_size": 8192,
-      "threads": 0,
-      "gpu_layers": 0,
       "max_output_tokens": 1500,
       "temperature": 0.2,
       "timeout_sec": 180
@@ -350,13 +345,8 @@ Off by default.
 | Field | Meaning |
 |---|---|
 | `enabled` | Turns the organizer on. |
-| `runtime` | Local backend. Only `yzma` (in-process llama.cpp) is implemented. |
-| `model_path` | The GGUF file to load. Required when `enabled`. |
-| `lib_dir` | llama.cpp shared-library directory. Empty falls back to `YZMA_LIB`, then `~/.solcode/lib/llama`. |
-| `processor` | Which build to fetch when downloading: `cpu`, `cuda`, `metal`, `vulkan`. |
-| `context_size` | Context window in tokens (default 8192). Bounds how much transcript fits. |
-| `threads` | Inference threads. `0` lets llama.cpp decide. |
-| `gpu_layers` | Layers offloaded to the GPU. `0` = CPU only, `-1` = all. |
+| `model` | GGUF filename in ~/.solcode/models; required when enabled. |
+| `context_size` | Context window in tokens (default 16384). Bounds how much transcript fits. |
 | `max_output_tokens` | Completion cap for one organizer run. |
 | `temperature` | Sampling temperature. `0` selects greedy decoding. |
 | `timeout_sec` | Per-request deadline (default 180, max 900). |
@@ -368,7 +358,7 @@ See also [`examples/settings/settings.memory.organizer.example.json`](examples/s
 Two ways — both need no compiler and no CGO.
 
 *From the Web UI* — open `/workflow-ui` → **Settings** → *Memory Organizer (local
-model)*, pick a `Processor`, and press **Download llama.cpp library**. The
+model)* and press **Download llama.cpp library**. The
 settings card shows whether the model file and the library were found on disk,
 and the download runs in the background with a progress bar. Leave the page if
 you like; reopening it resumes showing the install state.
@@ -378,12 +368,12 @@ version:
 
 ```bash
 go install github.com/hybridgroup/yzma/cmd/yzma@latest
-yzma install --processor cpu          # cpu | cuda | metal | vulkan
+yzma install --processor metal        # macOS; use cuda on Windows/Linux
 yzma install -l /path/to/libs         # equivalent to YZMA_LIB
 ```
 
 **The library and the yzma version must match.** Letting `yzma install` (or the
-Web UI button) choose the build is the reliable path; pointing `lib_dir` at a
+Web UI button) choose the build is the reliable path; pointing `YZMA_LIB` at a
 random `llama.cpp` build may fail to bind. The settings card reports the
 installed build when the record is present.
 
@@ -396,62 +386,62 @@ binding.
 
 ```
 ~/.solcode/lib/llama/     # llama.cpp shared library (+ yzma-install.json record)
-~/.solcode/models/        # your GGUF model files (put them wherever you like)
+~/.solcode/models/        # all local GGUF model files (filenames in settings)
 ```
 
-Env overrides: `YZMA_LIB` for the library directory. The model path is expanded
-from `~` and environment variables.
+Env override: YZMA_LIB for the library directory. Model files always resolve under
+~/.solcode/models. GPU is required; native failures never retry on CPU.
 
 **Notes**
 
 - Loading a multi-gigabyte GGUF takes seconds to tens of seconds. The loader is
   written to run on a background goroutine so startup is never blocked, and to
   report itself unavailable until ready.
-- `gpu_layers` needs a GPU-capable build. Fetch one with
-  `processor=cuda|vulkan|metal`; the CPU build ignores the setting.
+- The UI automatically selects Metal on macOS and CUDA on Windows/Linux.
+  No CPU/GPU selector or automatic CPU retry is available.
 - The organizer validates its own output: candidates with an unknown kind or
   tier, or containing secrets, are discarded rather than kept.
 
-### Local ORT GPU (optional)
+### Local Jev GGUF (GPU only)
 
-Local Jev (`jev.type=local`, `engine=ort`) and local embeddings (`embedding.type=local`)
-share one ONNX Runtime. **Default is CPU.** Auto-install only downloads the CPU
-package into `~/.solcode/lib`.
+Local Jev uses Kev's trained decision head through the same in-process
+llama.cpp shared library as embedding and organizer. No server or HTTP bridge
+is started. It renders Kev's training layout, reads option-end and final
+pointer vectors, computes scaled dot products, and applies the calibration
+temperature stored in the GGUF. No text tokens are generated.
 
-To use NVIDIA CUDA:
-
-1. Install a CUDA toolkit / driver stack that matches the ORT GPU build you download
-   (see [CUDA Execution Provider](https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html)).
-2. Download the **GPU** ORT archive for the same version as `DefaultORTVersion` in
-   `internal/jevlocal/ort_install.go` from
-   [microsoft/onnxruntime releases](https://github.com/microsoft/onnxruntime/releases)
-   (asset names look like `onnxruntime-win-x64-gpu-<ver>.zip` or
-   `onnxruntime-linux-x64-gpu-<ver>.tgz` — not the CPU zip/tgz).
-3. Extract into `~/.solcode/lib` (or point `jev.ort_lib` at the primary library):
-   - Windows: `onnxruntime.dll` plus `onnxruntime_providers_shared.dll` and
-     `onnxruntime_providers_cuda.dll` (and any CUDA deps shipped beside them)
-   - Linux: versioned `libonnxruntime.so.<ver>` plus `libonnxruntime_providers_shared.so`
-     and `libonnxruntime_providers_cuda.so`
-4. Enable the shared switch (applies to both local Jev and local embeddings):
+All local models use filenames under **~/.solcode/models**:
 
 ```json
 {
-  "ort": {
-    "gpu": true,
-    "cuda_device_id": 0
-  },
-  "jev": {
-    "ort_lib": ""
+  "jev": {"enabled": true, "type": "local", "model": "Kev-4B-Q8_0.gguf", "routing": true},
+  "memory": {
+    "embedding": {"enabled": true, "type": "gguf", "model": "embeddinggemma-2-BF16.gguf"},
+    "organizer": {"enabled": true, "model": "Qwen3.5-0.8B-BF16.gguf"}
   }
 }
 ```
 
-Library path resolution: `jev.ort_lib` if set, otherwise `~/.solcode/lib`.
-Leaving `ort.gpu` false (or omitted) keeps CPU. GPU builds are **not**
-auto-downloaded; if CUDA EP fails to attach, check that the shared library is a
-GPU package and that `providers_cuda` sits next to it.
+GPU offload is mandatory for all three models. Missing GPU support, allocation
+failure, or a missing library produces an unavailable feature / deterministic
+Jev decision fallback, **not CPU inference**. Models load lazily and unload after
+idle time; they share a native runtime lock and GPU ownership.
 
-See also [`examples/settings/settings.ort.gpu.example.json`](examples/settings/settings.ort.gpu.example.json).
+This backend currently supports **Kev pointer-head GGUFs**, not arbitrary chat,
+OpenJev label-readout, or Laya GGUFs. The library must support Kev's classifier
+projection (llama.cpp decision-model support). Context is capped at 4096 tokens;
+overlong requests fail rather than silently dropping decision options.
+
+**Library compatibility:** an older llama.cpp build may not recognize the newer
+`gemma-embedding2` architecture (including embeddinggemma-2-BF16.gguf). Such
+a model remains unavailable until a matching runtime is installed; there is no CPU
+or API fallback.
+
+Old ONNX controls (model_dir, dtype, engine=ort, ort_lib, ort.gpu) are obsolete
+and removed on settings save. Existing organizer/embedding model_path values
+migrate to filenames; move the corresponding weights to ~/.solcode/models if
+necessary. ONNX weights are not converted automatically. Legacy ONNX adapter
+code remains for existing low-level tests but is no longer wired into the app.
 
 ### Context and tool-result handling
 
@@ -1054,12 +1044,7 @@ solcode/
 ├── api_tests/                 # API-level integration tests
 └── unit_tests/                # Unit tests
 ```
-## Jev model
-- modelscope.cn/models/onnx-community/open-jev-deberta-v3-large-ONNX
-- huggingface.co/tozp/laya-onnx/tree/main
+## Local model files
 
-## Embedded
-https://huggingface.co/onnx-community/embeddinggemma-300m-ONNX
-## License
-
-MIT
+Place Kev, EmbeddingGemma, and the organizer's GGUF files in ~/.solcode/models.
+See the local GGUF configuration above; ONNX artifacts are not used by the app.

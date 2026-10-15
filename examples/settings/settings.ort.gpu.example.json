@@ -1,26 +1,17 @@
 {
-  "ort": {
-    "gpu": true,
-    "cuda_device_id": 0
-  },
   "jev": {
     "enabled": true,
     "type": "local",
-    "model": "laya-onnx",
-    "model_dir": "~/.solcode/models/laya-onnx",
-    "dtype": "q4",
-    "engine": "ort",
-    "ort_lib": "",
-    "timeout_sec": 20,
+    "model": "Kev-4B-Q8_0.gguf",
     "routing": true,
     "memory_judge": true,
     "guardrail": true
   },
-  "embedding": {
-    "enabled": true,
-    "type": "local",
-    "model": "embeddinggemma-300m",
-    "timeout_sec": 60,
-    "dimensions": 0
+  "memory": {
+    "embedding": {
+      "enabled": true,
+      "type": "gguf",
+      "model": "embeddinggemma-2-BF16.gguf"
+    }
   }
 }

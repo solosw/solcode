@@ -327,8 +327,8 @@ type settingsResponse struct {
 	ComputerUse computerUseSettings `json:"computer_use"`
 	// Jev configures the TypeSafe System One decision layer.
 	Jev jevSettings `json:"jev"`
-	// ORT is shared ONNX Runtime settings for local Jev only.
-	ORT ortSettings `json:"ort"`
+	// ORT is retained only for source compatibility; it is not exposed.
+	ORT ortSettings `json:"-"`
 	// Embedding configures optional vector embeddings (memory.embedding).
 	Embedding embeddingSettings `json:"embedding"`
 	// MemoryOrganizer configures the fully local memory-organizer model.
@@ -351,7 +351,7 @@ type ortSettings struct {
 //
 // APIKeySet reports whether a key is resolvable without ever sending the key
 // itself to the browser; APIKeyEnv lets the UI show which env var supplies it.
-// Type is "api" (hosted) or "local" (OpenJev/Laya ONNX).
+// Type is "api" (hosted) or "local" (Kev GGUF).
 type jevSettings struct {
 	Enabled            bool    `json:"enabled"`
 	Type               string  `json:"type"`
@@ -359,10 +359,10 @@ type jevSettings struct {
 	APIKeyEnv          string  `json:"api_key_env"`
 	APIKeySet          bool    `json:"api_key_set"`
 	Model              string  `json:"model"`
-	ModelDir           string  `json:"model_dir"`
-	DType              string  `json:"dtype"`
-	Engine             string  `json:"engine"`
-	ORTLib             string  `json:"ort_lib"`
+	ModelDir           string  `json:"-"`
+	DType              string  `json:"-"`
+	Engine             string  `json:"-"`
+	ORTLib             string  `json:"-"`
 	TimeoutSec         int     `json:"timeout_sec"`
 	RouteMinConfidence float64 `json:"route_min_confidence"`
 	Routing            bool    `json:"routing"`
@@ -399,6 +399,7 @@ type embeddingSettings struct {
 // LibraryPresent are probed server-side so the browser can show whether the
 // configured paths actually resolve without exposing filesystem details.
 type memoryOrganizerSettings struct {
+	Model     string `json:"model"`
 	Enabled   bool   `json:"enabled"`
 	Runtime   string `json:"runtime"`
 	ModelPath string `json:"model_path"`
@@ -536,11 +537,10 @@ func (s *Server) handleMemoryOrganizerLibrary(w http.ResponseWriter, r *http.Req
 		}
 		var req memoryOrganizerLibraryRequest
 		if r.Body != nil {
-			// An empty body is valid: the processor then falls back to the
-			// configured value.
+			// Legacy request bodies are accepted, but hardware is platform-selected.
 			_ = json.NewDecoder(r.Body).Decode(&req)
 		}
-		if err := s.cfg.MemoryOrganizerLibraryInstall(strings.TrimSpace(req.Processor)); err != nil {
+		if err := s.cfg.MemoryOrganizerLibraryInstall(config.GPUProcessor()); err != nil {
 			// A concurrent install is a conflict, not a bad request.
 			status := http.StatusBadRequest
 			if strings.Contains(err.Error(), "already running") {
@@ -604,6 +604,7 @@ func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg := s.cfg.Settings()
+	cfg.NormalizeLocalModels()
 	resp := settingsResponse{
 		Provider:   cfg.Provider,
 		Model:      settingsModelName(cfg),
@@ -682,6 +683,7 @@ func buildMemoryOrganizerSettings(cfg config.Config) memoryOrganizerSettings {
 	return memoryOrganizerSettings{
 		Enabled:         org.Enabled,
 		Runtime:         cfg.OrganizerType(),
+		Model:           org.Model,
 		ModelPath:       org.ModelPath,
 		LibDir:          org.LibDir,
 		Processor:       org.Processor,
@@ -821,18 +823,19 @@ type settingsUpdate struct {
 
 	// Memory organizer fields. Absent fields leave the current value untouched,
 	// so a partial update cannot silently reset the local model configuration.
-	MemoryOrganizerEnabled   *bool    `json:"memory_organizer_enabled,omitempty"`
-	MemoryOrganizerRuntime   *string  `json:"memory_organizer_runtime,omitempty"`
-	MemoryOrganizerModelPath *string  `json:"memory_organizer_model_path,omitempty"`
-	MemoryOrganizerLibDir    *string  `json:"memory_organizer_lib_dir,omitempty"`
-	MemoryOrganizerProcessor *string  `json:"memory_organizer_processor,omitempty"`
-	MemoryOrganizerContext   *int     `json:"memory_organizer_context_size,omitempty"`
-	MemoryOrganizerThreads   *int     `json:"memory_organizer_threads,omitempty"`
-	MemoryOrganizerGPULayers *int     `json:"memory_organizer_gpu_layers,omitempty"`
-	MemoryOrganizerMaxOut    *int     `json:"memory_organizer_max_output_tokens,omitempty"`
-	MemoryOrganizerTemp         *float64 `json:"memory_organizer_temperature,omitempty"`
-	MemoryOrganizerTimeout      *int     `json:"memory_organizer_timeout_sec,omitempty"`
-	MemoryOrganizerIdleUnload   *int     `json:"memory_organizer_idle_unload_sec,omitempty"`
+	MemoryOrganizerEnabled    *bool    `json:"memory_organizer_enabled,omitempty"`
+	MemoryOrganizerRuntime    *string  `json:"memory_organizer_runtime,omitempty"`
+	MemoryOrganizerModel      *string  `json:"memory_organizer_model,omitempty"`
+	MemoryOrganizerModelPath  *string  `json:"memory_organizer_model_path,omitempty"`
+	MemoryOrganizerLibDir     *string  `json:"memory_organizer_lib_dir,omitempty"`
+	MemoryOrganizerProcessor  *string  `json:"memory_organizer_processor,omitempty"`
+	MemoryOrganizerContext    *int     `json:"memory_organizer_context_size,omitempty"`
+	MemoryOrganizerThreads    *int     `json:"memory_organizer_threads,omitempty"`
+	MemoryOrganizerGPULayers  *int     `json:"memory_organizer_gpu_layers,omitempty"`
+	MemoryOrganizerMaxOut     *int     `json:"memory_organizer_max_output_tokens,omitempty"`
+	MemoryOrganizerTemp       *float64 `json:"memory_organizer_temperature,omitempty"`
+	MemoryOrganizerTimeout    *int     `json:"memory_organizer_timeout_sec,omitempty"`
+	MemoryOrganizerIdleUnload *int     `json:"memory_organizer_idle_unload_sec,omitempty"`
 }
 
 func (s *Server) postSettings(w http.ResponseWriter, r *http.Request) {
@@ -902,6 +905,7 @@ func (s *Server) postSettings(w http.ResponseWriter, r *http.Request) {
 	// Calling Normalize on the partial copy would fail when the provider/model
 	// configuration is in an intermediate state (e.g. a new provider with no
 	// models yet), blocking legitimate saves.
+	next.NormalizeLocalModels()
 	if err := s.cfg.ApplySettings(next); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -1011,6 +1015,7 @@ func applyEmbeddingSettings(cfg *config.Config, req settingsUpdate) {
 	}
 	if req.EmbeddingModel != nil {
 		cfg.Memory.Embedding.Model = strings.TrimSpace(*req.EmbeddingModel)
+		cfg.Memory.Embedding.ModelPath = ""
 	}
 	if req.EmbeddingModelPath != nil {
 		cfg.Memory.Embedding.ModelPath = strings.TrimSpace(*req.EmbeddingModelPath)
@@ -1055,7 +1060,11 @@ func applyMemoryOrganizerSettings(cfg *config.Config, req settingsUpdate) {
 	if req.MemoryOrganizerRuntime != nil {
 		org.Runtime = strings.ToLower(strings.TrimSpace(*req.MemoryOrganizerRuntime))
 	}
-	if req.MemoryOrganizerModelPath != nil {
+	if req.MemoryOrganizerModel != nil {
+		org.Model = strings.TrimSpace(*req.MemoryOrganizerModel)
+		org.ModelPath = ""
+	} else if req.MemoryOrganizerModelPath != nil {
+		org.Model = ""
 		org.ModelPath = strings.TrimSpace(*req.MemoryOrganizerModelPath)
 	}
 	if req.MemoryOrganizerLibDir != nil {

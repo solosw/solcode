@@ -3,8 +3,6 @@ package embedding
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -53,16 +51,13 @@ type ggufProvider struct {
 }
 
 func newGGUFProvider(opts Options) (*ggufProvider, error) {
-	cfg := opts.Config
-	modelPath := strings.TrimSpace(cfg.ModelPath)
+	c := config.Config{}
+	c.Memory.Embedding = opts.Config
+	c.NormalizeLocalModels()
+	cfg := c.Memory.Embedding
+	modelPath := cfg.ModelPath
 	if modelPath == "" {
-		modelPath = strings.TrimSpace(opts.ModelDir)
-	}
-	if modelPath == "" {
-		modelPath = resolveDefaultGGUFPath(cfg.Model)
-	}
-	if modelPath == "" {
-		return nil, fmt.Errorf("embedding gguf: model_path is required")
+		return nil, fmt.Errorf("embedding gguf: model filename is required")
 	}
 	if !yzma.ModelPresent(modelPath) {
 		return nil, fmt.Errorf("embedding gguf: model not found at %s", modelPath)
@@ -90,7 +85,7 @@ func newGGUFProvider(opts Options) (*ggufProvider, error) {
 		libDir:     libDir,
 		dimensions: cfg.Dimensions,
 		threads:    cfg.Threads,
-		gpuLayers:  cfg.GPULayers,
+		gpuLayers:  -1,
 		contextSz:  ctxSz,
 		queryPref:  defaultQueryPrefix,
 		docPref:    defaultDocPrefix,
@@ -99,24 +94,10 @@ func newGGUFProvider(opts Options) (*ggufProvider, error) {
 }
 
 func resolveDefaultGGUFPath(modelID string) string {
-	shared := config.SharedEmbeddingModelDir()
-	candidates := []string{
-		filepath.Join(shared, "embeddinggemma-300m_Q4_k_m.gguf"),
-		filepath.Join(shared, modelID+".gguf"),
-		filepath.Join(shared, modelID+"_Q4_k_m.gguf"),
+	if strings.TrimSpace(modelID) == "" {
+		modelID = "embeddinggemma-2-BF16.gguf"
 	}
-	if modelID == "" {
-		modelID = "embeddinggemma-300m"
-		candidates = append([]string{
-			filepath.Join(shared, "embeddinggemma-300m_Q4_k_m.gguf"),
-		}, candidates...)
-	}
-	for _, path := range candidates {
-		if info, err := os.Stat(path); err == nil && !info.IsDir() {
-			return path
-		}
-	}
-	return ""
+	return config.LocalModelPath(modelID)
 }
 
 func (p *ggufProvider) ensureLoaded() {
@@ -206,37 +187,23 @@ func (p *ggufProvider) ensureLoaded() {
 	})
 }
 
-// loadEmbeddingModel tries GPU first when gpuLayers != 0, then falls back to CPU.
+// loadEmbeddingModel requires GPU; allocation failure is never retried on CPU.
 func loadEmbeddingModel(modelPath string, gpuLayers, contextSz, threads int) (llama.Model, llama.Context, bool, error) {
-	tryGPU := gpuLayers != 0
-	model, modelCtx, err := initEmbeddingHandles(modelPath, tryGPU, gpuLayers, contextSz, threads)
-	if err == nil {
-		return model, modelCtx, tryGPU, nil
+	if !llama.SupportsGpuOffload() {
+		return 0, 0, false, fmt.Errorf("embedding gguf: GPU required but unavailable")
 	}
-	if !tryGPU {
-		return 0, 0, false, err
-	}
-	yzma.LogNativeErr("embed_gpu_fail_fallback_cpu", err, map[string]any{"model_path": modelPath})
-	model, modelCtx, err = initEmbeddingHandles(modelPath, false, 0, contextSz, threads)
-	if err != nil {
-		return 0, 0, false, err
-	}
-	yzma.LogNative("embed_cpu_fallback_ok", map[string]any{"model_path": modelPath})
-	return model, modelCtx, false, nil
+	model, modelCtx, err := initEmbeddingHandles(modelPath, contextSz, threads)
+	return model, modelCtx, err == nil, err
 }
 
-func initEmbeddingHandles(modelPath string, useGPU bool, gpuLayers, contextSz, threads int) (llama.Model, llama.Context, error) {
+func initEmbeddingHandles(modelPath string, contextSz, threads int) (llama.Model, llama.Context, error) {
 	modelParams := llama.ModelDefaultParams()
 	modelParams.LoadMode = llama.LoadModeMmap
 	modelParams.LazyMode = llama.LazyModeOn
-	if !useGPU {
-		modelParams.SetCPUOnly()
-	} else {
-		modelParams.NGpuLayers = int32(gpuLayers)
-	}
+	modelParams.NGpuLayers = -1
 	model, err := llama.ModelLoadFromFile(modelPath, modelParams)
 	if err != nil {
-		yzma.LogNativeErr("embed_load_model", err, map[string]any{"model_path": modelPath, "gpu": useGPU})
+		yzma.LogNativeErr("embed_load_model", err, map[string]any{"model_path": modelPath, "gpu": true})
 		return 0, 0, fmt.Errorf("embedding gguf: load %s: %w", modelPath, err)
 	}
 	ctxParams := llama.ContextDefaultParams()
@@ -250,17 +217,16 @@ func initEmbeddingHandles(modelPath string, useGPU bool, gpuLayers, contextSz, t
 	ctxParams.Embeddings = 1
 	ctxParams.PoolingType = llama.PoolingTypeMean
 	ctxParams.TypeK = llama.GGMLTypeQ8_0
-	ctxParams.TypeV = llama.GGMLTypeQ8_0
-	if useGPU {
-		ctxParams.FlashAttentionType = llama.FlashAttentionTypeDisabled
-	}
+	// Quantized V requires flash attention, which is disabled on GPU.
+	ctxParams.TypeV = llama.GGMLTypeF16
+	ctxParams.FlashAttentionType = llama.FlashAttentionTypeDisabled
 	if threads > 0 {
 		ctxParams.NThreads = int32(threads)
 		ctxParams.NThreadsBatch = int32(threads)
 	}
 	modelCtx, err := llama.InitFromModel(model, ctxParams)
 	if err != nil {
-		yzma.LogNativeErr("embed_init_ctx", err, map[string]any{"model_path": modelPath, "gpu": useGPU})
+		yzma.LogNativeErr("embed_init_ctx", err, map[string]any{"model_path": modelPath, "gpu": true})
 		_ = llama.ModelFree(model)
 		return 0, 0, fmt.Errorf("embedding gguf: create context: %w", err)
 	}

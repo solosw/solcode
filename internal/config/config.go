@@ -162,9 +162,7 @@ type Config struct {
 	ComputerUse ComputerUseConfig `json:"computer_use,omitempty"`
 	// Jev configures the TypeSafe System One decision layer. Off by default.
 	Jev JevConfig `json:"jev,omitempty"`
-	// ORT is shared ONNX Runtime settings for local Jev (CUDA EP optional).
-	// Embedding no longer uses ORT; local vectors go through memory.embedding
-	// with llama.cpp / GGUF.
+	// ORT only parses deprecated settings; all app-local inference uses GGUF.
 	ORT ORTConfig `json:"ort,omitempty"`
 	// DeprecatedEmbedding is the legacy top-level embedding block.
 	// Normalize migrates it into Memory.Embedding when the nested field is empty.
@@ -213,11 +211,7 @@ type ComputerUseConfig struct {
 	Enabled bool `json:"enabled,omitempty"`
 }
 
-// ORTConfig is shared ONNX Runtime settings for local Jev only.
-//
-// Default is CPU (gpu=false). Enabling GPU requires a CUDA-capable ORT shared
-// library (not the CPU package auto-installed into ~/.solcode/lib).
-// Shared-library path comes from jev.ort_lib, then ~/.solcode/lib.
+// ORTConfig is retained to parse old settings. The app no longer uses ORT.
 type ORTConfig struct {
 	// GPU enables the CUDA execution provider for local ORT sessions.
 	GPU bool `json:"gpu,omitempty"`
@@ -243,9 +237,9 @@ func DefaultEmbeddingDir(workDir string) string {
 }
 
 // SharedEmbeddingModelDir is the user-level embedding model cache
-// (~/.solcode/embeddings). GGUF backends look here for EmbeddingGemma weights.
+// (~/.solcode/models), shared with Jev and the memory organizer.
 func SharedEmbeddingModelDir() string {
-	return filepath.Join(UserConfigDir(), "embeddings")
+	return ModelsDir()
 }
 
 // EmbeddingConfig configures optional vector embeddings for semantic search.
@@ -268,10 +262,10 @@ type EmbeddingConfig struct {
 	APIKey string `json:"api_key,omitempty"`
 	// APIKeyEnv names an env var holding APIKey (default OPENAI_API_KEY).
 	APIKeyEnv string `json:"api_key_env,omitempty"`
-	// Model is the embedding model id (API model name, or GGUF stem hint).
+	// Model is the API model id or the local GGUF filename in ModelsDir.
 	Model string `json:"model,omitempty"`
-	// ModelPath is the GGUF file for type=gguf. Empty falls back to
-	// ~/.solcode/embeddings/embeddinggemma-300m_Q4_k_m.gguf.
+	// ModelPath is derived from Model under ModelsDir. Legacy paths migrate
+	// to filenames; custom directories are no longer used.
 	ModelPath string `json:"model_path,omitempty"`
 	// LibDir overrides the llama.cpp shared-library directory for gguf.
 	// Empty reuses YZMA_LIB / ~/.solcode/lib/llama (same as organizer).
@@ -280,7 +274,7 @@ type EmbeddingConfig struct {
 	ContextSize int `json:"context_size,omitempty"`
 	// Threads bounds inference threads. Zero lets llama.cpp decide.
 	Threads int `json:"threads,omitempty"`
-	// GPULayers offloads layers to GPU. 0 = CPU; negative = all.
+	// GPULayers is derived as -1 (GPU only); legacy values are ignored.
 	GPULayers int `json:"gpu_layers,omitempty"`
 	// IdleUnloadSec: 0 releases after each Embed (default); negative keeps resident.
 	IdleUnloadSec int `json:"idle_unload_sec,omitempty"`
@@ -301,10 +295,10 @@ type EmbeddingConfig struct {
 // fallback, so leaving it off (the default) changes nothing.
 type JevConfig struct {
 	// Enabled turns on Jev decisions. Activation still depends on Type:
-	// api needs a resolvable APIKey; local needs model + model_dir (Phase 1+).
+	// api needs a resolvable APIKey; local needs a GGUF filename in ModelsDir.
 	Enabled bool `json:"enabled,omitempty"`
 	// Type selects the backend: "api" (hosted TypeSafe, default) or "local"
-	// (embedded ONNX). The two are mutually exclusive.
+	// (in-process GGUF). The two are mutually exclusive.
 	Type string `json:"type,omitempty"`
 	// BaseURL is the API origin (default https://api.typesafe.ai). api only.
 	BaseURL string `json:"base_url,omitempty"`
@@ -315,24 +309,13 @@ type JevConfig struct {
 	// APIKeyEnv names an env var holding APIKey (default TYPESAFE_API_KEY).
 	APIKeyEnv string `json:"api_key_env,omitempty"`
 	// Model selects the System One model id. For api this is e.g. jev-latest;
-	// for local it is a free-form family id such as open-jev-deberta-v3-large.
+	// for local it is a GGUF filename, for example Kev-4B-Q8_0.gguf.
 	Model string `json:"model,omitempty"`
-	// ModelDir is the local artifact root (OpenJev: open_jev_config.json;
-	// Laya: rl_agent_config.json; plus tokenizer + onnx). local only.
-	// Empty falls back to ~/.solcode/models/<model>.
+	// Deprecated ONNX fields are parsed for migration but ignored by the app.
 	ModelDir string `json:"model_dir,omitempty"`
-	// DType selects which ONNX graph under model_dir to load
-	// (e.g. "q4", "q4f16", "fp16", "fp32"). local only; default "q4" for OpenJev.
-	DType string `json:"dtype,omitempty"`
-	// Engine selects the local InferenceEngine implementation.
-	// Empty defaults to "ort" for type=local (ONNX Runtime; auto-downloads the
-	// CPU shared library into ~/.solcode/lib when missing on Win/Linux).
-	// Explicit "stub"/"unimplemented" keeps the unimplemented backend so Ask
-	// falls back. "onnx-go" is reserved.
-	Engine string `json:"engine,omitempty"`
-	// ORTLib is an optional path to onnxruntime.dll / libonnxruntime.so.
-	// Empty with engine=ort installs into ~/.solcode/lib when missing.
-	ORTLib string `json:"ort_lib,omitempty"`
+	DType    string `json:"dtype,omitempty"`
+	Engine   string `json:"engine,omitempty"`
+	ORTLib   string `json:"ort_lib,omitempty"`
 	// TimeoutSec bounds one evaluation (default 20, max 120).
 	TimeoutSec int `json:"timeout_sec,omitempty"`
 	// RouteMinConfidence is the floor below which routing falls back to the
@@ -475,12 +458,14 @@ const DefaultOrganizerRuntime = OrganizerRuntimeYzma
 // there is no fallback to the chat provider. A missing library or model leaves
 // the organizer unavailable instead of routing memory work to a network model.
 type OrganizerConfig struct {
+	// Model is the GGUF filename under ~/.solcode/models.
+	Model string `json:"model,omitempty"`
 	// Enabled turns the local organizer on. It is also the single source of
 	// truth for disabling the model-visible memory write tools.
 	Enabled bool `json:"enabled,omitempty"`
 	// Runtime selects the local inference backend. Empty means "yzma".
 	Runtime string `json:"runtime,omitempty"`
-	// ModelPath is the GGUF file the organizer loads. Required when Enabled.
+	// ModelPath is derived from Model. Legacy paths migrate to filenames.
 	ModelPath string `json:"model_path,omitempty"`
 	// LibDir overrides the llama.cpp shared-library directory.
 	// Empty falls back to YZMA_LIB, then ~/.solcode/lib/llama.
@@ -496,7 +481,7 @@ type OrganizerConfig struct {
 	// Threads bounds inference threads. Zero lets llama.cpp decide.
 	Threads int `json:"threads,omitempty"`
 	// GPULayers is the number of layers offloaded to the GPU.
-	// 0 keeps everything on the CPU; negative offloads all layers.
+	// Derived as -1 (GPU only); legacy values are ignored.
 	GPULayers int `json:"gpu_layers,omitempty"`
 	// MaxOutputTokens caps one generated completion.
 	MaxOutputTokens int `json:"max_output_tokens,omitempty"`
@@ -1247,6 +1232,14 @@ func SaveLocalOverrides(path string, updates map[string]any) error {
 		data[key] = value
 	}
 
+	if _, changed := updates["jev"]; changed {
+		delete(data, "ort")
+		if jev, ok := data["jev"].(map[string]any); ok {
+			for _, key := range []string{"model_dir", "dtype", "engine", "ort_lib"} {
+				delete(jev, key)
+			}
+		}
+	}
 	encoded, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode settings %q: %w", path, err)
@@ -1934,12 +1927,16 @@ func (cfg *Config) normalizeEmbedding() {
 		emb.LibDir = expandPath(emb.LibDir)
 	}
 	if emb.Type == EmbeddingBackendGGUF {
+		if emb.ModelPath != "" && !strings.HasSuffix(strings.ToLower(emb.Model), ".gguf") {
+			emb.Model = legacyModelName(emb.ModelPath)
+		}
 		if emb.Model == "" {
-			emb.Model = "embeddinggemma-300m"
+			emb.Model = "embeddinggemma-2-BF16.gguf"
 		}
-		if emb.ModelPath == "" {
-			emb.ModelPath = filepath.Join(SharedEmbeddingModelDir(), "embeddinggemma-300m_Q4_k_m.gguf")
-		}
+		emb.Model = localModelName(emb.Model)
+		emb.ModelPath = LocalModelPath(emb.Model)
+		emb.LibDir = ""
+		emb.GPULayers = -1
 		if emb.ContextSize <= 0 {
 			emb.ContextSize = 2048
 		}
@@ -1995,14 +1992,13 @@ func (cfg *Config) normalizeOrganizer() {
 	if org.Runtime == "" {
 		org.Runtime = DefaultOrganizerRuntime
 	}
-	org.Processor = strings.ToLower(strings.TrimSpace(org.Processor))
-	switch org.Processor {
-	case "cpu", "cuda", "metal", "vulkan":
-	default:
-		org.Processor = "cpu"
+	org.Processor = GPUProcessor()
+	if org.Model == "" {
+		org.Model = legacyModelName(org.ModelPath)
 	}
-	org.ModelPath = expandPath(org.ModelPath)
-	org.LibDir = expandPath(org.LibDir)
+	org.Model = localModelName(org.Model)
+	org.ModelPath = LocalModelPath(org.Model)
+	org.LibDir = ""
 	// Default / hard-cap 16k. The multi-GB RSS bug was n_batch==n_ctx, not a
 	// large window by itself; yzma keeps n_batch <= 512 regardless.
 	if org.ContextSize <= 0 {
@@ -2014,14 +2010,7 @@ func (cfg *Config) normalizeOrganizer() {
 	if org.Threads < 0 {
 		org.Threads = 0
 	}
-	// processor selects the preferred device. When it is a GPU backend and the
-	// user left gpu_layers at the zero value, offload every layer: a CUDA build
-	// with gpu_layers=0 otherwise stays fully on CPU (SetCPUOnly) and MiniCPM
-	// live runs time out or degrade. Explicit 0 is still available by setting
-	// processor to "cpu". Negative already means "all layers".
-	if org.GPULayers == 0 && org.Processor != "cpu" {
-		org.GPULayers = -1
-	}
+	org.GPULayers = -1
 	// ~800 tokens covers summary + a few XML candidates. Cap at 2048 so MaxOutput
 	// cannot starve the prompt headroom inside a 16k window.
 	if org.MaxOutputTokens <= 0 {
@@ -2128,68 +2117,20 @@ func (c Config) JevType() string {
 	}
 }
 
-// JevEnabled reports whether the System One (Jev) decision layer should be used.
-//
-// api requires enabled=true plus a resolvable api_key.
-// local requires enabled=true, a model id, and a model_dir that looks like an
-// OpenJev or Laya artifact root. Local defaults to engine=ort; an explicit
-// stub engine still lets Ask fail into Decider fallbacks.
+// JevEnabled requires an API key for hosted evaluation or an existing GGUF
+// under ModelsDir for lazy local evaluation. GPU/model failures remain advisory.
 func (c Config) JevEnabled() bool {
 	if !c.Jev.Enabled {
 		return false
 	}
 	switch c.JevType() {
 	case JevBackendLocal:
-		return strings.TrimSpace(c.Jev.Model) != "" && localJevArtifactsPresent(c.Jev.ModelDir, c.Jev.DType)
+		path := LocalModelPath(c.Jev.Model)
+		info, err := os.Stat(path)
+		return path != "" && err == nil && info.Mode().IsRegular()
 	default:
 		return strings.TrimSpace(c.Jev.APIKey) != ""
 	}
-}
-
-// localJevArtifactsPresent mirrors jevlocal.ArtifactsPresent without importing
-// that package (config must stay free of evaluator deps). Keep the checks in
-// sync when OpenJev / Laya layouts change.
-func localJevArtifactsPresent(modelDir, dtype string) bool {
-	dir := strings.TrimSpace(modelDir)
-	if dir == "" {
-		return false
-	}
-	dtype = strings.ToLower(strings.TrimSpace(dtype))
-	switch {
-	case fileExists(filepath.Join(dir, "open_jev_config.json")):
-		if !fileExists(filepath.Join(dir, "tokenizer.json")) && !fileExists(filepath.Join(dir, "spm.model")) {
-			return false
-		}
-		if dtype == "" {
-			dtype = "q4"
-		}
-	case fileExists(filepath.Join(dir, "rl_agent_config.json")):
-		if !fileExists(filepath.Join(dir, "tokenizer.json")) {
-			return false
-		}
-		if dtype == "" {
-			dtype = "fp32"
-		}
-	default:
-		return false
-	}
-	candidates := []string{
-		filepath.Join(dir, "onnx", "model_"+dtype+".onnx"),
-		filepath.Join(dir, "onnx", "model.onnx"),
-		filepath.Join(dir, "model_"+dtype+".onnx"),
-		filepath.Join(dir, "model.onnx"),
-	}
-	for _, path := range candidates {
-		if fileExists(path) {
-			return true
-		}
-	}
-	return false
-}
-
-func fileExists(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && !info.IsDir()
 }
 
 // normalizeORT cleans shared ONNX Runtime settings. GPU stays off by default.
@@ -2249,21 +2190,13 @@ func (cfg *Config) normalizeJev() {
 	}
 	jev.APIKey = strings.TrimSpace(jev.APIKey)
 	jev.BaseURL = strings.TrimRight(strings.TrimSpace(jev.BaseURL), "/")
-	if jev.ModelDir != "" {
-		jev.ModelDir = expandPath(jev.ModelDir)
-	} else if jev.Type == JevBackendLocal && jev.Model != "" {
-		jev.ModelDir = filepath.Join(UserConfigDir(), "models", jev.Model)
-	}
-	if jev.ORTLib != "" {
-		jev.ORTLib = expandPath(jev.ORTLib)
-	}
-	if jev.Type == JevBackendLocal && jev.DType == "" {
-		jev.DType = "q4"
-	}
-	// Local inference defaults to ORT so a model_dir-only config actually runs.
-	// Explicit stub/unimplemented remains an opt-out for dry runs / CI.
-	if jev.Type == JevBackendLocal && jev.Engine == "" {
-		jev.Engine = "ort"
+	if jev.Type == JevBackendLocal {
+		if jev.Model == "" && strings.HasSuffix(strings.ToLower(jev.ModelDir), ".gguf") {
+			jev.Model = legacyModelName(jev.ModelDir)
+		}
+		jev.Model = localModelName(jev.Model)
+		jev.ModelDir, jev.DType, jev.ORTLib = "", "", ""
+		jev.Engine = "gguf"
 	}
 	if jev.TimeoutSec <= 0 {
 		jev.TimeoutSec = 20

@@ -14,11 +14,11 @@ func TestNormalizeOrganizerDefaults(t *testing.T) {
 	if org.Runtime != OrganizerRuntimeYzma {
 		t.Fatalf("runtime = %q, want %q", org.Runtime, OrganizerRuntimeYzma)
 	}
-	if org.Processor != "cpu" {
-		t.Fatalf("processor = %q, want cpu", org.Processor)
+	if org.Processor != GPUProcessor() {
+		t.Fatalf("processor = %q, want platform GPU", org.Processor)
 	}
-	if org.GPULayers != 0 {
-		t.Fatalf("gpu layers = %d, want 0 on cpu", org.GPULayers)
+	if org.GPULayers != -1 {
+		t.Fatalf("gpu layers = %d, want -1 for GPU-only", org.GPULayers)
 	}
 	if org.ContextSize != 16384 {
 		t.Fatalf("context size = %d, want 16384", org.ContextSize)
@@ -44,8 +44,8 @@ func TestNormalizeOrganizerCUDADefaultsAllGPULayers(t *testing.T) {
 	cfg.Memory.Organizer.Processor = "cuda"
 	cfg.Memory.Organizer.GPULayers = 12
 	cfg.Normalize()
-	if cfg.Memory.Organizer.GPULayers != 12 {
-		t.Fatalf("gpu layers = %d, want the explicit 12 to stick", cfg.Memory.Organizer.GPULayers)
+	if cfg.Memory.Organizer.GPULayers != -1 {
+		t.Fatalf("gpu layers = %d, want GPU-only -1 even for a legacy partial-offload value", cfg.Memory.Organizer.GPULayers)
 	}
 }
 
@@ -71,8 +71,8 @@ func TestNormalizeOrganizerBoundsValues(t *testing.T) {
 	if org.TimeoutSec != 900 {
 		t.Fatalf("timeout = %d, want clamped to 900", org.TimeoutSec)
 	}
-	if org.Processor != "cpu" {
-		t.Fatalf("processor = %q, want cpu fallback", org.Processor)
+	if org.Processor != GPUProcessor() {
+		t.Fatalf("processor = %q, want platform GPU", org.Processor)
 	}
 }
 
@@ -110,13 +110,14 @@ func TestOrganizerTypeNormalizesUnknownBackend(t *testing.T) {
 	}
 }
 
-func TestOrganizerLibDirPrecedence(t *testing.T) {
+func TestOrganizerLibDirIgnoresLegacyOverride(t *testing.T) {
+	t.Setenv("YZMA_LIB", "")
 	cfg := Default()
 	cfg.Normalize()
 	custom := filepath.Join(t.TempDir(), "custom-libs")
 	cfg.Memory.Organizer.LibDir = custom
 	cfg.Normalize()
-	if got := cfg.OrganizerLibDir(); got != custom {
+	if got := cfg.OrganizerLibDir(); got != filepath.Join(UserConfigDir(), "lib", "llama") {
 		t.Fatalf("OrganizerLibDir() = %q, want %q", got, custom)
 	}
 }

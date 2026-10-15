@@ -861,3 +861,66 @@ Turn memory: 继续完善ptc
 - memory_ids: mem_21337d602406a50a
 
 Organizer: 用户要求移除工具目录限制，允许任意目录访问。assistant: 已定位代码中的目录访问限制，将工具改为可在任意目录工作，并保留其他权限检查。assistant: [tool use: TodoWrite] {"todos":[{"content":"定位工具目录限制及相关测试","id":"1","priority":"high","status":"in_progress"},{"content":"移除目录限制并更新相关测试和说明","id":"2","priority
+
+## 2026-10-15 16:31:59 · session acp-1792052774500238000-1 · turn 0 · importance 0.50
+- keywords: turn, todolist, organizer, archival, retrieval, terms, routing
+- memory_ids: mem_9b80c570925a0fcd
+
+Organizer: 用户要求使用开源方案（Jev）进行智能模型路由，并询问是否可将每次路由结果存储到数据库以优化后续任务。assistant: 已使用 BatchTool 解析 ACP 协议中的 MCP 并注册为工具，已使用 ReadMemory 读取 Jev 路由配置。assistant: 已使用 BatchTool 读取 Jev 路由配置，已使用 BatchTool 读取 Jev 路由配置，已使用 BatchTool 读取 Jev 路由配置，已使用 BatchTool 读取 Jev 路由配置
+
+## 2026-10-15 20:02:25 · session acp-1792052774500238000-1 · turn 1 · importance 0.40
+- keywords: todolist, todo-write, turn
+- todos: inspect|检查 Jev ONNX 的模型识别、输入输出和推理调用机制|in_progress|valid|open; diagnose|定位通用模型适配的限制并对比可行方案|pending|valid|open; recommend|给出与当前代码对应的改造建议和验证路径|pending|valid|open
+
+Turn memory: 现在调用Jev的机制底层有点不对，现在无法适合任意的ONNX的Jev模型。有什么解决办法
+
+## 2026-10-15 20:09:55 · session acp-1792052774500238000-1 · turn 2 · importance 0.40
+- keywords: todolist, todo-write, turn
+- todos: inspect|检查 Jev ONNX 的模型识别、输入输出和推理调用机制|completed|valid|done; diagnose|定位通用模型适配限制，并核实 llama.cpp / GGUF 的支持情况|in_progress|valid|open; recommend|给出与当前代码对应的改造建议和验证路径|pending|valid|open
+
+Turn memory: 或者是否可以使用gguf格式，但是现在llama好像不支持jev。不知道现在是否支持
+
+## 2026-10-15 20:11:15 · session acp-1792052774500238000-1 · turn 3 · importance 0.40
+- keywords: todolist, todo-write, turn
+
+Turn memory: **明白，你需要的是进程内直接调用 DLL，而不是启动 `llama-server` 再走 HTTP。前面推荐接口的方式不适合你的部署要求。**
+在这个前提下，**ONNX 和 GGUF 两条路都可以考虑，但换成 GGUF 并不能直接解决 Jev 适配问题。**
+
+## 2026-10-15 20:16:34 · session acp-1792052774500238000-1 · turn 4 · importance 0.40
+- keywords: todolist, todo-write, organizer, archival, retrieval, terms, routing, turn
+- memory_ids: mem_9b80c570925a0fcd
+
+Turn memory: **检查结果：本地 llama.cpp 动态库版本过旧，不满足前面讨论的 OpenJev/Laya GGUF 决策模型要求。建议选用 `v0.6.0` 对应的 `b11429`，但不能只替换动态库就认为 Jev 已可用。**
+
+## 2026-10-15 20:29:09 · session acp-1792052774500238000-1 · turn 5 · importance 0.50
+- keywords: todolist, todo-write, turn, organizer, archival, retrieval, terms, routing
+- memory_ids: mem_9b80c570925a0fcd
+
+Organizer: 用户要求使用开源方案进行智能模型路由，并询问是否可将每次路由结果存储到数据库以优化后续任务。assistant: [tool use: BatchTool] {code":"const r = await tools.Grep({pattern:\\\"(?i)router|routing|路由|RouteLLM|semantic.router\\\",path:\\\"internal\\\",include:\\\"*.go\\\"}); console.log(r);"
+
+## 2026-10-15 21:17:02 · session acp-1792052774500238000-1 · turn 6 · importance 0.40
+- keywords: todolist, todo-write, turn
+
+Turn memory: **Jev 的应用本地推理路径已从 ONNX 切换为进程内 GGUF，设置简化也已完成。** 但你下载的 EmbeddingGemma 2 暂时受原生库兼容性限制。
+### 已完成
+- **Jev 接入 Kev 决策头**：直接调用 llama.cpp 动态库，不启动服务、不走 HTTP；读取指针向量及校准温度，返回 `choice / noul / score`，不是用文本生成冒充决策。
+- **统一模型目录**：所有本地模型从 `~/.solcode/models` 加载，设置只填写模型文件名。
+- **固定 GPU 推理**：移除设置页的 CPU/GPU、GPU 层数、ORT、DType、模型目录等选项；GPU 初始化失败不再重试 CPU。
+- **设置整理**：整理模型的调优参数收进“高级设置”；旧路径配置迁移为文件名，保存时清理废弃 ONNX 字段。
+- 修复了整理模型在“禁用 Flash Attention”时使用量化 V 缓存导致的 GPU 初始化失败。
+### 验证结果
+| 模型 | 本机 GPU 实测 |
+|---|---|
+| `Kev-4B-Q8_0.gguf` | 通过短输入、跨批次长输入及 GPU 卸载重载测试；输出 token 为 **0** |
+| `Qwen3.5-0.8B-BF16.gguf` | 通过生成、XML 解析和完整记忆整理测试 |
+| `embeddinggemma-2-BF16.gguf` | **未通过**：当前 llama.cpp 不支持 `gemma-embedding2` 架构 |
+EmbeddingGemma 2 需要支持该架构、且与当前 yzma 绑定兼容的原生库，或更换兼容模型；没有进行 CPU/API 回退。
+构建、相关单元测试、race 检测和设置表单绑定验证均通过。`go test ./...` 仍有失败，相关失败已在未修改的 `HEAD` 基线上复现。
+**使用新构建重启后，Jev 选择 `Local GGUF`，模型填写 `Kev-4B-Q8_0.gguf` 即可。** 没有擅自打开你原本关闭的 Jev 开关。历史 ONNX 适配器代码仍保留供低层测试使用，但应用已不再调用它。
+Sources: [llama.cpp 决策模型与 Kev 支持](https://github.com/ggml-org/llama.cpp/pull/29818)
+
+## 2026-10-15 20:44:54 · session mid-run · turn -1 · importance 0.50
+- keywords: organizer, archival, retrieval, terms, database
+- memory_ids: mem_38658cf5815a026f
+
+Organizer: 用户要求使用开源方案方式使用 Jev 做智能选择模型路由，如果每次路由的结果都存储到数据库，后续针对这一类任务，对开源方案进行优化。用户已下载 GGUF 模型并放到 models 目录，要求简化本地模型设置：默认从 ~/.solcode/models 查找，只填写模型文件名，固定使用 GPU，移除 CPU 选项和自动 CPU 回退。先检查你下载的模型及现有调用、配置和设置页面，再修改并验证。

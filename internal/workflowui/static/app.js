@@ -74,12 +74,6 @@
     setJevModel: document.getElementById("set-jev-model"),
     setJevApiKey: document.getElementById("set-jev-api-key"),
     setJevApiKeyEnv: document.getElementById("set-jev-api-key-env"),
-    setJevModelDir: document.getElementById("set-jev-model-dir"),
-    setJevDType: document.getElementById("set-jev-dtype"),
-    setJevEngine: document.getElementById("set-jev-engine"),
-    setJevOrtLib: document.getElementById("set-jev-ort-lib"),
-    setOrtGpu: document.getElementById("set-ort-gpu"),
-    setOrtCudaDeviceId: document.getElementById("set-ort-cuda-device-id"),
     setJevTimeout: document.getElementById("set-jev-timeout"),
     setJevConfidence: document.getElementById("set-jev-confidence"),
     setJevRouting: document.getElementById("set-jev-routing"),
@@ -103,16 +97,11 @@
 
     memoryOrganizerState: document.getElementById("memory-organizer-state"),
     setMemoryOrganizerEnabled: document.getElementById("set-memory-organizer-enabled"),
-    setMemoryOrganizerRuntime: document.getElementById("set-memory-organizer-runtime"),
-    setMemoryOrganizerProcessor: document.getElementById("set-memory-organizer-processor"),
     setMemoryOrganizerContext: document.getElementById("set-memory-organizer-context"),
-    setMemoryOrganizerThreads: document.getElementById("set-memory-organizer-threads"),
-    setMemoryOrganizerGpuLayers: document.getElementById("set-memory-organizer-gpu-layers"),
     setMemoryOrganizerMaxOutput: document.getElementById("set-memory-organizer-max-output"),
     setMemoryOrganizerTemperature: document.getElementById("set-memory-organizer-temperature"),
     setMemoryOrganizerTimeout: document.getElementById("set-memory-organizer-timeout"),
     setMemoryOrganizerModelPath: document.getElementById("set-memory-organizer-model-path"),
-    setMemoryOrganizerLibDir: document.getElementById("set-memory-organizer-lib-dir"),
     memoryOrganizerProbe: document.getElementById("memory-organizer-probe"),
     btnMemoryOrganizerInstall: document.getElementById("btn-memory-organizer-install"),
     btnMemoryOrganizerCancel: document.getElementById("btn-memory-organizer-cancel"),
@@ -871,18 +860,11 @@
     jev.base_url = el.setJevBaseUrl.value.trim();
     jev.model = el.setJevModel.value.trim();
     jev.api_key_env = el.setJevApiKeyEnv.value.trim();
-    jev.model_dir = el.setJevModelDir.value.trim();
-    jev.dtype = el.setJevDType.value.trim();
-    jev.engine = (el.setJevEngine.value || "ort").trim() || "ort";
-    jev.ort_lib = el.setJevOrtLib.value.trim();
     jev.timeout_sec = numberInput(el.setJevTimeout.value, jev.timeout_sec);
     jev.route_min_confidence = floatInput(el.setJevConfidence.value, jev.route_min_confidence);
     jev.routing = Boolean(el.setJevRouting.checked);
     jev.memory_judge = Boolean(el.setJevMemoryJudge.checked);
     jev.guardrail = Boolean(el.setJevGuardrail.checked);
-    const ort = d.ort || (d.ort = {});
-    ort.gpu = Boolean(el.setOrtGpu.checked);
-    ort.cuda_device_id = numberInput(el.setOrtCudaDeviceId.value, ort.cuda_device_id ?? 0);
     // The key is write-only: an empty field means "keep what is stored", so it
     // is only included in the payload when the user actually typed something.
     const typedKey = el.setJevApiKey.value.trim();
@@ -919,13 +901,8 @@
 
     const org = d.memory_organizer || (d.memory_organizer = {});
     org.enabled = Boolean(el.setMemoryOrganizerEnabled.checked);
-    org.runtime = (el.setMemoryOrganizerRuntime.value || "yzma").trim() || "yzma";
-    org.processor = (el.setMemoryOrganizerProcessor.value || "cpu").trim().toLowerCase() || "cpu";
-    org.model_path = el.setMemoryOrganizerModelPath.value.trim();
-    org.lib_dir = el.setMemoryOrganizerLibDir.value.trim();
+    org.model = el.setMemoryOrganizerModelPath.value.trim();
     org.context_size = numberInput(el.setMemoryOrganizerContext.value, org.context_size);
-    org.threads = numberInput(el.setMemoryOrganizerThreads.value, org.threads);
-    org.gpu_layers = numberInput(el.setMemoryOrganizerGpuLayers.value, org.gpu_layers);
     org.max_output_tokens = numberInput(el.setMemoryOrganizerMaxOutput.value, org.max_output_tokens);
     org.temperature = floatInput(el.setMemoryOrganizerTemperature.value, org.temperature);
     org.timeout_sec = numberInput(el.setMemoryOrganizerTimeout.value, org.timeout_sec);
@@ -933,12 +910,14 @@
 
   function updateJevBackendVisibility(type) {
     const local = String(type || "api").toLowerCase() === "local";
+    el.setJevModel.placeholder = local ? "Kev-4B-Q8_0.gguf" : "jev-latest";
     el.jevApiFields.classList.toggle("hidden", local);
     el.jevLocalFields.classList.toggle("hidden", !local);
   }
 
   function updateEmbeddingBackendVisibility(type) {
-    const local = String(type || "api").toLowerCase() === "local";
+    const local = ["local", "gguf"].includes(String(type || "api").toLowerCase());
+    el.setEmbeddingModel.placeholder = local ? "embeddinggemma-2-BF16.gguf" : "text-embedding-3-small";
     el.embeddingApiFields.classList.toggle("hidden", local);
     el.embeddingLocalFields.classList.toggle("hidden", !local);
   }
@@ -1051,13 +1030,6 @@
     el.setJevBaseUrl.value = jev.base_url || "";
     el.setJevModel.value = jev.model || "";
     el.setJevApiKeyEnv.value = jev.api_key_env || "";
-    el.setJevModelDir.value = jev.model_dir || "";
-    el.setJevDType.value = jev.dtype || "";
-    el.setJevEngine.value = jev.engine || "ort";
-    el.setJevOrtLib.value = jev.ort_lib || "";
-    const ort = d.ort || {};
-    el.setOrtGpu.checked = Boolean(ort.gpu);
-    el.setOrtCudaDeviceId.value = ort.cuda_device_id ?? 0;
     el.setJevTimeout.value = jev.timeout_sec ?? 20;
     el.setJevConfidence.value = jev.route_min_confidence ?? 0.6;
     el.setJevRouting.checked = Boolean(jev.routing);
@@ -1076,7 +1048,7 @@
 
     const emb = d.embedding || {};
     el.setEmbeddingEnabled.checked = Boolean(emb.enabled);
-    el.setEmbeddingType.value = (emb.type || "api").toLowerCase() === "local" ? "local" : "api";
+    el.setEmbeddingType.value = ["gguf", "local"].includes((emb.type || "api").toLowerCase()) ? "gguf" : "api";
     el.setEmbeddingBaseUrl.value = emb.base_url || "";
     el.setEmbeddingModel.value = emb.model || "";
     el.setEmbeddingApiKeyEnv.value = emb.api_key_env || "";
@@ -1094,16 +1066,9 @@
 
     const org = d.memory_organizer || {};
     el.setMemoryOrganizerEnabled.checked = Boolean(org.enabled);
-    el.setMemoryOrganizerRuntime.value = "yzma";
-    el.setMemoryOrganizerProcessor.value = ["cpu", "cuda", "metal", "vulkan"].includes(String(org.processor || "cpu").toLowerCase())
-      ? String(org.processor).toLowerCase()
-      : "cpu";
-    el.setMemoryOrganizerModelPath.value = org.model_path || "";
-    el.setMemoryOrganizerLibDir.value = org.lib_dir || "";
-    el.setMemoryOrganizerContext.value = org.context_size ?? 8192;
-    el.setMemoryOrganizerThreads.value = org.threads ?? 0;
-    el.setMemoryOrganizerGpuLayers.value = org.gpu_layers ?? 0;
-    el.setMemoryOrganizerMaxOutput.value = org.max_output_tokens ?? 1500;
+    el.setMemoryOrganizerModelPath.value = org.model || "";
+    el.setMemoryOrganizerContext.value = org.context_size ?? 16384;
+    el.setMemoryOrganizerMaxOutput.value = org.max_output_tokens ?? 800;
     el.setMemoryOrganizerTemperature.value = org.temperature ?? 0.2;
     el.setMemoryOrganizerTimeout.value = org.timeout_sec ?? 180;
 
@@ -1117,7 +1082,7 @@
   // model file and the llama.cpp library, and has no API fallback.
   function memoryOrganizerStateLabel(org) {
     if (!org.enabled) return "off";
-    if (!(org.model_path || "").trim()) return "needs a model";
+    if (!(org.model || "").trim()) return "needs a model";
     if (!org.model_present) return "model not found";
     if (!org.library_present) return "needs llama.cpp library";
     return "ready";
@@ -1147,7 +1112,6 @@
     const type = String(jev.type || "api").toLowerCase();
     if (type === "local") {
       if (!(jev.model || "").trim()) return "needs a model";
-      if (!(jev.model_dir || "").trim()) return "needs model_dir";
       return "local";
     }
     if (!jev.api_key_set && !(jev.api_key_env || "").trim()) return "needs a key";
@@ -1158,7 +1122,7 @@
     if (!emb.enabled) return "off";
     const type = String(emb.type || "api").toLowerCase();
     if (!(emb.model || "").trim()) return "needs a model";
-    if (type === "local") return "local";
+    if (type === "local" || type === "gguf") return "local";
     if (!emb.api_key_set && !(emb.api_key_env || "").trim()) return "needs a key";
     return "active";
   }
@@ -1199,11 +1163,10 @@
     el.btnMemoryOrganizerInstall.disabled = true;
     setMemoryOrganizerInstallStatus("Starting download…", "");
     try {
-      const processor = (settings.draft?.memory_organizer?.processor || "cpu").trim() || "cpu";
       const status = await api("/api/memory-organizer/library", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ processor }),
+        body: JSON.stringify({}),
       });
       renderMemoryOrganizerInstall(status);
       pollMemoryOrganizerInstall();
@@ -1332,12 +1295,6 @@
       jev_base_url: d.jev?.base_url || "",
       jev_api_key_env: d.jev?.api_key_env || "",
       jev_model: d.jev?.model || "",
-      jev_model_dir: d.jev?.model_dir || "",
-      jev_dtype: d.jev?.dtype || "",
-      jev_engine: d.jev?.engine || "ort",
-      jev_ort_lib: d.jev?.ort_lib || "",
-      ort_gpu: Boolean(d.ort?.gpu),
-      ort_cuda_device_id: d.ort?.cuda_device_id ?? 0,
       jev_timeout_sec: d.jev?.timeout_sec ?? 20,
       jev_route_min_confidence: d.jev?.route_min_confidence ?? 0.6,
       jev_routing: Boolean(d.jev?.routing),
@@ -1351,13 +1308,8 @@
       embedding_timeout_sec: d.embedding?.timeout_sec ?? 30,
       embedding_dimensions: d.embedding?.dimensions ?? 0,
       memory_organizer_enabled: Boolean(d.memory_organizer?.enabled),
-      memory_organizer_runtime: d.memory_organizer?.runtime || "yzma",
-      memory_organizer_model_path: d.memory_organizer?.model_path || "",
-      memory_organizer_lib_dir: d.memory_organizer?.lib_dir || "",
-      memory_organizer_processor: d.memory_organizer?.processor || "cpu",
+      memory_organizer_model: d.memory_organizer?.model || "",
       memory_organizer_context_size: d.memory_organizer?.context_size ?? 8192,
-      memory_organizer_threads: d.memory_organizer?.threads ?? 0,
-      memory_organizer_gpu_layers: d.memory_organizer?.gpu_layers ?? 0,
       memory_organizer_max_output_tokens: d.memory_organizer?.max_output_tokens ?? 1500,
       memory_organizer_temperature: d.memory_organizer?.temperature ?? 0.2,
       memory_organizer_timeout_sec: d.memory_organizer?.timeout_sec ?? 180,
@@ -1605,9 +1557,7 @@
       el.setComputerUse,
       el.setJevEnabled,
       el.setJevType,
-      el.setJevEngine,
       el.setJevApiKey,
-      el.setOrtGpu,
       el.setJevRouting,
       el.setJevMemoryJudge,
       el.setJevGuardrail,
@@ -1615,8 +1565,6 @@
       el.setEmbeddingType,
       el.setEmbeddingApiKey,
       el.setMemoryOrganizerEnabled,
-      el.setMemoryOrganizerRuntime,
-      el.setMemoryOrganizerProcessor,
     ].forEach((input) => {
       input.addEventListener("change", () => {
         syncFeatureSettings(settings.draft || {});
@@ -1630,10 +1578,6 @@
       el.setJevBaseUrl,
       el.setJevModel,
       el.setJevApiKeyEnv,
-      el.setJevModelDir,
-      el.setJevDType,
-      el.setJevOrtLib,
-      el.setOrtCudaDeviceId,
       el.setJevTimeout,
       el.setJevConfidence,
       el.setEmbeddingBaseUrl,
@@ -1642,10 +1586,7 @@
       el.setEmbeddingTimeout,
       el.setEmbeddingDimensions,
       el.setMemoryOrganizerModelPath,
-      el.setMemoryOrganizerLibDir,
       el.setMemoryOrganizerContext,
-      el.setMemoryOrganizerThreads,
-      el.setMemoryOrganizerGpuLayers,
       el.setMemoryOrganizerMaxOutput,
       el.setMemoryOrganizerTemperature,
       el.setMemoryOrganizerTimeout,

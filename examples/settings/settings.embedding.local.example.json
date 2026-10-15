@@ -1,9 +1,9 @@
 {
-  "embedding": {
-    "enabled": true,
-    "type": "local",
-    "model": "embeddinggemma-300m",
-    "timeout_sec": 60,
-    "dimensions": 0
+  "memory": {
+    "embedding": {
+      "enabled": true,
+      "type": "gguf",
+      "model": "embeddinggemma-2-BF16.gguf"
+    }
   }
 }

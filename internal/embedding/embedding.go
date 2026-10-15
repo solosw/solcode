@@ -27,7 +27,7 @@ type DocumentEmbedder interface {
 // Options configures a Provider from EmbeddingConfig.
 type Options struct {
 	Config config.EmbeddingConfig
-	// ModelDir overrides shared/project model discovery for local backends.
+	// ModelDir is deprecated; local models always use config.ModelsDir().
 	ModelDir string
 }
 

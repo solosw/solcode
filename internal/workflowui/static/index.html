@@ -248,15 +248,14 @@
               tool fits, how to classify a memory, whether an action looks unsafe. It
               never writes code and never replaces the chat model. Every decision has a
               fallback, so leaving this off changes nothing. Choose the hosted API or a
-              local OpenJev/Laya ONNX backend.
+              local Kev GGUF decision backend.
             </p>
             <div class="settings-list">
               <label class="settings-row settings-toggle-row">
                 <div class="settings-row-main">
                   <strong>Enable Jev</strong>
                   <div class="settings-row-detail">
-                    API mode needs a resolvable key. Local mode needs a model id and an
-                    on-disk artifact directory. Enabled without those is treated as off.
+                    API mode needs a resolvable key. Local mode needs a GGUF filename in ~/.solcode/models. Enabled without those is treated as off.
                   </div>
                 </div>
                 <input type="checkbox" id="set-jev-enabled" />
@@ -267,11 +266,11 @@
               <label>Backend
                 <select id="set-jev-type">
                   <option value="api">Hosted API</option>
-                  <option value="local">Local ONNX</option>
+                  <option value="local">Local GGUF</option>
                 </select>
               </label>
               <label>Model
-                <input id="set-jev-model" type="text" placeholder="jev-latest or open-jev-…" />
+                <input id="set-jev-model" type="text" placeholder="jev-latest or Kev-4B-Q8_0.gguf" />
               </label>
               <label>Timeout (sec)
                 <input id="set-jev-timeout" type="number" min="1" max="120" step="1" />
@@ -294,35 +293,8 @@
             </div>
 
             <div id="jev-local-fields" class="settings-grid hidden">
-              <label>Model directory
-                <input id="set-jev-model-dir" type="text" placeholder="~/.solcode/models/open-jev-…" />
-              </label>
-              <label>DType
-                <input id="set-jev-dtype" type="text" placeholder="q4" />
-              </label>
-              <label>Engine
-                <select id="set-jev-engine">
-                  <option value="ort">ort (ONNX Runtime)</option>
-                  <option value="stub">stub (Ask falls back)</option>
-                </select>
-              </label>
-              <label>ORT library path
-                <input id="set-jev-ort-lib" type="text" placeholder="Path to onnxruntime.dll / .so (empty = ~/.solcode/lib auto CPU)" />
-              </label>
-              <label class="settings-row settings-toggle-row" style="grid-column: 1 / -1">
-                <div class="settings-row-main">
-                  <strong>ORT GPU (CUDA)</strong>
-                  <div class="settings-row-detail">
-                    Shared by local Jev and local embeddings. Default is CPU; GPU builds are
-                    <em>not</em> auto-downloaded — point the library path at a CUDA ORT package
-                    (with <code>providers_cuda</code> beside the primary DLL/SO).
-                  </div>
-                </div>
-                <input type="checkbox" id="set-ort-gpu" />
-              </label>
-              <label>CUDA device ID
-                <input id="set-ort-cuda-device-id" type="number" min="0" step="1" value="0" />
-              </label>
+              <p class="settings-hint">Kev GGUF · in-process llama.cpp · GPU required, no CPU fallback.
+                Enter the filename above; all local models load from <code>~/.solcode/models</code>.</p>
             </div>
 
             <div class="settings-list">
@@ -368,9 +340,9 @@
             </div>
             <p class="settings-hint">
               Optional vector embeddings for semantic search. Choose an OpenAI-compatible
-              API or a local ONNX model. The project index lives under
+              API or a local GGUF model. The project index lives under
               <code>ProjectStateDir/embeddings</code> (sibling of <code>knowledge.db</code>);
-              shared model weights fall back to <code>~/.solcode/embeddings</code>.
+              all local GGUF files live in <code>~/.solcode/models</code> (GPU only).
               Off by default.
             </p>
             <div class="settings-list">
@@ -390,7 +362,7 @@
               <label>Backend
                 <select id="set-embedding-type">
                   <option value="api">OpenAI-compatible API</option>
-                  <option value="local">Local (ONNX / EmbeddingGemma)</option>
+                  <option value="gguf">Local GGUF (EmbeddingGemma)</option>
                 </select>
               </label>
               <label>Model
@@ -448,31 +420,13 @@
               </label>
             </div>
 
+            <details><summary>Advanced generation settings</summary>
             <div class="settings-grid">
-              <label>Runtime
-                <select id="set-memory-organizer-runtime">
-                  <option value="yzma">yzma (in-process llama.cpp)</option>
-                </select>
-              </label>
-              <label>Processor (for library install)
-                <select id="set-memory-organizer-processor">
-                  <option value="cpu">CPU</option>
-                  <option value="cuda">CUDA</option>
-                  <option value="metal">Metal</option>
-                  <option value="vulkan">Vulkan</option>
-                </select>
-              </label>
               <label>Context size (tokens)
-                <input id="set-memory-organizer-context" type="number" min="512" max="131072" step="512" />
-              </label>
-              <label>Threads (0 = auto)
-                <input id="set-memory-organizer-threads" type="number" min="0" step="1" />
-              </label>
-              <label>GPU layers (0 = CPU only, -1 = all)
-                <input id="set-memory-organizer-gpu-layers" type="number" step="1" />
+                <input id="set-memory-organizer-context" type="number" min="512" max="16384" step="512" />
               </label>
               <label>Max output tokens
-                <input id="set-memory-organizer-max-output" type="number" min="64" max="8192" step="64" />
+                <input id="set-memory-organizer-max-output" type="number" min="64" max="2048" step="64" />
               </label>
               <label>Temperature (0 = greedy)
                 <input id="set-memory-organizer-temperature" type="number" min="0" max="2" step="0.05" />
@@ -482,14 +436,13 @@
               </label>
             </div>
 
+            </details>
             <div class="settings-grid">
-              <label>GGUF model path
-                <input id="set-memory-organizer-model-path" type="text" placeholder="~/.solcode/models/model-q4_k_m.gguf" />
-              </label>
-              <label>llama.cpp library dir (empty = ~/.solcode/lib/llama)
-                <input id="set-memory-organizer-lib-dir" type="text" placeholder="~/.solcode/lib/llama" />
+              <label>GGUF model filename
+                <input id="set-memory-organizer-model-path" type="text" placeholder="Qwen3.5-0.8B-BF16.gguf" />
               </label>
             </div>
+            <p class="settings-hint">Models: <code>~/.solcode/models</code> · GPU only · no CPU fallback.</p>
             <div id="memory-organizer-probe" class="settings-row-detail"></div>
 
             <div class="settings-actions">

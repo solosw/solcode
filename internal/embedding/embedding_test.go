@@ -2,7 +2,6 @@ package embedding
 
 import (
 	"math"
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -29,15 +28,15 @@ func TestTruncateAndNormalize(t *testing.T) {
 }
 
 func TestResolveDefaultGGUFPath(t *testing.T) {
-	shared := config.SharedEmbeddingModelDir()
-	gguf := filepath.Join(shared, "embeddinggemma-300m_Q4_k_m.gguf")
-	if _, err := os.Stat(gguf); err != nil {
-		t.Skip("shared EmbeddingGemma GGUF missing:", err)
+	got := resolveDefaultGGUFPath("embeddinggemma-2-BF16.gguf")
+	want := config.LocalModelPath("embeddinggemma-2-BF16.gguf")
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
 	}
-	got := resolveDefaultGGUFPath("embeddinggemma-300m")
-	if got != gguf {
-		t.Fatalf("got %q want %q", got, gguf)
+	if resolveDefaultGGUFPath("") != want {
+		t.Fatal("wrong default model")
 	}
+
 }
 
 func TestDefaultEmbeddingDirSiblingOfKnowledge(t *testing.T) {

@@ -8,7 +8,6 @@ import (
 	"os"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/solosw/solcode/internal/config"
 	"github.com/solosw/solcode/internal/engine"
@@ -132,59 +131,33 @@ func TestBuildJevWithoutAPIKeyReturnsNil(t *testing.T) {
 	}
 }
 
-// type=local with a real OpenJev model_dir enables the runtime. The inference
-// engine is still a stub, so Ask fails and Decider falls back — but routing
-// toggles and the evaluator seam are live.
-func TestBuildJevLocalUsesOpenJevArtifacts(t *testing.T) {
-	modelDir := os.ExpandEnv(`C:\Users\solosw\.solcode\models\open-jev-deberta-v3-large`)
-	if _, err := os.Stat(modelDir); err != nil {
-		t.Skip("open-jev artifacts not downloaded:", err)
-	}
+// Construction is lazy and selects GGUF even if old ONNX fields are present.
+func TestBuildJevLocalUsesGGUF(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	cfg := config.Default()
-	cfg.Jev = config.JevConfig{
-		Enabled:  true,
-		Type:     config.JevBackendLocal,
-		Model:    "open-jev-deberta-v3-large",
-		ModelDir: modelDir,
-		DType:    "q4",
-		Routing:  true,
-	}
-	if err := cfg.Normalize(); err != nil {
+	cfg.Jev = config.JevConfig{Enabled: true, Type: config.JevBackendLocal, Model: "Kev-test.gguf", Engine: "ort", DType: "q4", Routing: true}
+	path := config.LocalModelPath(cfg.Jev.Model)
+	if err := os.MkdirAll(config.ModelsDir(), 0755); err != nil {
 		t.Fatal(err)
 	}
-	if cfg.JevType() != config.JevBackendLocal {
-		t.Fatalf("JevType = %q", cfg.JevType())
+	if err := os.WriteFile(path, []byte("GGUF"), 0600); err != nil {
+		t.Fatal(err)
 	}
-	if cfg.Jev.Engine != "ort" {
-		t.Fatalf("Engine = %q, want ort default", cfg.Jev.Engine)
+	cfg.NormalizeLocalModels()
+	j, err := buildJev(cfg)
+	if err != nil || j == nil {
+		t.Fatalf("buildJev=%v %v", j, err)
 	}
-	if !cfg.JevEnabled() {
-		t.Fatal("local with artifacts should enable Jev")
+	defer j.Close()
+	if j.router() == nil || !j.decider.Enabled() || cfg.Jev.Engine != "gguf" {
+		t.Fatal("GGUF decision seam not wired")
 	}
-	jev, err := buildJev(cfg)
-	if err != nil {
-		t.Fatalf("buildJev() = %v", err)
-	}
-	if jev == nil {
-		t.Fatal("expected a local jev runtime")
-	}
-	if jev.router() == nil {
-		t.Fatal("routing toggle should enable the router")
-	}
-	// ORT loads asynchronously; wait briefly for Ready before asserting inference.
-	deadline := time.Now().Add(2 * time.Minute)
-	var got string
-	var conf float64
-	for {
-		got, conf = jev.decider.Choose(context.Background(), "state", "which?",
-			map[string]string{"a": "A", "b": "B"}, 0.6, "a")
-		if conf != 0 && got != "" {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("Choose = %q/%v after waiting for async ORT", got, conf)
-		}
-		time.Sleep(100 * time.Millisecond)
+	// Cancellation must use the conservative decision fallback without native load.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	got, conf := j.decider.Choose(ctx, "state", "which?", map[string]string{"a": "A", "b": "B"}, .6, "a")
+	if got != "a" || conf != 0 {
+		t.Fatalf("fallback=%q/%v", got, conf)
 	}
 }
 

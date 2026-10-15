@@ -798,6 +798,7 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 				// Persist providers/models/mcp/skills/generation settings. Store
 				// empty active values too, so deleting the active provider/model
 				// cannot be undone by a stale local override after restart.
+				next.NormalizeLocalModels()
 				updates := map[string]any{
 					"provider":           next.Provider,
 					"model":              next.Model,
@@ -817,32 +818,19 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 						"api_key":              next.Jev.APIKey,
 						"api_key_env":          next.Jev.APIKeyEnv,
 						"model":                next.Jev.Model,
-						"model_dir":            next.Jev.ModelDir,
-						"dtype":                next.Jev.DType,
-						"engine":               next.Jev.Engine,
-						"ort_lib":              next.Jev.ORTLib,
 						"timeout_sec":          next.Jev.TimeoutSec,
 						"route_min_confidence": next.Jev.RouteMinConfidence,
 						"routing":              next.Jev.Routing,
 						"memory_judge":         next.Jev.MemoryJudge,
 						"guardrail":            next.Jev.Guardrail,
 					},
-					"ort": map[string]any{
-						"gpu":            next.ORT.GPU,
-						"cuda_device_id": next.ORT.CudaDeviceID,
-					},
 					// Written as a nested object so unrelated memory keys a
 					// future version may add survive the merge.
 					"memory": map[string]any{
 						"organizer": map[string]any{
 							"enabled":           next.Memory.Organizer.Enabled,
-							"runtime":           next.Memory.Organizer.Runtime,
-							"model_path":        next.Memory.Organizer.ModelPath,
-							"lib_dir":           next.Memory.Organizer.LibDir,
-							"processor":         next.Memory.Organizer.Processor,
+							"model":             next.Memory.Organizer.Model,
 							"context_size":      next.Memory.Organizer.ContextSize,
-							"threads":           next.Memory.Organizer.Threads,
-							"gpu_layers":        next.Memory.Organizer.GPULayers,
 							"max_output_tokens": next.Memory.Organizer.MaxOutputTokens,
 							"temperature":       next.Memory.Organizer.Temperature,
 							"timeout_sec":       next.Memory.Organizer.TimeoutSec,
@@ -856,11 +844,7 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 							"api_key":         next.Memory.Embedding.APIKey,
 							"api_key_env":     next.Memory.Embedding.APIKeyEnv,
 							"model":           next.Memory.Embedding.Model,
-							"model_path":      next.Memory.Embedding.ModelPath,
-							"lib_dir":         next.Memory.Embedding.LibDir,
 							"context_size":    next.Memory.Embedding.ContextSize,
-							"threads":         next.Memory.Embedding.Threads,
-							"gpu_layers":      next.Memory.Embedding.GPULayers,
 							"idle_unload_sec": next.Memory.Embedding.IdleUnloadSec,
 							"dir":             next.Memory.Embedding.Dir,
 							"timeout_sec":     next.Memory.Embedding.TimeoutSec,
@@ -962,11 +946,8 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 					LibraryPresent: yzma.LibraryPresent(libDir),
 				}
 			},
-			MemoryOrganizerLibraryInstall: func(processor string) error {
-				if strings.TrimSpace(processor) == "" {
-					processor = cfg.Memory.Organizer.Processor
-				}
-				return memoryOrganizerInstaller.Start(context.Background(), cfg.OrganizerLibDir(), processor)
+			MemoryOrganizerLibraryInstall: func(_ string) error {
+				return memoryOrganizerInstaller.Start(context.Background(), cfg.OrganizerLibDir(), config.GPUProcessor())
 			},
 			MemoryOrganizerLibraryCancel: func() {
 				memoryOrganizerInstaller.Cancel()
