@@ -11,6 +11,7 @@ require (
 	github.com/anthropics/anthropic-sdk-go v1.50.1
 	github.com/atotto/clipboard v0.1.4
 	github.com/bmatcuk/doublestar/v4 v4.10.0
+	github.com/dop251/goja v0.0.0-20261006141001-ec3ad0eb130e
 	github.com/charmbracelet/glamour v1.0.0
 	github.com/charmbracelet/lipgloss v1.1.1-0.20250404203927-76690c660834
 	github.com/google/jsonschema-go v0.4.3
