@@ -855,21 +855,9 @@ Organizer: 用户要求解析 ACP 协议带过来的 mcp 并注册为工具。�
 
 Turn memory: 继续完善ptc
 
-## 2026-10-15 11:45:27 · session acp-1791700728355350000-1 · turn 4 · importance 0.40
-- keywords: todolist, todo-write, turn
+## 2026-10-15 11:47:41 · session acp-1791700728355350000-1 · turn 4 · importance 0.50
+- keywords: todolist, todo-write, turn, organizer, archival, retrieval, terms, directory
 - files: docs/batch-ptc.md, go.mod, internal/engine/batch_ptc_test.go, internal/engine/context_builder.go, internal/tool/batch.go, internal/tool/batch_ptc.go, internal/tool/batch_ptc_runtime_test.go, internal/tool/batch_ptc_store.go, internal/tool/batch_ptc_test.go, internal/tool/path.go, unit_tests/context_builder_test.go, unit_tests/skill_path_test.go
+- memory_ids: mem_21337d602406a50a
 
-Turn memory: PTC 的异步并行和结果引用已补齐，构建及专项安全测试通过；全量测试已运行，但仍未全绿。
-| 项目 | 当前结果 |
-|---|---|
-| 真正的异步并行调用 | 已实现：`Promise.all` 并发执行安全读取，受 `max_parallel` 限制；写入和 Bash 串行执行，不与读取重叠 |
-| ResultStore 结果引用 | 已实现：`result_ref` 引用、`results.get()` 分页读取、Unicode 偏移，最多保留 8 MiB 文本 |
-| Go 模块校验文件 | 已更新 `go.mod`、`go.sum`，`go mod verify` 通过 |
-| 构建 | `go build ./...` 通过 |
-| 专项验证 | PTC 测试连续运行 20 次通过；Batch/PTC 的 race 测试连续运行 5 次通过 |
-| 执行链安全 | 已验证 allowlist、会话权限、钩子、guardrail、检查点仍生效 |
-同时补上了参数校验、循环/异步续体取消、未处理 Promise rejection 检测、输出截断，以及失败后保留已完成写入的提示。使用说明已更新到 `docs/batch-ptc.md`。
-**仍有两个明确边界：**
-- ResultStore 仅在当前脚本调用内有效，不支持跨调用持久引用。
-- Goja 仍运行在同一进程内，不是操作系统级沙箱，也没有 JavaScript 堆内存硬隔离。
-全量测试的剩余失败涉及缺少 `python`、用户目录权限、跨平台 PATH，以及配置、TUI、工作流等测试；没有将这些无关问题混入本次修改。
+Organizer: 用户要求移除工具目录限制，允许任意目录访问。assistant: 已定位代码中的目录访问限制，将工具改为可在任意目录工作，并保留其他权限检查。assistant: [tool use: TodoWrite] {"todos":[{"content":"定位工具目录限制及相关测试","id":"1","priority":"high","status":"in_progress"},{"content":"移除目录限制并更新相关测试和说明","id":"2","priority

@@ -129,3 +129,22 @@ Tests cover concurrent reads and their bound, mutation barriers, dependent
 calls, strict validation, call/output/store limits, Unicode paging, isolated
 references/VM globals, cancellation, script errors, executor allowlists,
 permissions, pre-tool hooks, guardrails, and checkpoint preservation.
+
+## ACP startup troubleshooting
+
+PTC does not start Node.js or a JavaScript VM during the ACP handshake. The
+embedded JavaScript runtime is created only when a PTC `BatchTool` call runs.
+If the ACP process exits before `initialize`, inspect its **stderr** first.
+
+Settings must be valid JSON, including commas when adding the `batch` block
+beside existing fields. A malformed `~/.solcode/settings.local.json` stops
+configuration loading before ACP starts; it is not a PTC execution failure.
+Configuration parse errors include the file path, line and column without
+printing potentially secret config values. Fix the JSON instead of silently
+falling back to defaults (which could change providers or permissions).
+
+Runtime settings saves publish a complete temporary file using a
+same-directory rename, so a simultaneous startup cannot read a half-written
+in-place update on filesystems that support atomic replacement. This does not
+serialize concurrent read/modify/write updates from multiple processes, or
+make external editors' in-place writes atomic.

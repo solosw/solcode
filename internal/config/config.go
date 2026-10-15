@@ -662,7 +662,7 @@ func initializeDefaultSettingsFile(workDir string) error {
 		return fmt.Errorf("encode default settings %q: %w", path, err)
 	}
 	encoded = append(encoded, '\n')
-	if err := os.WriteFile(path, encoded, 0o644); err != nil {
+	if err := writeSettingsFile(path, encoded); err != nil {
 		return fmt.Errorf("write default settings %q: %w", path, err)
 	}
 	return nil
@@ -1217,7 +1217,7 @@ func SaveLocalOverrides(path string, updates map[string]any) error {
 	if existing, err := os.ReadFile(path); err == nil {
 		if len(strings.TrimSpace(string(existing))) > 0 {
 			if err := json.Unmarshal(existing, &data); err != nil {
-				return fmt.Errorf("parse existing settings %q: %w", path, err)
+				return settingsParseError("parse existing settings", path, existing, err)
 			}
 			if data == nil {
 				return fmt.Errorf("existing settings %q must be a JSON object", path)
@@ -1255,7 +1255,7 @@ func SaveLocalOverrides(path string, updates map[string]any) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("create settings directory %q: %w", filepath.Dir(path), err)
 	}
-	if err := os.WriteFile(path, encoded, 0o644); err != nil {
+	if err := writeSettingsFile(path, encoded); err != nil {
 		return fmt.Errorf("write settings %q: %w", path, err)
 	}
 	return nil
@@ -1295,7 +1295,7 @@ func loadFile(cfg *Config, path string) error {
 		return fmt.Errorf("read config %q: %w", path, err)
 	}
 	if err := applyJSONConfig(cfg, data); err != nil {
-		return fmt.Errorf("parse config %q: %w", path, err)
+		return settingsParseError("parse config", path, data, err)
 	}
 	return nil
 }
