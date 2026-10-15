@@ -847,3 +847,29 @@ Organizer: 用户要求检查影响缓存前缀的文件，发现内部工具目
 - memory_ids: mem_5bf2839bfc1994fb
 
 Organizer: 用户要求解析 ACP 协议带过来的 mcp 并注册为工具。已完成 MCP 配置解析、连接建立、工具注册及测试验证。所有测试通过，无错误。用户后续未明确指令，当前会话处于等待状态。
+
+## 2026-10-15 11:13:49 · session acp-1791700728355350000-1 · turn 3 · importance 0.40
+- keywords: todolist, todo-write, turn
+- files: internal/engine/context_builder.go, internal/tool/path.go, unit_tests/context_builder_test.go, unit_tests/skill_path_test.go
+- todos: 1|检查 PTC 实现、调用链和测试缺口|in_progress|valid|open; 2|完善 PTC 并补充回归测试|pending|valid|open; 3|运行相关测试并总结结果|pending|valid|open
+
+Turn memory: 继续完善ptc
+
+## 2026-10-15 11:45:27 · session acp-1791700728355350000-1 · turn 4 · importance 0.40
+- keywords: todolist, todo-write, turn
+- files: docs/batch-ptc.md, go.mod, internal/engine/batch_ptc_test.go, internal/engine/context_builder.go, internal/tool/batch.go, internal/tool/batch_ptc.go, internal/tool/batch_ptc_runtime_test.go, internal/tool/batch_ptc_store.go, internal/tool/batch_ptc_test.go, internal/tool/path.go, unit_tests/context_builder_test.go, unit_tests/skill_path_test.go
+
+Turn memory: PTC 的异步并行和结果引用已补齐，构建及专项安全测试通过；全量测试已运行，但仍未全绿。
+| 项目 | 当前结果 |
+|---|---|
+| 真正的异步并行调用 | 已实现：`Promise.all` 并发执行安全读取，受 `max_parallel` 限制；写入和 Bash 串行执行，不与读取重叠 |
+| ResultStore 结果引用 | 已实现：`result_ref` 引用、`results.get()` 分页读取、Unicode 偏移，最多保留 8 MiB 文本 |
+| Go 模块校验文件 | 已更新 `go.mod`、`go.sum`，`go mod verify` 通过 |
+| 构建 | `go build ./...` 通过 |
+| 专项验证 | PTC 测试连续运行 20 次通过；Batch/PTC 的 race 测试连续运行 5 次通过 |
+| 执行链安全 | 已验证 allowlist、会话权限、钩子、guardrail、检查点仍生效 |
+同时补上了参数校验、循环/异步续体取消、未处理 Promise rejection 检测、输出截断，以及失败后保留已完成写入的提示。使用说明已更新到 `docs/batch-ptc.md`。
+**仍有两个明确边界：**
+- ResultStore 仅在当前脚本调用内有效，不支持跨调用持久引用。
+- Goja 仍运行在同一进程内，不是操作系统级沙箱，也没有 JavaScript 堆内存硬隔离。
+全量测试的剩余失败涉及缺少 `python`、用户目录权限、跨平台 PATH，以及配置、TUI、工作流等测试；没有将这些无关问题混入本次修改。
