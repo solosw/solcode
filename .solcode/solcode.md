@@ -898,29 +898,20 @@ Turn memory: **检查结果：本地 llama.cpp 动态库版本过旧，不满足
 
 Organizer: 用户要求使用开源方案进行智能模型路由，并询问是否可将每次路由结果存储到数据库以优化后续任务。assistant: [tool use: BatchTool] {code":"const r = await tools.Grep({pattern:\\\"(?i)router|routing|路由|RouteLLM|semantic.router\\\",path:\\\"internal\\\",include:\\\"*.go\\\"}); console.log(r);"
 
-## 2026-10-15 21:17:02 · session acp-1792052774500238000-1 · turn 6 · importance 0.40
-- keywords: todolist, todo-write, turn
+## 2026-10-15 21:18:54 · session acp-1792052774500238000-1 · turn 6 · importance 0.50
+- keywords: todolist, todo-write, turn, organizer, archival, retrieval, terms, model
+- memory_ids: mem_9b80c570925a0fcd
 
-Turn memory: **Jev 的应用本地推理路径已从 ONNX 切换为进程内 GGUF，设置简化也已完成。** 但你下载的 EmbeddingGemma 2 暂时受原生库兼容性限制。
-### 已完成
-- **Jev 接入 Kev 决策头**：直接调用 llama.cpp 动态库，不启动服务、不走 HTTP；读取指针向量及校准温度，返回 `choice / noul / score`，不是用文本生成冒充决策。
-- **统一模型目录**：所有本地模型从 `~/.solcode/models` 加载，设置只填写模型文件名。
-- **固定 GPU 推理**：移除设置页的 CPU/GPU、GPU 层数、ORT、DType、模型目录等选项；GPU 初始化失败不再重试 CPU。
-- **设置整理**：整理模型的调优参数收进“高级设置”；旧路径配置迁移为文件名，保存时清理废弃 ONNX 字段。
-- 修复了整理模型在“禁用 Flash Attention”时使用量化 V 缓存导致的 GPU 初始化失败。
-### 验证结果
-| 模型 | 本机 GPU 实测 |
-|---|---|
-| `Kev-4B-Q8_0.gguf` | 通过短输入、跨批次长输入及 GPU 卸载重载测试；输出 token 为 **0** |
-| `Qwen3.5-0.8B-BF16.gguf` | 通过生成、XML 解析和完整记忆整理测试 |
-| `embeddinggemma-2-BF16.gguf` | **未通过**：当前 llama.cpp 不支持 `gemma-embedding2` 架构 |
-EmbeddingGemma 2 需要支持该架构、且与当前 yzma 绑定兼容的原生库，或更换兼容模型；没有进行 CPU/API 回退。
-构建、相关单元测试、race 检测和设置表单绑定验证均通过。`go test ./...` 仍有失败，相关失败已在未修改的 `HEAD` 基线上复现。
-**使用新构建重启后，Jev 选择 `Local GGUF`，模型填写 `Kev-4B-Q8_0.gguf` 即可。** 没有擅自打开你原本关闭的 Jev 开关。历史 ONNX 适配器代码仍保留供低层测试使用，但应用已不再调用它。
-Sources: [llama.cpp 决策模型与 Kev 支持](https://github.com/ggml-org/llama.cpp/pull/29818)
+Organizer: 用户要求使用开源方案进行智能模型路由，并询问是否可将每次路由结果存储到数据库以优化后续任务。 (tags: optional)
 
 ## 2026-10-15 20:44:54 · session mid-run · turn -1 · importance 0.50
 - keywords: organizer, archival, retrieval, terms, database
 - memory_ids: mem_38658cf5815a026f
 
 Organizer: 用户要求使用开源方案方式使用 Jev 做智能选择模型路由，如果每次路由的结果都存储到数据库，后续针对这一类任务，对开源方案进行优化。用户已下载 GGUF 模型并放到 models 目录，要求简化本地模型设置：默认从 ~/.solcode/models 查找，只填写模型文件名，固定使用 GPU，移除 CPU 选项和自动 CPU 回退。先检查你下载的模型及现有调用、配置和设置页面，再修改并验证。
+
+## 2026-10-15 21:28:18 · session acp-1792052774500238000-1 · turn 7 · importance 0.50
+- keywords: organizer, archival, retrieval, terms, GGUF, turn, todolist, embedding
+- memory_ids: mem_21337d602406a50a, mem_32f833b690c2a2bd
+
+Organizer: User requested replacing local Jev ONNX inference with in-process GGUF shared-library/DLL calls, never llama-server/HTTP, and simplifying all local-model settings: fixed `~/.solcode/models`, filenames only, GPU-only, no CPU selector or CPU.

@@ -495,6 +495,7 @@ Notable session behavior:
 | Cancel | `session/cancel` cancels the in-flight prompt (`stopReason=cancelled`) |
 | Modes | `session/set_mode` maps to permission modes and emits `current_mode_update` |
 | History | `session/load` replays saved user/assistant turns |
+| Cross-session memory | `session/new` enables cross-session memory by default and schedules first-prompt recall when memory is enabled. `session/load` preserves the saved choice; `/new-session` still offers an explicit yes/no choice. |
 | Tool diffs | `Edit` / `Write` / `MultiEdit` / `MultiWrite` emit ACP `type: "diff"` content plus `locations` |
 | Plan updates | Successful `TodoWrite` calls emit a full `plan` (`sessionUpdate: "plan"`) update; when every item is `completed`, the agent sends `entries: []` (cleared plan) |
 | Client filesystem | When the client advertises FS capabilities at `initialize`, text tools use per-session `fs/read_text_file` and `fs/write_text_file`; otherwise they fall back to the local disk. `TodoWrite` always stays on the agent-local todo file (never client FS). In `bypass` / `goal` modes, writes also fall back to local disk so the client does not show a second file-accept prompt |

@@ -213,6 +213,11 @@ func (s *Server) handleSessionNew(ctx context.Context, msg jsonrpcMessage) error
 	if err != nil {
 		return s.conn.ReplyError(msg.ID, JSONRPCInternalError, err.Error())
 	}
+	if err := sess.initializeNewSessionMemory(ctx); err != nil {
+		sess.close()
+		s.removeSession(sess.id)
+		return s.conn.ReplyError(msg.ID, JSONRPCInternalError, err.Error())
+	}
 	if err := s.conn.Reply(msg.ID, SessionNewResult{
 		SessionID: sess.id,
 		Modes:     modeState(sess.application.Permissions.Mode()),
@@ -222,6 +227,31 @@ func (s *Server) handleSessionNew(ctx context.Context, msg jsonrpcMessage) error
 	// A client generally does not register the session until it receives this
 	// response. Publish command completion metadata only afterwards.
 	s.emitSessionBootstrap(sess)
+	return nil
+}
+
+// initializeNewSessionMemory applies the ACP new-session default, never the
+// load-session path. Persist the pending bootstrap because saving this metadata
+// means the first prompt will no longer see a newly-created session.
+func (sess *acpSession) initializeNewSessionMemory(ctx context.Context) error {
+	if sess.application.Sessions == nil {
+		return nil
+	}
+	// The application factory may already own the session lock. Do not acquire
+	// it again: the session manager rejects even same-owner duplicate acquires.
+	current, err := sess.application.Sessions.LoadOrCreate(ctx, session.SessionID(sess.persistID()), sess.workDir, sess.cfg.Model)
+	if err != nil {
+		return fmt.Errorf("initialize session memory: %w", err)
+	}
+	if current.Metadata.CrossSessionMemory != nil {
+		return nil // Respect an explicit choice; do not re-arm a consumed bootstrap.
+	}
+	enabled := true
+	current.Metadata.CrossSessionMemory = &enabled
+	current.Metadata.MemoryBootstrapPending = true
+	if err := sess.application.Sessions.Save(ctx, current); err != nil {
+		return fmt.Errorf("save session memory preference: %w", err)
+	}
 	return nil
 }
 

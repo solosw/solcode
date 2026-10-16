@@ -3352,8 +3352,8 @@ func TestOnlySummarizeForContextWithItems(transcript, previous string, items []m
 
 // sessionAllowsCrossSessionMemory reports whether this session opted into
 // reading memories / project knowledge produced by other sessions.
-// Unset (nil) means the session never went through the /new-session prompt
-// and is treated as opted-out of cross-session memory injection.
+// ACP new sessions opt in by default; other entry points can ask explicitly.
+// Unset (nil), including older sessions without a preference, stays opted-out.
 func sessionAllowsCrossSessionMemory(current *session.Session) bool {
 	if current == nil || current.Metadata.CrossSessionMemory == nil {
 		return false
