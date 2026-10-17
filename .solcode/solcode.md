@@ -1004,3 +1004,45 @@ Organizer: 用户要求将 SolCode 的 persistent-subagent 工具升级，使其
 - memory_ids: mem_9b80c570925a0fcd
 
 Organizer: 用户要求使用开源方案进行智能模型路由，并询问是否可将每次路由结果存储到数据库以优化后续任务。用户已明确选择实施所有 A→B→C→D 的 SolCode 持久化子代理上下文复用计划，所有任务已完成，最终中文响应已送达。实现设计包括依赖约束 `session → permission → tool → agent` 防止子代理导入会话，定义 `Store` / `PersistentRunner` 接口，实现独立 `agent_id`、`run_id`、执行 ID 和重试机制；D
+
+## 2026-10-17 21:54:08 · session acp-1791801508971727000-1 · turn 13 · importance 0.40
+- keywords: turn, todolist
+- files: internal/acp/commands.go, internal/acp/mcp.go, internal/acp/mcp_test.go, internal/acp/protocol.go, internal/acp/server.go, internal/app/app.go, internal/app/jev.go, internal/config/config.go, internal/engine/context_builder.go, internal/engine/efficiency.go, internal/engine/efficiency_test.go, internal/engine/engine.go, internal/engine/prefix_share_test.go, internal/engine/working_set.go, internal/engine/working_set_injection_test.go, internal/engine/working_set_test.go, internal/projectindex/index.go, internal/projectindex/index_test.go, internal/tool/batch.go, internal/tool/batch_test.go
+
+Turn memory: [Pasted text #1 +134 lines] 内置这三个子代理，这三个可以在其他模式使用，只有ultra模式才能使用其他子代理
+[Pasted text #1 +134 lines]
+````
+有。Codex 确实内置了专门的子代理角色，包括 `Explorer` 和 `Worker`。 而且我查了当前 Codex 的 `role.rs` 源码，发现它的设计非常适合直接借鉴到 SolCode。
+
+## 2026-10-17 21:55:46 · session acp-1792245273376165000-1 · turn 0 · importance 0.40
+- keywords: turn, todolist
+
+Turn memory: [Pasted text #1 +134 lines] 内置这三个子代理，这三个可以在其他模式使用，只有ultra模式才能使用其他子代理
+
+## 2026-10-17 22:32:45 · session acp-1792245366061711000-1 · turn 0 · importance 0.90
+- keywords: todolist, todo-write, turn, organizer, archival, task, subagent, agent_type, persistent, context
+- files: docs/persistent-subagents.md, go.mod, internal/agent/coordinator.go, internal/agent/lifecycle.go, internal/agent/roles.go, internal/agent/roles/explorer.toml, internal/agent/roles/reviewer.toml, internal/agent/roles/worker.toml, internal/agent/roles_test.go, internal/engine/context_builder.go, internal/engine/dynamic_context.go, internal/engine/dynamic_context_test.go, internal/engine/engine.go, internal/engine/modes_test.go, internal/engine/subagent_roles_test.go, internal/message/dynamic_context.go, internal/message/dynamic_context_test.go, internal/permission/modes.go, internal/permission/modes_test.go, internal/permission/service.go, internal/permission/subagent_roles_test.go, internal/tool/mode_switch.go, internal/tool/subagent.go, internal/tool/subagent_roles.go, internal/tool/subagent_roles_test.go, internal/tool/task.go, internal/tool/task_agents.go, internal/tool/tool.go
+- memory_ids: mem_f69394312c233ae9
+
+Organizer: 用户要求实现 Task agent_type、内置 explorer/worker/reviewer 角色、持久 agent_id/resume 和选择性上下文继承；支持角色覆盖但权限不超过父代理；bypass 模式只能用这三个角色。先检查现有持久化子代理实现，避免重复。
+
+## 2026-10-17 22:41:29 · session acp-1792245366061711000-1 · turn 1 · importance 0.90
+- keywords: turn, todolist, organizer, archival, task, subagent, permission, context
+- files: docs/persistent-subagents.md, go.mod, internal/agent/coordinator.go, internal/agent/lifecycle.go, internal/agent/roles.go, internal/agent/roles/explorer.toml, internal/agent/roles/reviewer.toml, internal/agent/roles/worker.toml, internal/agent/roles_test.go, internal/engine/context_builder.go, internal/engine/dynamic_context.go, internal/engine/dynamic_context_test.go, internal/engine/engine.go, internal/engine/modes_test.go, internal/engine/subagent_roles_test.go, internal/message/dynamic_context.go, internal/message/dynamic_context_test.go, internal/permission/modes.go, internal/permission/modes_test.go, internal/permission/service.go, internal/permission/subagent_roles_test.go, internal/tool/mode_switch.go, internal/tool/subagent.go, internal/tool/subagent_roles.go, internal/tool/subagent_roles_test.go, internal/tool/task.go, internal/tool/task_agents.go, internal/tool/tool.go
+- memory_ids: mem_f69394312c233ae9
+
+Organizer: 用户要求实现 Task agent_type、内置 explorer/worker/reviewer 角色、持久 agent_id/resume 和选择性上下文继承；支持角色覆盖但权限不超过父代理；bypass 模式只能用这三个角色。先检查现有持久化子代理实现，避免重复。assistant: 已检查现有 Task、子代理持久化和权限控制，保留已有的 Resume 能力，再补上角色配置与 agent_type。bypass 模式将只允许 explorer、worker、revr
+
+## 2026-10-17 22:48:08 · session acp-1792245366061711000-1 · turn 2 · importance 0.90
+- keywords: turn, todolist, organizer, archival, task, subagent, permission, resume, context
+- files: docs/persistent-subagents.md, go.mod, internal/agent/coordinator.go, internal/agent/lifecycle.go, internal/agent/roles.go, internal/agent/roles/explorer.toml, internal/agent/roles/reviewer.toml, internal/agent/roles/worker.toml, internal/agent/roles_test.go, internal/engine/context_builder.go, internal/engine/dynamic_context.go, internal/engine/dynamic_context_test.go, internal/engine/engine.go, internal/engine/modes_test.go, internal/engine/subagent_roles_test.go, internal/message/dynamic_context.go, internal/message/dynamic_context_test.go, internal/permission/modes.go, internal/permission/modes_test.go, internal/permission/service.go, internal/permission/subagent_roles_test.go, internal/tool/mode_switch.go, internal/tool/subagent.go, internal/tool/subagent_roles.go, internal/tool/subagent_roles_test.go, internal/tool/task.go, internal/tool/task_agents.go, internal/tool/tool.go
+- memory_ids: mem_23092aced351ec3b
+
+Organizer: 用户要求实现 Task agent_type、内置 explorer/worker/reviewer 角色、持久 agent_id/resume 和选择性上下文继承；支持角色覆盖但权限不超过父代理；bypass 模式只能用这三个角色。先检查现有持久化子代理实现，避免重复。assistant: 我先检查现有 Task、子代理持久化和权限控制，保留已有的 Resume 能力，再补上角色配置与 `agent_type`。bypass 模式将只允许 `explorer`、`user
+
+## 2026-10-17 23:31:40 · session acp-1792245366061711000-1 · turn 3 · importance 0.90
+- keywords: todolist, todo-write, turn, organizer, archival, Task, agent_type, subagent, bypass, permissions
+- files: docs/persistent-subagents.md, go.mod, internal/agent/coordinator.go, internal/agent/lifecycle.go, internal/agent/notifications.go, internal/agent/roles.go, internal/agent/roles/explorer.toml, internal/agent/roles/reviewer.toml, internal/agent/roles/worker.toml, internal/agent/roles_test.go, internal/app/app.go, internal/app/subagent_shutdown_test.go, internal/engine/background_tools.go, internal/engine/context_builder.go, internal/engine/dynamic_context.go, internal/engine/dynamic_context_test.go, internal/engine/engine.go, internal/engine/modes_test.go, internal/engine/persistent.go, internal/engine/subagent_roles_test.go, internal/engine/task_async_test.go, internal/message/dynamic_context.go, internal/message/dynamic_context_test.go, internal/permission/modes.go, internal/permission/modes_test.go, internal/permission/service.go, internal/permission/subagent_roles_test.go, internal/tool/mode_switch.go, internal/tool/subagent.go, internal/tool/subagent_roles.go, internal/tool/subagent_roles_test.go, internal/tool/task.go, internal/tool/task_agents.go, internal/tool/task_agents_test.go, internal/tool/task_async.go, internal/tool/task_async_test.go, internal/tool/tool.go
+- memory_ids: mem_23092aced351ec3b
+
+Organizer: 用户要求实现 Task agent_type、内置 explorer/worker/reviewer 角色、持久 agent_id/resume 和选择性上下文继承；支持角色覆盖但权限不超过父代理；bypass 模式只能用这三个角色。先检查现有持久化子代理实现，避免重复。assistant: 已检查现有 Task、子代理持久化和权限控制，保留已有的 Resume 能力，再补上角色配置与 agent_type。bypass 模式将只允许 explorer、worker、revr

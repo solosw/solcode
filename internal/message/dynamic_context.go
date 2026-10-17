@@ -23,7 +23,7 @@ func ParseDynamicContextText(text string) (kind, body string, ok bool) {
 		return "", "", false
 	}
 	switch kind {
-	case "mode", "skill", "project-knowledge", "session-summary", "memory", "folded-tools", "working-set", "efficiency":
+	case "mode", "agent-role", "skill", "project-knowledge", "session-summary", "memory", "folded-tools", "working-set", "efficiency":
 		return kind, strings.TrimSuffix(body, dynamicContextClose), true
 	default:
 		return "", "", false

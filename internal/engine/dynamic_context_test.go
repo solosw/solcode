@@ -40,7 +40,7 @@ func requireMessagePrefix(t *testing.T, before, after []sdk.MessageParam) {
 func TestDynamicContextMaterializesOnlyChangedSections(t *testing.T) {
 	original := []sdk.MessageParam{sdk.NewUserMessage(sdk.NewTextBlock("user task"))}
 	d := newDynamicContext(original)
-	builder := ContextBuilder{ModeInstructions: "mode", ForceSkill: "skill", FoldedTools: "tools", WorkingSet: "files", EfficiencyNote: "hint"}
+	builder := ContextBuilder{ModeInstructions: "mode", AgentInstructions: "Explorer role", ForceSkill: "skill", FoldedTools: "tools", WorkingSet: "files", EfficiencyNote: "hint"}
 	req := RunRequest{SessionSummary: "summary", ProjectKnowledge: "knowledge", MemoryContext: []ContextItem{{Content: "memory"}}}
 	first := d.append(original, builder, req, false)
 	requireMessagePrefix(t, original, first)
@@ -57,7 +57,7 @@ func TestDynamicContextMaterializesOnlyChangedSections(t *testing.T) {
 		t.Fatal("session resume must recognize materialized overlays")
 	}
 	cleared := newDynamicContext(second).append(second, ContextBuilder{ModeInstructions: "updated mode"}, RunRequest{}, true)
-	for _, kind := range []string{"skill", "folded-tools", "working-set"} {
+	for _, kind := range []string{"agent-role", "skill", "folded-tools", "working-set"} {
 		if !messagesContain(cleared[len(second):], dynamicContextClears[kind]) {
 			t.Fatalf("missing reset for %s", kind)
 		}

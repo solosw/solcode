@@ -12,6 +12,7 @@ import (
 // RunSession resumes only model conversation. Historical tool calls are data;
 // the normal loop can execute only tool calls from a new model response.
 func (e *Engine) RunSession(ctx context.Context, req agent.SessionRequest) agent.AgentResult {
+	e = e.forRun()
 	if req.Config.Model == "" {
 		req.Config.Model = e.config.ModelName
 	}

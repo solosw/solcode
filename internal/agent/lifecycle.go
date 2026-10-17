@@ -68,6 +68,9 @@ func (c *Coordinator) start(ctx context.Context, cfg AgentConfig, resume bool) (
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.closed {
+		return "", fmt.Errorf("subagent coordinator is closed")
+	}
 	if active(c.agents[cfg.ID]) {
 		return "", fmt.Errorf("%w: %s", ErrBusy, cfg.ID)
 	}
@@ -110,6 +113,16 @@ func (c *Coordinator) start(ctx context.Context, cfg AgentConfig, resume bool) (
 		// Freeze that source before switching to a different project session.
 		if r.ForkParentSessionID == "" {
 			r.ForkParentSessionID = r.Config.ParentSessionID
+		}
+		if cfg.AgentType != "" && cfg.AgentType != r.Config.AgentType {
+			return "", fmt.Errorf("agent_type cannot change on resume: %s", r.Config.AgentType)
+		}
+		if cfg.AgentType == "" && cfg.RoleInstructions == "" {
+			cfg.RoleInstructions = r.Config.RoleInstructions
+		}
+		cfg.AgentType = r.Config.AgentType
+		if cfg.Description == "" {
+			cfg.Description = r.Config.Description
 		}
 		cfg.Role = r.Config.Role
 		cfg.AllowedTools = IntersectTools(r.Config.AllowedTools, cfg.AllowedTools)
@@ -196,7 +209,7 @@ func (c *Coordinator) start(ctx context.Context, cfg AgentConfig, resume bool) (
 	// Parent snapshots and previous permissions are never carried into a resume.
 	cfg.ParentContext = Snapshot{}
 	r.Config = cfg
-	r.Status = AgentStatus{ID: cfg.ID, RunID: cfg.RunID, ParentID: cfg.ParentID, ParentSessionID: cfg.ParentSessionID, WorkDir: cfg.WorkDir, Description: cfg.Description, Role: cfg.Role, State: AgentRunning, StartedAt: now}
+	r.Status = AgentStatus{AgentType: cfg.AgentType, ID: cfg.ID, RunID: cfg.RunID, ParentID: cfg.ParentID, ParentSessionID: cfg.ParentSessionID, WorkDir: cfg.WorkDir, Description: cfg.Description, Role: cfg.Role, State: AgentRunning, StartedAt: now}
 	r.Runs = append(r.Runs, RunRecord{ID: cfg.RunID, ParentID: cfg.ParentID, ParentSessionID: cfg.ParentSessionID, ExecutionID: cfg.ExecutionID, Attempt: cfg.Attempt, TaskID: cfg.TaskID, Description: cfg.Description, Model: cfg.Model, AllowedTools: append([]string(nil), cfg.AllowedTools...), State: AgentRunning, StartedAt: now})
 	r.UpdatedAt = now
 	if err := r.apply(Checkpoint{Snapshot: snapshot, Stage: "started"}, fork); err != nil {
@@ -205,7 +218,11 @@ func (c *Coordinator) start(ctx context.Context, cfg AgentConfig, resume bool) (
 	if err := c.save(ctx, r); err != nil {
 		return "", err
 	}
-	runCtx, cancel := context.WithCancel(ctx)
+	runParent := ctx
+	if cfg.Detached {
+		runParent = context.WithoutCancel(ctx)
+	}
+	runCtx, cancel := context.WithCancel(runParent)
 	a := &runningAgent{status: r.Status, record: r, fork: fork, cancel: cancel, done: make(chan struct{})}
 	c.agents[cfg.ID] = a
 	handler := c.eventHandler
@@ -213,7 +230,7 @@ func (c *Coordinator) start(ctx context.Context, cfg AgentConfig, resume bool) (
 	started = true
 	// Start events are emitted outside the registry lock, before runner work.
 	go func() {
-		c.emit(handler, Event{Kind: EventStarted, Status: startedStatus, Description: cfg.Description, ParentToolUseID: cfg.ParentToolUseID, TaskID: cfg.TaskID})
+		c.emit(handler, Event{Detached: cfg.Detached, Kind: EventStarted, Status: startedStatus, Description: cfg.Description, ParentToolUseID: cfg.ParentToolUseID, TaskID: cfg.TaskID})
 		c.execute(runCtx, a, cfg, release, snapshot)
 	}()
 	return cfg.ID, nil
@@ -305,7 +322,7 @@ func (c *Coordinator) execute(ctx context.Context, a *runningAgent, cfg AgentCon
 	}
 	a.result = result
 	handler := c.eventHandler
-	event := Event{Kind: EventCompleted, Status: a.status, Result: result, Description: cfg.Description, ParentToolUseID: cfg.ParentToolUseID, TaskID: cfg.TaskID}
+	event := Event{Detached: cfg.Detached, Kind: EventCompleted, Status: a.status, Result: result, Description: cfg.Description, ParentToolUseID: cfg.ParentToolUseID, TaskID: cfg.TaskID}
 	if a.status.State == AgentFailed {
 		event.Kind = EventFailed
 	}
@@ -315,6 +332,9 @@ func (c *Coordinator) execute(ctx context.Context, a *runningAgent, cfg AgentCon
 	if c.store != nil {
 		a.record = nil
 		a.fork = Snapshot{}
+	}
+	if cfg.Detached {
+		c.notifications = append(c.notifications, event)
 	}
 	close(a.done)
 	c.mu.Unlock()

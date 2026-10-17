@@ -115,9 +115,16 @@ func (s *Service) Check(t tool.Tool, input json.RawMessage) Decision {
 	askFn := s.askFn
 	s.mu.RUnlock()
 
-	// Task and Subagent require explicit Ultra mode, even with tool allowlists.
-	if (t.Name() == tool.TaskToolName || t.Name() == tool.SubagentToolName) && mode != ModeUltra {
-		return Decision{Allowed: false, Reason: "Task and sub-agents require ultra mode (bypass + task)"}
+	// Delegation cannot be enabled by a tool allowlist in other modes.
+	if t.Name() == tool.TaskToolName || t.Name() == tool.SubagentToolName {
+		if mode != ModeUltra && mode != ModeBypass {
+			return Decision{Allowed: false, Reason: "Task and sub-agents require bypass (built-in roles) or ultra mode"}
+		}
+		if mode == ModeBypass {
+			if err := tool.CheckBypassAgentTypes(input); err != nil {
+				return Decision{Allowed: false, Reason: err.Error()}
+			}
+		}
 	}
 	if denied {
 		return Decision{Allowed: false, Reason: fmt.Sprintf("tool denied for session: %s", t.Name())}

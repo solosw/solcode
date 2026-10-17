@@ -15,6 +15,7 @@ const SubagentToolName = "Subagent"
 
 // SubagentParams runs a single child agent. Task orchestrates multiple of these.
 type SubagentParams struct {
+	AgentType               string `json:"agent_type,omitempty"`
 	AgentID                 string `json:"agent_id,omitempty"`
 	ForkContext             string `json:"fork_context,omitempty"`
 	ForkLastN               int    `json:"fork_last_n,omitempty"`
@@ -31,7 +32,9 @@ type SubagentParams struct {
 	// FastModel is filled by the host / Task; not part of the model-facing schema.
 	FastModel string `json:"fast_model,omitempty"`
 	// TaskID is an optional orchestration id from Task (for progress correlation).
-	TaskID string `json:"task_id,omitempty"`
+	TaskID           string `json:"task_id,omitempty"`
+	roleInstructions string
+	detached         bool
 }
 
 type subagentTool struct {
@@ -70,13 +73,13 @@ func (t *subagentTool) InputSchema() map[string]any {
 				"items": map[string]any{"type": "string"},
 				"description": "Runtime allowlist for this sub-agent's executor. " +
 					"Does not change the shared tools schema prefix (core tools stay on the wire for prompt cache). " +
-					"Empty means unrestricted execution (subject to permission mode).",
+					"Empty means no additional restriction beyond the role and parent ceilings (subject to permission mode).",
 			},
 			"model":      map[string]any{"type": "string", "description": "Optional explicit model or 'fast'"},
 			"difficulty": map[string]any{"type": "string", "enum": []string{"easy", "medium", "hard"}, "description": "Use easy for the configured fast model"},
 			"task_id":    map[string]any{"type": "string", "description": "Optional orchestration id from Task"},
 		}),
-		"required": []string{"description", "prompt"},
+		"required": []string{"prompt"},
 	}
 }
 
@@ -92,17 +95,30 @@ func (t *subagentTool) Invoke(ctx context.Context, uctx *UseContext, input json.
 	if uctx != nil && uctx.AgentRole != "" && uctx.AgentRole != "main" {
 		return ErrorResult("nested subagents are not allowed"), nil
 	}
+	if err := t.prepare(ctx, uctx, &params); err != nil {
+		return ErrorResult(err.Error()), nil
+	}
+	output, err := t.runWithRetry(ctx, uctx, &params)
+	result := Result(output)
+	if err != nil {
+		result = ErrorResult(err.Error())
+	}
+	result.AgentID, result.RunID = params.AgentID, params.runID
+	return result, nil
+}
+
+func (t *subagentTool) prepare(ctx context.Context, uctx *UseContext, params *SubagentParams) error {
 	params.Description = strings.TrimSpace(params.Description)
 	params.Prompt = strings.TrimSpace(params.Prompt)
 	params.TaskID = strings.TrimSpace(params.TaskID)
-	if params.Description == "" || params.Prompt == "" {
-		return ErrorResult("description and prompt are required"), nil
+	if (params.Description == "" && strings.TrimSpace(params.AgentID) == "") || params.Prompt == "" {
+		return fmt.Errorf("description and prompt are required")
 	}
 	if params.FastModel == "" && uctx != nil {
 		params.FastModel = uctx.FastModel
 	}
 	if t.coordinator == nil {
-		return ErrorResult("subagent coordinator is not configured"), nil
+		return fmt.Errorf("subagent coordinator is not configured")
 	}
 
 	params.AgentID = strings.TrimSpace(params.AgentID)
@@ -110,15 +126,11 @@ func (t *subagentTool) Invoke(ctx context.Context, uctx *UseContext, input json.
 	if !params.resume {
 		params.AgentID = agent.NewID("agent")
 	}
-	params.executionID = agent.NewID("execution")
-	output, err := t.runWithRetry(ctx, uctx, &params)
-	result := Result(output)
-	if err != nil {
-		result = ErrorResult(err.Error())
+	if err := t.applyRole(ctx, uctx, params); err != nil {
+		return err
 	}
-	result.AgentID = params.AgentID
-	result.RunID = params.runID
-	return result, nil
+	params.executionID = agent.NewID("execution")
+	return nil
 }
 
 func (t *subagentTool) runWithRetry(ctx context.Context, uctx *UseContext, params *SubagentParams) (string, error) {
@@ -165,7 +177,7 @@ func (t *subagentTool) runWithRetry(ctx context.Context, uctx *UseContext, param
 	return "", lastErr
 }
 
-func (t *subagentTool) runAttempt(ctx context.Context, uctx *UseContext, params SubagentParams) (string, error) {
+func (t *subagentTool) startAttempt(ctx context.Context, uctx *UseContext, params SubagentParams) error {
 	label := params.TaskID
 	if label == "" {
 		label = params.Description
@@ -196,19 +208,22 @@ func (t *subagentTool) runAttempt(ctx context.Context, uctx *UseContext, params 
 		parentContext = uctx.ParentContext
 	}
 	_, err := start(ctx, agent.AgentConfig{
+		Detached:        params.detached,
 		ParentSessionID: parentSession, RunID: params.runID, ExecutionID: params.executionID, Attempt: params.attempt,
 		ForkContext: params.ForkContext, ForkLastN: params.ForkLastN, ParentContext: parentContext, AcknowledgeInterruption: params.AcknowledgeInterruption,
-		ID:              id,
-		ParentID:        agent.AgentID(parentID),
-		Role:            agent.AgentRoleTask,
-		Description:     params.Description,
-		WorkDir:         workDir,
-		Prompt:          params.Prompt,
-		AllowedTools:    params.AllowedTools,
-		UnlimitedTurns:  true,
-		Model:           subagentModel(params),
-		ParentToolUseID: parentTool,
-		TaskID:          params.TaskID,
+		ID:               id,
+		ParentID:         agent.AgentID(parentID),
+		Role:             agent.AgentRoleTask,
+		AgentType:        params.AgentType,
+		RoleInstructions: params.roleInstructions,
+		Description:      params.Description,
+		WorkDir:          workDir,
+		Prompt:           params.Prompt,
+		AllowedTools:     params.AllowedTools,
+		UnlimitedTurns:   true,
+		Model:            subagentModel(params),
+		ParentToolUseID:  parentTool,
+		TaskID:           params.TaskID,
 	})
 	if err != nil {
 		emitAgentProgress(uctx, AgentProgressEvent{
@@ -221,8 +236,18 @@ func (t *subagentTool) runAttempt(ctx context.Context, uctx *UseContext, params 
 			Output:          err.Error(),
 			IsError:         true,
 		})
-		return "", &subagentNoRetry{fmt.Errorf("start task %s (agent_id=%s): %w", label, id, err)}
+		return &subagentNoRetry{fmt.Errorf("start task %s (agent_id=%s): %w", label, id, err)}
 	}
+	return nil
+}
+
+func (t *subagentTool) runAttempt(ctx context.Context, uctx *UseContext, params SubagentParams) (string, error) {
+	if err := t.startAttempt(ctx, uctx, params); err != nil {
+		return "", err
+	}
+	label := firstNonEmpty(params.TaskID, params.Description)
+	id := agent.AgentID(params.AgentID)
+	parentID, parentTool := parentAgentID(uctx), parentToolUseID(uctx)
 	result, err := t.coordinator.WaitRun(ctx, id, params.runID)
 	if err != nil {
 		emitAgentProgress(uctx, AgentProgressEvent{

@@ -28,7 +28,20 @@ func (r *reusableRunner) Run(_ context.Context, cfg agent.AgentConfig) agent.Age
 	}
 	return agent.AgentResult{Output: "bounded result"}
 }
+
+// Existing lifecycle/role assertions inspect completed histories; explicitly wait
+// in this test helper. Async scheduling tests use invokeTaskRaw instead.
 func invokeTask(t *testing.T, task tool.Tool, uctx *tool.UseContext, input any) *tool.ContentBlock {
+	t.Helper()
+	result := invokeTaskRaw(t, task, uctx, input)
+	if result != nil && !result.IsError && strings.Contains(result.Text, "status: submitted") {
+		waited := invokeTaskRaw(t, task, uctx, map[string]any{"action": "wait", "agent_id": result.AgentID, "run_id": result.RunID})
+		requireTask(t, waited)
+	}
+	return result
+}
+
+func invokeTaskRaw(t *testing.T, task tool.Tool, uctx *tool.UseContext, input any) *tool.ContentBlock {
 	t.Helper()
 	data, err := json.Marshal(input)
 	if err != nil {

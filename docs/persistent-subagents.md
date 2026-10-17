@@ -1,8 +1,10 @@
 # Persistent subagents
 
-Task remains available only in explicit Ultra mode. Bypass alone does not grant
-Task access. No new public tool is introduced; existing Task graphs, dependencies,
-fast-model selection, retries and automatic background completion remain supported.
+Task is available in Bypass for the three built-in roles: explorer, worker and
+reviewer. Ultra additionally permits configured custom roles. Other modes do not
+grant Task access, even through tool allowlists. No new public tool is introduced;
+existing Task graphs, dependencies, fast-model selection, retries and automatic
+background completion remain supported.
 
 ## Create and continue
 
@@ -15,30 +17,118 @@ as run provenance rather than access restrictions.
 Create a child with action=spawn:
 
 ~~~json
-{"action":"spawn","description":"Inspect context","prompt":"Inspect the context builder","fork_context":"working_set","allowed_tools":["View","Grep"]}
+{"action":"spawn","agent_type":"explorer","description":"Inspect context","prompt":"Inspect the context builder","fork_context":"working_set","allowed_tools":["View","Grep"]}
 ~~~
 
-The result includes an opaque, stable agent_id and an independent run_id. Pass the
-agent_id in a follow-up Task to append a new prompt to that child's conversation:
+spawn returns after the child's start is durably recorded, without waiting for
+its model or tool work. The submission receipt includes an opaque, stable
+agent_id and an independent run_id. It is not proof of completion or success.
+The main agent can continue independent work immediately. When it needs the
+result, explicitly wait:
 
 ~~~json
-{"action":"resume","description":"Continue analysis","prompt":"Check the remaining edge cases","agent_id":"agent-id-from-the-result"}
+{"action":"wait","agent_id":"agent-id-from-the-result","run_id":"run-id-from-the-result","timeout_ms":30000}
 ~~~
 
-spawn rejects agent_id; resume requires it on every task. Both actions may call
-the model. For compatibility, omitting action or using action=run still infers
-creation/continuation from the absence/presence of agent_id, including mixed
-legacy task graphs.
+wait defaults to 30 seconds (maximum 300 seconds). A timeout returns
+timed_out=true and does not cancel the child. Cancelling a wait request does
+not cancel the child either. Omit run_id to wait for the current run; pin the
+receipt's run_id to avoid accidentally waiting for a later resume. cancel also
+accepts run_id so a stale receipt cannot cancel a newer run.
+
+After the previous run finishes, pass agent_id in a follow-up Task to append a
+new prompt to that child's conversation. resume also returns after durable start:
+
+~~~json
+{"action":"resume","prompt":"Check the remaining edge cases","agent_id":"agent-id-from-the-result"}
+~~~
+
+spawn rejects agent_id; resume requires it. Both submit exactly one run and
+reject tasks arrays; use action=run (or omit action) for dependency task graphs.
+For compatibility, that legacy path still waits for results, infers
+creation/continuation from agent_id, and supports mixed creation/resumption
+graphs. Existing depends_on scheduling and result injection are unchanged.
+
+Explicit spawn/resume are asynchronous regardless of host background settings;
+run_in_background is unnecessary. They are not cancelled by the tool executor
+returning or the main agent normally finishing a turn. Explicit cancel, app
+shutdown, or process termination ends their execution; they are not a daemon.
+App shutdown cancels and joins owned runs before closing shared tools.
+
+Detached completions produce model-context notifications at active model
+boundaries, or on the parent session's next turn. Notifications do not automatically start a
+new main-agent run; pending children do not prevent the parent from finishing. They are isolated by
+project and parent session and consumed once in process. After a restart, use
+wait/status/history for durable results; notification delivery is not persisted.
+The UI also receives completion/failure/cancellation progress events.
+
+The legacy run/task-graph path retains host background yielding and whole-graph
+notifications; run_in_background only affects that path. Explicit wait always
+honors its own bounded wait instead of being wrapped in a second background job.
 
 Do not substitute task_id for agent_id. Task item IDs still describe dependency
-edges in one graph. Each execution has an execution ID; automatic retries share
-that execution ID and agent ID, with a fresh run ID and incremented attempt.
+edges in one graph. An explicit async submission has one fixed run_id; failures
+are visible through wait/status/notifications, and the parent decides whether to
+resume. It does not silently retry under a different run_id. Legacy run/graph
+executions retain automatic pre-tool retries: attempts share the execution ID
+and agent ID, with a fresh run ID and incremented attempt.
 Retries do not append the same prompt again. Pre-tool model failures can retry;
 a run which has issued a tool call must not retry automatically after failure.
 
 Within a graph, set agent_id separately on each item. Two tasks sharing an agent
 must have a dependency edge, or use serial execution. Results from a predecessor
 using the same agent are not injected again as prompt text.
+
+## Roles and configuration
+
+agent_type selects a role; agent_id identifies a specific independent instance.
+Multiple Explorers can coexist, each with its own history. A new child defaults
+to worker when agent_type is omitted (including legacy Task calls). Resume
+restores the saved type, permits omitting description, and rejects attempts to
+change agent_type. list/status include agent_type. Untyped legacy instances
+remain resumable in Ultra; Bypass rejects them rather than silently assigning a
+new role.
+
+The embedded definitions are packaged with Go embed:
+
+~~~text
+internal/agent/roles/explorer.toml  read-only code exploration
+internal/agent/roles/worker.toml    implementation and verification
+internal/agent/roles/reviewer.toml  read-only correctness/regression review
+~~~
+
+Role separation follows the pattern documented by Codex's built-in agents
+(default/worker/explorer); Reviewer is a SolCode addition, not a claim that Codex
+ships that role. SolCode's prompts and tool names are adapted for its own executor.
+Reference: https://developers.openai.com/codex/subagents
+
+Configuration precedence is embedded defaults < ~/.solcode/roles/<type>.toml
+< <workDir>/.solcode/roles/<type>.toml, per field. Omitted fields preserve the
+previous layer; allowed_tools replaces the previous array. Example:
+
+~~~toml
+# .solcode/roles/explorer.toml
+model = "fast"
+instructions = "Trace persistence entry points; cite paths and line references."
+allowed_tools = ["View", "Grep", "Glob", "LS", "LSP"]
+~~~
+
+Supported keys are description, instructions, model, and allowed_tools. Unknown
+keys and malformed TOML fail explicitly. Custom filenames define additional roles
+in Ultra only. New roles cannot be registered for Bypass via configuration.
+Explicit Task model selection overrides the role model; otherwise the current
+role model (including fast) or the host's current default is used. Overrides are
+reloaded on each invocation, including Resume. Role instructions are durable
+dynamic context, not changes to the shared system/tools cache prefix.
+
+The effective tool ceiling is the intersection of the parent's allowed_tools,
+the role's allowed_tools, the Task request, and (on Resume) the saved instance
+ceiling. Empty lists mean no additional restriction, not permission to escape
+another ceiling; an empty intersection denies all tools. Built-in Explorer and
+Reviewer exclude shell commands and mutations. User overrides may change role
+behavior and its requested tools, but cannot grant more than the parent or a
+persisted instance ceiling. Global permission checks and revocations still apply
+on every tool call, including BatchTool children. Nested agents remain forbidden.
 
 ## Context inheritance
 

@@ -123,7 +123,10 @@ type Config struct {
 }
 
 type Engine struct {
-	config Config
+	configMu sync.RWMutex
+	// runOwner shares prefix state while each run uses an immutable config snapshot.
+	runOwner *Engine
+	config   Config
 
 	// stickyExtras is the session-scoped, only-growing set of non-core tool
 	// names that have been sticky-enabled (ToolSearch hit, actual use, router).
@@ -139,11 +142,25 @@ func NewEngine(config Config) *Engine {
 }
 
 func (e *Engine) UpdateConfig(config Config) {
+	e.configMu.Lock()
+	defer e.configMu.Unlock()
 	e.config = config
+}
+
+func (e *Engine) forRun() *Engine {
+	if e.runOwner != nil {
+		return e
+	}
+	e.configMu.RLock()
+	defer e.configMu.RUnlock()
+	return &Engine{config: e.config, runOwner: e}
 }
 
 // snapshotStickyExtras returns a copy of the shared sticky set for a run.
 func (e *Engine) snapshotStickyExtras() map[string]bool {
+	if e.runOwner != nil {
+		return e.runOwner.snapshotStickyExtras()
+	}
 	e.stickyMu.Lock()
 	defer e.stickyMu.Unlock()
 	out := make(map[string]bool, len(e.stickyExtras))
@@ -157,6 +174,10 @@ func (e *Engine) snapshotStickyExtras() map[string]bool {
 // Only grows; names are never removed mid-session (prompt-cache stability).
 func (e *Engine) mergeStickyExtras(enabled map[string]bool) {
 	if e == nil || len(enabled) == 0 {
+		return
+	}
+	if e.runOwner != nil {
+		e.runOwner.mergeStickyExtras(enabled)
 		return
 	}
 	e.stickyMu.Lock()
@@ -232,6 +253,7 @@ func (e *Engine) Run(ctx context.Context, cfg agent.AgentConfig) agent.AgentResu
 }
 
 func (e *Engine) RunWithHistory(ctx context.Context, req RunRequest) RunResult {
+	e = e.forRun()
 	if e.config.Client == nil && e.config.Model != nil {
 		return e.runLegacyModel(ctx, req)
 	}
@@ -258,6 +280,9 @@ func (e *Engine) runLegacyModel(ctx context.Context, req RunRequest) RunResult {
 	}
 	if len(req.Messages) > 0 {
 		modelText = legacyHistoryPrompt(messages)
+	}
+	if cfg.RoleInstructions != "" {
+		modelText = cfg.RoleInstructions + "\n\n" + modelText
 	}
 	response, err := e.config.Model.Send(ctx, ModelRequest{
 		Prompt:  modelText,
@@ -334,10 +359,11 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 		WithGuardrail(e.config.Guardrail).
 		WithAllowedTools(cfg.AllowedTools)
 	builder := ContextBuilder{
-		SystemPrompt: e.config.SystemPrompt,
-		ProjectRules: e.config.ProjectRules,
-		Skills:       e.config.Skills,
-		SkillNames:   e.config.SkillNames,
+		SystemPrompt:      e.config.SystemPrompt,
+		AgentInstructions: cfg.RoleInstructions,
+		ProjectRules:      e.config.ProjectRules,
+		Skills:            e.config.Skills,
+		SkillNames:        e.config.SkillNames,
 	}
 	// Task working set (§5): tracks files read/modified and confirmed facts so
 	// later turns reuse local knowledge instead of re-exploring. Updated only
@@ -387,6 +413,11 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 	}()
 	drainBackground := func() int {
 		notifications := background.drain(e.config.OnToolDone)
+		if isMain && e.config.Tools != nil {
+			if source, ok := e.config.Tools.Find(tool.TaskToolName).(tool.AgentNotificationSource); ok {
+				notifications = append(notifications, source.DrainAgentNotifications(&tool.UseContext{SessionID: nonEmpty(runReq.SessionID, string(cfg.ID)), AgentID: string(cfg.ID), WorkDir: cfg.WorkDir})...)
+			}
+		}
 		for _, notification := range notifications {
 			// Completion is a new user-context notification, never a second
 			// tool_result for an already acknowledged tool_use ID.
@@ -462,7 +493,7 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 				continue
 			}
 			if candidate.Name() == tool.TaskToolName || candidate.Name() == tool.SubagentToolName {
-				if e.config.Permissions == nil || e.config.Permissions.Mode() != permission.ModeUltra || !isMain {
+				if e.config.Permissions == nil || (e.config.Permissions.Mode() != permission.ModeUltra && e.config.Permissions.Mode() != permission.ModeBypass) || !isMain {
 					continue
 				}
 			}
@@ -563,6 +594,7 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 		// before the latest user/tool_result message on every request.
 		requestBuilder := builder
 		requestBuilder.ModeInstructions = ""
+		requestBuilder.AgentInstructions = ""
 		requestBuilder.ForceSkill = ""
 		requestBuilder.FoldedTools = ""
 		requestBuilder.WorkingSet = ""
@@ -705,6 +737,10 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 			}
 			emitProgress("tool_start", use.Name, string(input), "", false)
 			callSkillRoots := orderedSkillRoots(activeSkillRoot, e.config.SkillRoots)
+			currentMode := permission.ModeAuto
+			if e.config.Permissions != nil {
+				currentMode = e.config.Permissions.Mode()
+			}
 			toolEnv := ToolEnv{
 				UseContext: &tool.UseContext{
 					SessionID:      nonEmpty(runReq.SessionID, string(cfg.ID)),
@@ -714,6 +750,8 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 					SkillRoots:     callSkillRoots,
 					AgentID:        string(cfg.ID),
 					AgentRole:      string(cfg.Role),
+					AllowedTools:   cfg.AllowedTools,
+					PermissionMode: string(currentMode),
 					TodoPath:       e.config.TodoPath,
 					FastModel:      e.config.FastModelName,
 					TextFileSystem: e.config.TextFileSystem,

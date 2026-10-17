@@ -17,6 +17,7 @@ type dynamicContext struct {
 }
 
 var dynamicContextClears = map[string]string{
+	"agent-role":   "Agent role configuration updated: earlier role instructions are superseded; no additional role instructions apply.",
 	"skill":        "No skill is automatically selected for this task. Earlier automatic skill selections are superseded.",
 	"folded-tools": "Folded-tool catalog updated: no additional tools are currently folded.",
 	"working-set":  "Working set reset for the new task. Earlier working-set snapshots are historical, not the current task state.",
@@ -71,6 +72,7 @@ func (d *dynamicContext) append(messages []sdk.MessageParam, b ContextBuilder, r
 		blocks = append(blocks, sdk.NewTextBlock(contextmessage.DynamicContextText(kind, body)))
 	}
 	add("mode", b.ModeInstructions, false)
+	add("agent-role", b.AgentInstructions, true)
 	skill := strings.TrimSpace(b.ForceSkill)
 	if skill != "" {
 		skill = forceSkillBlock(skill)

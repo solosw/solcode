@@ -21,6 +21,7 @@ require (
 	github.com/hybridgroup/yzma v1.28.0
 	github.com/modelcontextprotocol/go-sdk v1.6.1
 	github.com/odvcencio/gotreesitter v0.22.5
+	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/philippgille/chromem-go v0.7.0
 	github.com/proiceremo/websearch v0.0.2
 	github.com/sergi/go-diff v1.4.0

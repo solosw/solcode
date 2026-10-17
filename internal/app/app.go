@@ -268,6 +268,16 @@ func New(cfg config.Config, opts ...Option) (*App, error) {
 		childStore = agentsession.NewFileStore(cfg.Session.Dir)
 	}
 	coordinator := agent.NewCoordinator(eng, childStore)
+	coordinator.SetEventHandler(func(event agent.Event) {
+		if !event.Detached || event.Kind == agent.EventStarted || options.onAgentProgress == nil {
+			return
+		}
+		output := event.Result.Output
+		if event.Result.Error != "" {
+			output = event.Result.Error
+		}
+		options.onAgentProgress(tool.AgentProgressEvent{Kind: string(event.Kind), AgentID: string(event.Status.ID), ParentAgentID: string(event.Status.ParentID), ParentToolUseID: event.ParentToolUseID, TaskID: event.TaskID, Description: event.Description, Output: output, IsError: event.Result.Error != ""})
+	})
 	subagent := tool.NewSubagentTool(coordinator)
 	registry.Register(subagent, tool.NewTaskToolWithSubagent(subagent), tool.NewBatchToolWithPTC(tool.BatchLimits{
 		MaxOperations:       cfg.Batch.MaxOperations,
@@ -478,6 +488,9 @@ func openChangeGraph(cfg config.Config) (*changegraph.Store, error) {
 func (a *App) Close() error {
 	if a == nil {
 		return nil
+	}
+	if a.Coordinator != nil {
+		a.Coordinator.Close()
 	}
 	var firstErr error
 	if a.Sessions != nil {

@@ -42,7 +42,7 @@ func (t *modeSwitchTool) InputSchema() map[string]any {
 			"mode": map[string]any{
 				"type":        "string",
 				"enum":        []string{"plan", "bypass", "goal", "ultra", "ultrl"},
-				"description": "Requested permission mode; ultra enables Task/sub-agents. Legacy ultrl is accepted as an alias.",
+				"description": "Requested permission mode; bypass permits explorer/worker/reviewer, ultra also permits custom sub-agent roles and task workflows. Legacy ultrl is accepted as an alias.",
 			},
 		},
 		"required": []string{"mode"},

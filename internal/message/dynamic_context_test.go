@@ -11,6 +11,9 @@ func TestDynamicContextOnlyClassifiesPureKnownOverlays(t *testing.T) {
 	if !IsDynamicContext(sdk.NewUserMessage(block)) {
 		t.Fatal("generated overlay not recognized")
 	}
+	if !IsDynamicContext(sdk.NewUserMessage(block, sdk.NewTextBlock(DynamicContextText("agent-role", "Explorer")))) {
+		t.Fatal("role overlay must not be treated as a real user turn")
+	}
 	for _, msg := range []sdk.MessageParam{
 		sdk.NewAssistantMessage(block),
 		sdk.NewUserMessage(block, sdk.NewTextBlock("real task")),

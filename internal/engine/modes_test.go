@@ -9,7 +9,7 @@ import (
 	"github.com/solosw/solcode/internal/tool"
 )
 
-func TestEngineOnlyExposesTaskInUltraMainAgent(t *testing.T) {
+func TestEngineOnlyExposesTaskInDelegatingMainAgent(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		mode     permission.Mode
@@ -18,7 +18,7 @@ func TestEngineOnlyExposesTaskInUltraMainAgent(t *testing.T) {
 	}{
 		{"auto", permission.ModeAuto, agent.AgentRoleMain, false},
 		{"plan", permission.ModePlan, agent.AgentRoleMain, false},
-		{"bypass", permission.ModeBypass, agent.AgentRoleMain, false},
+		{"bypass", permission.ModeBypass, agent.AgentRoleMain, true},
 		{"goal", permission.ModeGoal, agent.AgentRoleMain, false},
 		{"ultra", permission.ModeUltra, agent.AgentRoleMain, true},
 		{"legacy ultra", "ultrl", agent.AgentRoleMain, true},

@@ -21,6 +21,9 @@ type TextFileSystem interface {
 }
 
 type UseContext struct {
+	// Delegation inherits this runtime ceiling, never the parent snapshot.
+	AllowedTools   []string
+	PermissionMode string
 	// ParentContext is a read-only fork source; never carries execution permissions.
 	ParentContext agent.Snapshot
 	BatchDispatch func(ctx context.Context, name string, input json.RawMessage) (*ContentBlock, error)

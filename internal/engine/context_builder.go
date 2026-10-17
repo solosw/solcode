@@ -19,7 +19,8 @@ type SkillInfo struct {
 }
 
 type ContextBuilder struct {
-	SystemPrompt string
+	SystemPrompt      string
+	AgentInstructions string
 	// ProjectRules are project-only instructions from <workDir>/.solcode,
 	// injected into the system prompt at startup.
 	ProjectRules string
@@ -121,6 +122,9 @@ func (b ContextBuilder) contextBlock(sessionSummary string, memoryContext []Cont
 	// may do this turn without rewriting the cached system prefix.
 	if mode := strings.TrimSpace(b.ModeInstructions); mode != "" {
 		parts = append(parts, mode)
+	}
+	if role := strings.TrimSpace(b.AgentInstructions); role != "" {
+		parts = append(parts, role)
 	}
 	// A force-loaded skill goes next: it is the instruction for this turn, and
 	// the other blocks are supporting context for it.
@@ -484,7 +488,7 @@ func toolUsagePrompt() string {
 		"- File tools may read and write any directory. Relative paths still resolve against the project WorkDir, then configured skill roots.",
 		"- Prefer specialized operations over Bash: use View/Grep/Glob/LS/LSP as BatchTool operations for files and code intelligence, and WebSearch/Fetch (via ToolSearch if hidden) for the network. Bash is banned from curl/wget and similar downloaders.",
 		"- Use AskUser for real product/requirement choices (2-4 options). Do not use it for facts you can discover with tools.",
-		"- Use ModeSwitch only when the user wants plan/bypass/goal/ultra, or when a large design should be planned before edits. Do not switch modes unprompted for ordinary coding. Task and Task-graph workflows require explicit ultra mode (bypass + task); in all other modes perform the work in the main agent.",
+		"- Use ModeSwitch only when the user wants plan/bypass/goal/ultra, or when a large design should be planned before edits. Do not switch modes unprompted for ordinary coding. Task is available in bypass only for explorer/worker/reviewer, and in ultra for configured custom roles too. In other modes perform the work in the main agent. agent_type selects the role; agent_id identifies a persistent instance. Explicit spawn/resume submit asynchronously and return agent_id/run_id; continue independent work, then use Task wait with those IDs when a result is needed. A wait timeout does not cancel the agent. Resume with the same agent_id to reuse its history. Use action=run for legacy result-waiting Task dependency graphs.",
 		"- When a reusable workflow matches the task, use the Skill tool before continuing with other tools. Skill names may also be found via ToolSearch.",
 	}, "\n")
 }

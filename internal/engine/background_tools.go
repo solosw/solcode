@@ -50,6 +50,18 @@ func newBackgroundTools(enabled bool, yieldAfter time.Duration) *backgroundTools
 }
 
 func (b *backgroundTools) execute(ctx context.Context, name, toolUseID string, input json.RawMessage, invoke func(context.Context, func()) ToolResult) ToolResult {
+	// Lifecycle calls have their own scheduling: submit returns promptly and
+	// wait blocks only for its explicit bounded wait. Never wrap either in a
+	// second background acknowledgement.
+	if name == tool.TaskToolName {
+		var lifecycle struct {
+			Action string `json:"action"`
+		}
+		_ = json.Unmarshal(input, &lifecycle)
+		if lifecycle.Action != "" && lifecycle.Action != "run" {
+			return invoke(ctx, nil)
+		}
+	}
 	if b == nil || len(b.pending) >= maxBackgroundTools || (name != tool.BashToolName && name != tool.TaskToolName) {
 		return invoke(ctx, nil)
 	}

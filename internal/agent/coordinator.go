@@ -33,6 +33,10 @@ const (
 )
 
 type AgentConfig struct {
+	// Detached runs belong to the coordinator, not to a tool invocation.
+	Detached                bool   `json:"detached,omitempty"`
+	AgentType               string `json:"agent_type,omitempty"`
+	RoleInstructions        string `json:"role_instructions,omitempty"`
 	ParentSessionID         string
 	RunID                   string
 	ExecutionID             string
@@ -66,6 +70,7 @@ const (
 )
 
 type Event struct {
+	Detached        bool
 	Kind            EventKind
 	Status          AgentStatus
 	Result          AgentResult
@@ -83,6 +88,7 @@ type AgentResult struct {
 }
 
 type AgentStatus struct {
+	AgentType       string     `json:"agent_type,omitempty"`
 	RunID           string     `json:"run_id"`
 	ParentSessionID string     `json:"parent_session_id,omitempty"`
 	WorkDir         string     `json:"work_dir,omitempty"`
@@ -100,11 +106,13 @@ type Runner interface {
 }
 
 type Coordinator struct {
-	mu           sync.RWMutex
-	runner       Runner
-	agents       map[AgentID]*runningAgent
-	eventHandler func(Event)
-	store        Store
+	mu            sync.RWMutex
+	runner        Runner
+	agents        map[AgentID]*runningAgent
+	eventHandler  func(Event)
+	store         Store
+	closed        bool
+	notifications []Event
 }
 
 type runningAgent struct {
