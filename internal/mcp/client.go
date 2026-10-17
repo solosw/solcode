@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -76,7 +77,23 @@ func contentBlockFromCallResult(result *sdkmcp.CallToolResult) (*tool.ContentBlo
 	if result == nil {
 		return tool.ErrorResult("mcp tool returned nil result"), nil
 	}
-	text := strings.TrimSpace(contentToText(result.Content))
+	// Images must reach the model as vision blocks, never as base64 text.
+	// ContentBlock currently has one image slot, so retain the first image and
+	// report additional ones without serializing their binary payloads.
+	var image *sdkmcp.ImageContent
+	var textItems []sdkmcp.Content
+	imageCount := 0
+	for _, item := range result.Content {
+		if img, ok := item.(*sdkmcp.ImageContent); ok {
+			imageCount++
+			if image == nil {
+				image = img
+			}
+		} else {
+			textItems = append(textItems, item)
+		}
+	}
+	text := strings.TrimSpace(contentToText(textItems))
 	if text == "" && result.StructuredContent != nil {
 		// StructuredContent is a Go value, not a string, so render it directly
 		// rather than marshaling to JSON first.
@@ -92,6 +109,17 @@ func contentBlockFromCallResult(result *sdkmcp.CallToolResult) (*tool.ContentBlo
 	}
 	if result.IsError {
 		return tool.ErrorResult(text), nil
+	}
+	if image != nil {
+		switch image.MIMEType {
+		case "image/png", "image/jpeg", "image/gif", "image/webp":
+			if imageCount > 1 {
+				text += fmt.Sprintf("\n%d additional MCP images omitted; request a single screenshot at a time.", imageCount-1)
+			}
+			return tool.ImageResult(image.MIMEType, base64.StdEncoding.EncodeToString(image.Data), text), nil
+		default:
+			text += "\nUnsupported MCP image type: " + image.MIMEType
+		}
 	}
 	return tool.Result(text), nil
 }

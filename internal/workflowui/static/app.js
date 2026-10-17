@@ -853,7 +853,7 @@
   }
 
   function syncFeatureSettings(d) {
-    d.computer_use = { enabled: Boolean(el.setComputerUse.checked) };
+    d.computer_use = { ...d.computer_use, enabled: Boolean(el.setComputerUse.checked) };
     const jev = d.jev || (d.jev = {});
     jev.enabled = Boolean(el.setJevEnabled.checked);
     jev.type = (el.setJevType.value || "api").trim().toLowerCase() || "api";

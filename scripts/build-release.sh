@@ -25,6 +25,8 @@ rm -rf "$DIST"
 mkdir -p "$DIST"
 
 export CGO_ENABLED=0
+if command -v python3 >/dev/null 2>&1; then PYTHON=python3; else PYTHON=python; fi
+trap 'rm -f internal/computeruse/bundle/assets/runtime.archive internal/computeruse/bundle/assets/target.json' EXIT
 # Binary version for -version (can differ from asset tag, e.g. master+abc1234).
 BIN_VERSION="${LDFLAGS_VERSION:-$VERSION}"
 LDFLAGS="-s -w -X main.version=${BIN_VERSION}"
@@ -66,30 +68,35 @@ for spec in "${targets[@]}"; do
   artifact="${DIST}/solcode_${VERSION}_${goos}_${goarch}.${pack}"
 
   echo "  -> ${goos}/${goarch}"
+  "$PYTHON" scripts/prepare-computer-use.py --os "$goos" --arch "$goarch"
+  cp -R "${ROOT}/internal/computeruse/bundle/notices" "${stage}/open-computer-use-notices"
   GOOS="$goos" GOARCH="$goarch" go build -trimpath -ldflags="$LDFLAGS" -o "${stage}/${out_name}" ./cmd/solcode
 
   (
     cd "$stage"
     if [[ "$pack" == "zip" ]]; then
       if command -v zip >/dev/null 2>&1; then
-        zip -q "${artifact}" "$out_name"
+        zip -qr "${artifact}" "$out_name" open-computer-use-notices
       else
         # Fallback: PowerShell on Windows Git Bash, or python
         if command -v powershell.exe >/dev/null 2>&1; then
-          powershell.exe -NoProfile -Command "Compress-Archive -Path '$(native_path "$stage/$out_name")' -DestinationPath '$(native_path "$artifact")' -Force"
+          powershell.exe -NoProfile -Command "Compress-Archive -Path '$(native_path "$stage/$out_name")','$(native_path "$stage/open-computer-use-notices")' -DestinationPath '$(native_path "$artifact")' -Force"
         else
-          python - "$(native_path "$artifact")" "$out_name" <<'PY'
+          "$PYTHON" - "$(native_path "$artifact")" "$out_name" <<'PY'
 import sys
+from pathlib import Path
 import zipfile
 
 artifact, out_name = sys.argv[1], sys.argv[2]
 with zipfile.ZipFile(artifact, "w", zipfile.ZIP_DEFLATED) as z:
     z.write(out_name, arcname=out_name)
+    for notice in Path("open-computer-use-notices").iterdir():
+        z.write(notice, arcname=str(notice))
 PY
         fi
       fi
     else
-      tar -czf "${artifact}" "$out_name"
+      tar -czf "${artifact}" "$out_name" open-computer-use-notices
     fi
   )
   rm -rf "$stage"

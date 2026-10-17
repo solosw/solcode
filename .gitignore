@@ -33,3 +33,7 @@ Thumbs.db
 # These are generated at runtime, not committed
 
 .warp-snapshots
+
+# Generated, checksum-verified Computer Use runtime embedded by release builds
+/internal/computeruse/bundle/assets/runtime.archive
+/internal/computeruse/bundle/assets/target.json

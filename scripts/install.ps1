@@ -24,7 +24,7 @@ param(
 $ErrorActionPreference = "Stop"
 $BinaryName = "solcode.exe"
 $GitHubBase = if ($env:GITHUB_BASE) { $env:GITHUB_BASE } else { "https://github.com" }
-# Rolling releases only publish the CGO + robotgo (*_computeruse) assets.
+# Rolling releases only publish the embedded native runtime (*_computeruse) assets.
 # -ComputerUse / SOLCODE_COMPUTER_USE kept for compatibility with older docs.
 $WantComputerUse = $true
 
@@ -68,7 +68,7 @@ $candidates = @(
 Write-Host "Channel/tag: $tag"
 Write-Host "Repo:        $Repo"
 Write-Host "Target:      $os/$arch"
-Write-Host "Flavor:      computer-use (CGO + robotgo)"
+Write-Host "Flavor:      computer-use (embedded native runtime)"
 
 $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("solcode-install-" + [guid]::NewGuid().ToString("n"))
 New-Item -ItemType Directory -Path $tmp | Out-Null
@@ -91,11 +91,11 @@ try {
 Failed to download release asset for $os/$arch (tag $tag, repo $Repo).
 Tried: $($candidates -join ', ')
 
-Only *_computeruse assets are published (platforms CI can build with CGO:
+Only *_computeruse assets are published (supported native runtime platforms:
 linux/windows/darwin amd64+arm64; ARM/Intel-macOS legs are best-effort).
 Hint: push to master so CI publishes the rolling "master" release,
       or pass -Version <tag> for a versioned release.
-Local build: CGO_ENABLED=1 go build -tags computeruse -o solcode.exe ./cmd/solcode
+Local build: ./scripts/build-computeruse.sh dev windows amd64 zip
 "@
     }
 

@@ -25,7 +25,7 @@ INSTALL_DIR="${SOLCODE_INSTALL_DIR:-${HOME}/.local/bin}"
 BINARY_NAME="solcode"
 GITHUB_BASE="${GITHUB_BASE:-https://github.com}"
 NO_PATH=0
-# Rolling releases only publish the CGO + robotgo (*_computeruse) assets.
+# Rolling releases only publish the embedded native runtime (*_computeruse) assets.
 # SOLCODE_COMPUTER_USE=0 is ignored; kept for older docs/scripts.
 COMPUTER_USE=1
 
@@ -44,10 +44,10 @@ Options:
 Notes:
   - Default channel is "master" (rolling build from the master branch).
   - There is no "latest" channel; "latest" is treated as "master".
-  - Published binaries are the *_computeruse (CGO + robotgo) builds for platforms
-    CI can compile with CGO (linux/windows/darwin amd64+arm64; ARM and
+  - Published binaries are the *_computeruse (embedded native runtime) builds for platforms
+    with upstream native runtimes (linux/windows/darwin amd64+arm64; ARM and
     Intel-macOS legs are best-effort).
-    Desktop automation still needs "computer_use": {"enabled": true} in settings.
+    Desktop automation needs "computer_use": {"enabled": true, "backend": "open-computer-use"}.
     On macOS, grant Screen Recording and Accessibility permissions on first use.
   - PATH is updated automatically for the current shell and common rc files.
   - Pin a semver tag with --version vX.Y.Z if you publish versioned releases.
@@ -209,7 +209,7 @@ download_asset() {
 echo "Channel/tag: ${TAG}"
 echo "Repo:        ${REPO}"
 echo "Target:      ${OS}/${ARCH}"
-echo "Flavor:      computer-use (CGO + robotgo)"
+echo "Flavor:      computer-use (embedded native runtime)"
 
 ARCHIVE=""
 if ARCHIVE="$(download_asset "$ASSET")"; then
@@ -224,7 +224,7 @@ else
   echo "repo:  ${REPO}" >&2
   echo >&2
   echo "hint: only *_computeruse assets are published (platforms CI can build" >&2
-  echo "      with CGO: linux/windows/darwin amd64+arm64; ARM/Intel-macOS" >&2
+  echo "      for native runtimes: linux/windows/darwin amd64+arm64; ARM/Intel-macOS" >&2
   echo "      legs are best-effort)." >&2
   echo "hint: push to master so CI publishes the rolling \"master\" release," >&2
   echo "      or pass --version <tag> for a versioned release." >&2

@@ -149,6 +149,23 @@ func (c *stdioClient) ListTools(ctx context.Context) ([]tool.MCPToolInfo, error)
 
 func (c *stdioClient) CallTool(ctx context.Context, toolName string, input json.RawMessage) (*tool.ContentBlock, error) {
 	c.mu.Lock()
+	started := c.session != nil
+	c.mu.Unlock()
+	if !started {
+		return nil, fmt.Errorf("mcp server %q is not started", c.server.Name)
+	}
+
+	result, err := c.callTool(ctx, toolName, input)
+	if err != nil {
+		return tool.ErrorResult(err.Error()), nil
+	}
+	return result, nil
+}
+
+// callTool preserves transport errors for native sidecars, allowing a failed
+// connection to be discarded without replaying a potentially mutating action.
+func (c *stdioClient) callTool(ctx context.Context, toolName string, input json.RawMessage) (*tool.ContentBlock, error) {
+	c.mu.Lock()
 	session := c.session
 	c.mu.Unlock()
 	if session == nil {
@@ -160,7 +177,7 @@ func (c *stdioClient) CallTool(ctx context.Context, toolName string, input json.
 	}
 	result, err := session.CallTool(ctx, &sdkmcp.CallToolParams{Name: toolName, Arguments: args})
 	if err != nil {
-		return tool.ErrorResult(err.Error()), nil
+		return nil, err
 	}
 	return contentBlockFromCallResult(result)
 }

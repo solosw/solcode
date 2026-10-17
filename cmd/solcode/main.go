@@ -810,7 +810,7 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 					"skills":             map[string]any{"enabled": next.Skills.Enabled, "disabled": next.Skills.Disabled},
 					// Written as a nested object so the merge keeps unrelated
 					// ComputerUse keys that a future version may add.
-					"computer_use": map[string]any{"enabled": next.ComputerUse.Enabled},
+					"computer_use": map[string]any{"enabled": next.ComputerUse.Enabled, "backend": next.ComputerUse.Backend, "binary": next.ComputerUse.Binary},
 					"jev": map[string]any{
 						"enabled":              next.Jev.Enabled,
 						"type":                 next.Jev.Type,

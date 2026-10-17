@@ -157,8 +157,8 @@ type Config struct {
 	// Image is an optional OpenAI-compatible Images API (generations + edits),
 	// configured independently from the chat provider.
 	Image ImageConfig `json:"image,omitempty"`
-	// ComputerUse enables desktop screenshot / mouse / keyboard automation
-	// (robotgo). Off by default — opt in via settings.
+	// ComputerUse opts into the embedded native desktop MCP runtime. Legacy
+	// enabled-only robotgo settings no longer activate desktop automation.
 	ComputerUse ComputerUseConfig `json:"computer_use,omitempty"`
 	// Jev configures the TypeSafe System One decision layer. Off by default.
 	Jev JevConfig `json:"jev,omitempty"`
@@ -204,11 +204,15 @@ type BatchPTCConfig struct {
 	Enabled bool `json:"enabled,omitempty"`
 }
 
-// ComputerUseConfig gates the ComputerUse tool and bundled computer-use skill.
-// Leave Enabled=false (default) to hide both.
+// ComputerUseBackendNative selects the bundled native MCP runtime. The legacy
+// robotgo backend is no longer registered; old enabled-only settings stay off.
+const ComputerUseBackendNative = "open-computer-use"
+
 type ComputerUseConfig struct {
-	// Enabled registers the ComputerUse tool and loads the builtin skill.
-	Enabled bool `json:"enabled,omitempty"`
+	Enabled bool   `json:"enabled,omitempty"`
+	Backend string `json:"backend,omitempty"`
+	// Binary optionally overrides the embedded runtime (native executable path).
+	Binary string `json:"binary,omitempty"`
 }
 
 // ORTConfig is retained to parse old settings. The app no longer uses ORT.
@@ -1864,7 +1868,7 @@ func (c Config) ImageEnabled() bool {
 
 // ComputerUseEnabled reports whether desktop automation tools/skills register.
 func (c Config) ComputerUseEnabled() bool {
-	return c.ComputerUse.Enabled
+	return c.ComputerUse.Enabled && c.ComputerUse.Backend == ComputerUseBackendNative
 }
 
 // normalizeEmbedding resolves env indirection, migrates the legacy top-level

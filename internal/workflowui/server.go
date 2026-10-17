@@ -337,7 +337,9 @@ type settingsResponse struct {
 
 // computerUseSettings is the UI-facing view of the ComputerUse toggle.
 type computerUseSettings struct {
-	Enabled bool `json:"enabled"`
+	Enabled bool   `json:"enabled"`
+	Backend string `json:"backend"`
+	Binary  string `json:"binary,omitempty"`
 }
 
 // ortSettings is the UI-facing view of shared ONNX Runtime options.
@@ -614,7 +616,9 @@ func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
 		APIFormat:  cfg.APIFormat,
 		MCPServers: cfg.MCP.Servers,
 		ComputerUse: computerUseSettings{
-			Enabled: cfg.ComputerUse.Enabled,
+			Enabled: cfg.ComputerUseEnabled(),
+			Backend: cfg.ComputerUse.Backend,
+			Binary:  cfg.ComputerUse.Binary,
 		},
 		Jev: jevSettings{
 			Enabled:            cfg.Jev.Enabled,
@@ -919,6 +923,9 @@ func applyComputerUseSettings(cfg *config.Config, req settingsUpdate) {
 		return
 	}
 	cfg.ComputerUse.Enabled = *req.ComputerUseEnabled
+	if *req.ComputerUseEnabled {
+		cfg.ComputerUse.Backend = config.ComputerUseBackendNative
+	}
 }
 
 // applyJevSettings applies the Jev fields that were provided.

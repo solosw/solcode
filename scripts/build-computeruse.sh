@@ -1,10 +1,7 @@
 #!/usr/bin/env bash
-# Build ONE computer-use (CGO + robotgo) release archive.
-#
-# This variant links github.com/go-vgo/robotgo, so it needs CGO enabled and a
-# native toolchain for the target: MinGW-w64 (Windows), X11 dev libraries
-# (Linux), or the Xcode command line tools (macOS). Cross-compiling from another
-# OS is not supported — use a runner that matches <goos>/<goarch>.
+# Build ONE release archive embedding the pinned open-computer-use runtime.
+# Pure Go host build: no robotgo, CGO, GUI SDK or native cross compiler needed.
+# The historical _computeruse asset suffix is retained for installer compatibility.
 #
 # Usage:
 #   ./scripts/build-computeruse.sh <version> <goos> <goarch> <pack>
@@ -37,35 +34,12 @@ esac
 DIST="${ROOT}/dist"
 mkdir -p "$DIST"
 
-# robotgo requires CGO; the runner must provide a *native* toolchain whose
-# assembler matches GOARCH. GitHub's windows-11-arm image ships an emulated
-# x86_64 MinGW gcc that cannot assemble runtime/cgo/gcc_arm64.S — CI installs
-# llvm-mingw (scripts/setup-windows-arm64-cgo.ps1) and exports CC first.
-export CGO_ENABLED=1
+export CGO_ENABLED=0
 export GOOS="$GOOS_TARGET"
 export GOARCH="$GOARCH_TARGET"
-
-cc_bin="${CC:-}"
-if [[ -z "$cc_bin" ]]; then
-  if command -v cc >/dev/null 2>&1; then
-    cc_bin=cc
-  elif command -v gcc >/dev/null 2>&1; then
-    cc_bin=gcc
-  fi
-fi
-cc_machine=""
-if [[ -n "$cc_bin" ]]; then
-  cc_machine="$("$cc_bin" -dumpmachine 2>/dev/null || true)"
-  echo "C compiler: $cc_bin (${cc_machine:-unknown})"
-fi
-if [[ "$GOOS_TARGET" == "windows" && "$GOARCH_TARGET" == "arm64" ]]; then
-  if [[ "$cc_machine" != *aarch64* && "$cc_machine" != *arm64* ]]; then
-    echo "windows/arm64 CGO needs an aarch64 MinGW toolchain (got '${cc_machine:-none}')." >&2
-    echo "Install llvm-mingw and export CC=aarch64-w64-mingw32-clang" >&2
-    echo "(scripts/setup-windows-arm64-cgo.ps1)." >&2
-    exit 1
-  fi
-fi
+if command -v python3 >/dev/null 2>&1; then PYTHON=python3; else PYTHON=python; fi
+"$PYTHON" scripts/prepare-computer-use.py --os "$GOOS_TARGET" --arch "$GOARCH_TARGET"
+trap 'rm -f internal/computeruse/bundle/assets/runtime.archive internal/computeruse/bundle/assets/target.json' EXIT
 
 BIN_VERSION="${LDFLAGS_VERSION:-$VERSION}"
 LDFLAGS="-s -w -X main.version=${BIN_VERSION}"
@@ -90,27 +64,31 @@ mkdir -p "$stage"
 artifact="${DIST}/solcode_${VERSION}_${GOOS_TARGET}_${GOARCH_TARGET}_computeruse.${PACK}"
 
 echo "Building solcode ${VERSION} (computer-use) for ${GOOS_TARGET}/${GOARCH_TARGET} ..."
-go build -tags computeruse -trimpath -ldflags="$LDFLAGS" -o "${stage}/${out_name}" ./cmd/solcode
+go build -trimpath -ldflags="$LDFLAGS" -o "${stage}/${out_name}" ./cmd/solcode
 
 (
+  cp -R "${ROOT}/internal/computeruse/bundle/notices" "${stage}/open-computer-use-notices"
   cd "$stage"
   if [[ "$PACK" == "zip" ]]; then
     if command -v zip >/dev/null 2>&1; then
-      zip -q "${artifact}" "$out_name"
+      zip -qr "${artifact}" "$out_name" open-computer-use-notices
     else
       # Pass paths via argv (a native python.exe cannot resolve MSYS paths that
       # are interpolated into the script text).
-      python - "$(native_path "$artifact")" "$out_name" <<'PY'
+      "$PYTHON" - "$(native_path "$artifact")" "$out_name" <<'PY'
 import sys
+from pathlib import Path
 import zipfile
 
 artifact, out_name = sys.argv[1], sys.argv[2]
 with zipfile.ZipFile(artifact, "w", zipfile.ZIP_DEFLATED) as z:
     z.write(out_name, arcname=out_name)
+    for notice in Path("open-computer-use-notices").iterdir():
+        z.write(notice, arcname=str(notice))
 PY
     fi
   else
-    tar -czf "${artifact}" "$out_name"
+    tar -czf "${artifact}" "$out_name" open-computer-use-notices
   fi
 )
 rm -rf "$stage"

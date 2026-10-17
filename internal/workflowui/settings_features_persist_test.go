@@ -29,7 +29,7 @@ func TestSettingsPersistFeaturesThroughDisk(t *testing.T) {
 	// adopt the new config.
 	apply := func(next config.Config) error {
 		if err := config.SaveLocalOverrides(settingsPath, map[string]any{
-			"computer_use": map[string]any{"enabled": next.ComputerUse.Enabled},
+			"computer_use": map[string]any{"enabled": next.ComputerUse.Enabled, "backend": next.ComputerUse.Backend, "binary": next.ComputerUse.Binary},
 			"jev": map[string]any{
 				"enabled":              next.Jev.Enabled,
 				"type":                 next.Jev.Type,

@@ -1,0 +1,30 @@
+{
+  "repository": "iFurySt/open-codex-computer-use",
+  "version": "v1.1.1",
+  "assets": {
+    "darwin/amd64": {
+      "name": "Open-Computer-Use-1.1.1-macOS-universal.app.zip",
+      "sha256": "1cc1b8274c7f602c951260897338f4c611a9720489c79e372b1d993705248688"
+    },
+    "darwin/arm64": {
+      "name": "Open-Computer-Use-1.1.1-macOS-universal.app.zip",
+      "sha256": "1cc1b8274c7f602c951260897338f4c611a9720489c79e372b1d993705248688"
+    },
+    "linux/amd64": {
+      "name": "open-computer-use-cli-1.1.1-linux-amd64.tar.gz",
+      "sha256": "9eb106f41b3c4f04d60009efdf559f145bc15e3213136ba81554962722af7992"
+    },
+    "linux/arm64": {
+      "name": "open-computer-use-cli-1.1.1-linux-arm64.tar.gz",
+      "sha256": "d9056206e7b7dda2d64e9cc5b64e7f1ca673413bb8dfd22d153d1905f392cb99"
+    },
+    "windows/amd64": {
+      "name": "open-computer-use-cli-1.1.1-windows-amd64.zip",
+      "sha256": "723377dcc44d9d4eaa7c797bc5fd51bff1ed44dd4eba4d173f62418e7cda145d"
+    },
+    "windows/arm64": {
+      "name": "open-computer-use-cli-1.1.1-windows-arm64.zip",
+      "sha256": "03ace73633be41381073d369cd5559297d84fbed1aee3bd78416fab909970c92"
+    }
+  }
+}

@@ -72,6 +72,7 @@ func TestSettingsExposeComputerUseAndJev(t *testing.T) {
 	cfg := config.Default()
 	cfg.WorkDir = t.TempDir()
 	cfg.ComputerUse.Enabled = true
+	cfg.ComputerUse.Backend = config.ComputerUseBackendNative
 	cfg.Jev = config.JevConfig{
 		Enabled:            true,
 		Type:               config.JevBackendAPI,
@@ -462,6 +463,7 @@ func TestPostSettingsDisablesFeatures(t *testing.T) {
 	cfg := config.Default()
 	cfg.WorkDir = t.TempDir()
 	cfg.ComputerUse.Enabled = true
+	cfg.ComputerUse.Backend = config.ComputerUseBackendNative
 	cfg.Jev = config.JevConfig{Enabled: true, APIKey: "k", Routing: true, Guardrail: true}
 	_, url, applied := settingsServer(t, cfg)
 
@@ -483,5 +485,32 @@ func TestPostSettingsDisablesFeatures(t *testing.T) {
 	// one-click action.
 	if applied.Jev.APIKey != "k" || !applied.Jev.Routing {
 		t.Fatalf("jev config was wiped: %+v", applied.Jev)
+	}
+}
+
+func TestSettingsExposeLegacyComputerUseAsDisabled(t *testing.T) {
+	cfg := config.Default()
+	cfg.WorkDir = t.TempDir()
+	cfg.ComputerUse.Enabled = true
+	_, url, _ := settingsServer(t, cfg)
+	body := decodeSettings(t, url)
+	native, ok := body["computer_use"].(map[string]any)
+	if !ok || native["enabled"] != false {
+		t.Fatalf("legacy tool should be disabled in UI: %#v", body["computer_use"])
+	}
+}
+
+func TestComputerUseToggleSelectsNativeAndPreservesBinary(t *testing.T) {
+	cfg := config.Default()
+	cfg.ComputerUse.Binary = "/configured/native-binary"
+	enabled := true
+	applyComputerUseSettings(&cfg, settingsUpdate{ComputerUseEnabled: &enabled})
+	if !cfg.ComputerUseEnabled() || cfg.ComputerUse.Binary != "/configured/native-binary" {
+		t.Fatalf("incorrect native settings: %+v", cfg.ComputerUse)
+	}
+	enabled = false
+	applyComputerUseSettings(&cfg, settingsUpdate{ComputerUseEnabled: &enabled})
+	if cfg.ComputerUseEnabled() || cfg.ComputerUse.Backend != config.ComputerUseBackendNative || cfg.ComputerUse.Binary != "/configured/native-binary" {
+		t.Fatalf("disable lost native configuration: %+v", cfg.ComputerUse)
 	}
 }

@@ -11,12 +11,12 @@ A terminal-based coding agent powered by Claude (Anthropic API) that can read, w
 - **ACP (Agent Client Protocol)** — Speak JSON-RPC over stdio with `solcode --acp` (or `solcode acp`) so editors like Zed can drive the same agent loop as the TUI. Supports streaming updates, permissions, cancel, session modes/load, tool-call diffs, ACP `plan` updates from `TodoWrite`, and capability-gated client `fs/read_text_file` / `fs/write_text_file`.
 - **Multi-model support** — Configure multiple LLM providers and models, switch at runtime with `/model` (current provider only) and `/provider`, or add them directly from their dialogs.
 - **Native Anthropic transport** — The Anthropic Messages API uses a handwritten HTTP/JSON/SSE client, including streaming text, thinking, and tool-input deltas; the official SDK remains only for internal message compatibility.
-- **20+ built-in tools** — Bash / Task (long-running calls automatically yield to the background with completion notifications), ImageGenerate / ImageEdit (optional OpenAI-format Images API, separately configurable), ComputerUse (optional desktop screenshot/mouse/keyboard via robotgo; off by default), Edit, Write, View, ViewImage, Grep, Glob, LS, Diff, Patch, Fetch, WebSearch, LSP, MCP, TodoWrite, WriteMemory, ReadMemory, WriteSessionMemory, ReadSessionMemory, AskUser, Task (orchestrates internal Subagent workers), and more.
+- **20+ built-in tools** — Bash / Task (long-running calls automatically yield to the background with completion notifications), ImageGenerate / ImageEdit (optional OpenAI-format Images API, separately configurable), ComputerUse (optional embedded open-computer-use native runtime; off by default), Edit, Write, View, ViewImage, Grep, Glob, LS, Diff, Patch, Fetch, WebSearch, LSP, MCP, TodoWrite, WriteMemory, ReadMemory, WriteSessionMemory, ReadSessionMemory, AskUser, Task (orchestrates internal Subagent workers), and more.
 - **Checkpoints & rewind** — Before any file-mutating tool runs, solcode snapshots the file's turn-start contents. During a Bash call it instead compares before/after SHA-256 workdir fingerprints (capped at 2000 files / 1 MiB each, skipping `.git`, `node_modules`, binaries, and hidden paths) and captures whatever changed. `/rewind` then restores workspace files to the start of a past turn — **code only**; conversation history is untouched. Checkpoints may be labeled with `/checkpoint-name` and listed with `/checkpoints`.
 - **Two memory layers** — `WriteMemory` / `ReadMemory` persist durable facts that stay true across sessions (preferences, project rules, verified commands). `WriteSessionMemory` / `ReadSessionMemory` keep this project's chronological session log in `<project>/.solcode/solcode.md`, where each entry records the checkpoint turn, the files changed, the timestamp, and the session id.
 - **MCP (Model Context Protocol)** — Connect to external MCP servers over stdio or HTTP.
 - **Custom skills** — Define reusable skill files loaded from configurable directories. When `computer_use.enabled` is true, solcode also loads a bundled `computer-use` skill that teaches the screenshot → act → verify loop.
-- **Computer Use (optional)** — Opt-in desktop GUI automation (`ComputerUse` tool + bundled skill). Enable in settings, rebuild with CGO and `-tags computeruse` to link [robotgo](https://github.com/go-vgo/robotgo). The tool is **not** core: discover it via `/computer-use` / Skill or ToolSearch.
+- **Computer Use (optional)** — Opt-in desktop GUI automation (`ComputerUse` tool + bundled skill). Explicitly select the `open-computer-use` backend; releases embed its checksum-pinned native runtime without CGO. The tool is **not** core: discover it via `/computer-use` / Skill or ToolSearch.
 - **Project rules** — Markdown instructions in `<project>/.solcode/rules.md` and `.solcode/rules/*.md` are injected into the system prompt at startup.
 - **Hook system** — Execute shell commands on agent events (tool calls, results, completion).
 - **Permission modes** — `auto`, `accept_edits`, `bypass`, `plan`, `goal`, `ultra` — control how tools are authorized.
@@ -30,8 +30,8 @@ A terminal-based coding agent powered by Claude (Anthropic API) that can read, w
 ### Installation
 
 **One-line install (no Go required)** — downloads the rolling **master**
-`*_computeruse` build (CGO + robotgo; published by CI on every push to
-`master`/`main`; there is no `latest` channel and no separate pure-Go release):
+`*_computeruse` build (embedded native runtime; published by CI on every push to
+`master`/`main`; there is no `latest` install channel):
 
 ```bash
 # Linux / macOS
@@ -79,8 +79,8 @@ Install scripts **add the binary directory to PATH automatically**:
 go install github.com/solosw/solcode/cmd/solcode@master
 # or
 git clone https://github.com/solosw/solcode.git && cd solcode
-# rolling release flavor (robotgo):
-CGO_ENABLED=1 go build -tags computeruse -o solcode ./cmd/solcode
+# rolling release flavor (embedded native runtime):
+./scripts/build-computeruse.sh master "$(go env GOOS)" "$(go env GOARCH)" tar.gz
 ```
 
 **How binaries are published**
@@ -165,53 +165,72 @@ Env fallbacks: `OPENAI_API_KEY`, `OPENAI_IMAGE_BASE_URL` / `OPENAI_BASE_URL`. Us
 
 ### Computer Use (optional)
 
-Desktop screenshot / mouse / keyboard automation via [robotgo](https://github.com/go-vgo/robotgo). Off by default. Enable in settings:
+Desktop accessibility, screenshots, and app-scoped input use the native binary
+from [open-codex-computer-use](https://github.com/iFurySt/open-codex-computer-use).
+The legacy robotgo tool is **disabled**, even in old `-tags computeruse` builds.
+Existing enabled-only settings do **not** opt into the new backend. Enable it
+explicitly, or turn Computer Use on in the settings UI:
 
 ```json
 {
   "computer_use": {
-    "enabled": true
+    "enabled": true,
+    "backend": "open-computer-use"
   }
 }
 ```
 
-Then rebuild with CGO and the build tag (Windows needs MinGW/gcc):
+Release builds embed the **v1.1.1** upstream runtime, pinned by SHA256 in
+`internal/computeruse/bundle/release.json`. The historical `_computeruse` asset
+suffix is retained for installer compatibility, but the SolCode host is now
+built with **CGO disabled**, without robotgo or native GUI build toolchains.
+Legacy ONNX Runtime inference is unavailable in pure-Go builds (CGO builds retain
+it); the current GGUF local-model backend is unchanged.
+The first call extracts the verified runtime into `~/.solcode/computer-use/`;
+there are no runtime downloads, npm installs, or Node dependencies. On macOS,
+the complete signed `.app` bundle (including helpers and resources) is retained.
+Upstream MIT and third-party notices are embedded and installed beside it.
+
+Build a release archive for one platform:
 
 ```bash
-CGO_ENABLED=1 go build -tags computeruse -o solcode ./cmd/solcode
+./scripts/build-computeruse.sh dev darwin arm64 tar.gz
 ```
 
-**Prebuilt asset:** the rolling install channel only publishes the CGO +
-`-tags computeruse` binaries:
-
-```
-solcode_<version>_<os>_<arch>_computeruse.tar.gz   # .zip on Windows
-```
+Or prepare a source build for your target (use the same GOOS/GOARCH when building):
 
 ```bash
-# Linux / macOS (no flag needed — this is the only published flavor)
-curl -fsSL https://raw.githubusercontent.com/solosw/solcode/master/scripts/install.sh | bash
+python3 scripts/prepare-computer-use.py --os darwin --arch arm64
+CGO_ENABLED=0 go build -o solcode ./cmd/solcode
 ```
 
-```powershell
-# Windows (PowerShell)
-irm https://raw.githubusercontent.com/solosw/solcode/master/scripts/install.ps1 | iex
+Alternatively, set `computer_use.binary` to an installed native executable. A
+source build without an embedded runtime also checks `open-computer-use` on PATH.
+Missing binaries or desktop permissions cause tool errors, **not ACP startup
+failures**. The runtime launches lazily on first ComputerUse call, persists across
+calls to retain native element indices, and closes on application exit/reload.
+
+macOS requires **14.0+**, Accessibility and Screen Recording permissions for Open
+Computer Use. Windows/Linux require a logged-in desktop. Linux still needs
+Python 3, PyGObject/GTK and AT-SPI runtime support; pure-Go host builds do not remove
+these upstream desktop dependencies. Wayland support depends on the desktop and
+available input backends. This integration does not automatically install or
+activate upstream Locked Use privileged helpers or global-pointer fallbacks.
+
+The bundled **computer-use** skill (`/computer-use` or Skill tool) explains the
+new API. ComputerUse is not a core tool: discover it via Skill/ToolSearch. Example:
+
+```json
+{"action":"list_apps"}
+{"action":"get_app_state","arguments":{"app":"TextEdit"}}
+{"action":"describe","arguments":{"tool":"click"}}
+{"action":"click","arguments":{"app":"TextEdit","element_index":"0"}}
 ```
 
-CI currently builds this for **linux/windows/darwin amd64+arm64**; the ARM and
-Intel-macOS legs are best-effort. Other platforms need a local build with a
-native toolchain (MinGW-w64 on Windows, X11 dev libs on Linux, Xcode CLT on
-macOS).
-
-On macOS the first screenshot/input call triggers the system prompts for
-**Screen Recording** and **Accessibility**; grant them in System Settings →
-Privacy & Security, then restart the terminal.
-
-A binary built without `-tags computeruse` still registers the tool when the
-setting is on, but invocations return a rebuild error. When enabled, solcode
-also loads the bundled **`computer-use`** skill (`/computer-use` or Skill tool).
-`ComputerUse` is **not** a core tool; after the skill runs it becomes sticky for
-the session (or discover it with ToolSearch).
+Use `describe` for native argument schemas instead of guessing. Screenshots are
+returned as vision blocks, not base64 text. Mutating actions retain SolCode's
+normal permissions and Jev guardrail checks. Old screenshot-first robotgo
+parameters are intentionally rejected; refresh app state before acting.
 
 ### Jev decision layer (optional)
 

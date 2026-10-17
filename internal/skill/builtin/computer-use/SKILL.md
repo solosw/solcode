@@ -1,49 +1,66 @@
 ---
 name: computer-use
-description: Desktop GUI automation with the ComputerUse tool (screenshot, mouse, keyboard). Use when the user wants to operate apps on screen, click UI, type into windows, or verify visual state. Requires computer_use.enabled in settings.
-allowed-tools: ComputerUse ToolSearch ViewImage
+description: Operate desktop apps through the embedded open-computer-use native runtime (accessibility tree, screenshots, semantic actions). Requires computer_use.enabled and backend=open-computer-use.
+allowed-tools: ComputerUse ToolSearch
 ---
 
 # computer-use
 
-Drive the local desktop with the **ComputerUse** tool. Prefer a screenshot-first loop so you can see the UI before and after each action.
+Use **ComputerUse**, backed by a persistent native MCP process. The old robotgo
+screenshot/mouse API is disabled; do not use its `screenshot`, `screen_info`,
+`type`, `key`, `return_screenshot`, or top-level coordinate parameters.
 
 ## Prerequisites
 
-- Settings must include `"computer_use": { "enabled": true }`.
-- Rebuild solcode with CGO and the robotgo build tag, e.g. `CGO_ENABLED=1 go build -tags computeruse -o solcode ./cmd/solcode` (Windows needs a working MinGW/gcc toolchain).
-- ComputerUse is **not** a core tool. After this skill loads, it should become sticky for the session; if the schema is still missing, call **ToolSearch** with query `computer use screenshot mouse keyboard`.
+- Settings: `"computer_use": {"enabled": true, "backend": "open-computer-use"}`.
+- Release builds embed the native runtime. Source builds can prepare it with
+  `python3 scripts/prepare-computer-use.py --os <os> --arch <arch>` before building,
+  or set `computer_use.binary` to an installed native executable.
+- No robotgo build tag, CGO, npm, or Node is required for the embedded runtime.
+- macOS requires 14+ and Accessibility / Screen Recording permissions for Open
+  Computer Use. Windows/Linux require a logged-in desktop; Linux also needs
+  Python 3, GTK/AT-SPI and a functioning accessibility session. Do not change
+  system permissions or install privileged helpers without user approval.
+- If the schema is missing, use ToolSearch: `computer use desktop accessibility`.
 
-## Actions
+## Call format and workflow
 
-| action | purpose | notes |
-|--------|---------|--------|
-| `screen_info` | primary screen size | read-only |
-| `screenshot` | capture primary screen (or region) | read-only; returns a vision image |
-| `click` / `double_click` / `right_click` | mouse click at `x`,`y` | destructive |
-| `move` | move pointer | destructive |
-| `drag` | drag from `x`,`y` to `to_x`,`to_y` | destructive |
-| `type` | type `text` | destructive; focus the field first |
-| `key` | tap `key` with optional `modifiers` | e.g. `enter`, `ctrl`+`c` |
-| `scroll` | scroll with `scroll_dx` / `scroll_dy` | optional focus `x`,`y` |
+Call **ComputerUse directly**, not through BatchTool/PTC: snapshots and even
+action results can include vision images, which those text-only wrappers cannot
+forward. All native MCP arguments go in **arguments**, not at the top level:
 
-Optional: `return_screenshot=true` after a mutating action; `save_path` to write under the workdir.
+```json
+{"action":"list_apps"}
+{"action":"get_app_state","arguments":{"app":"TextEdit"}}
+{"action":"describe","arguments":{"tool":"click"}}
+{"action":"click","arguments":{"app":"TextEdit","element_index":"0"}}
+{"action":"type_text","arguments":{"app":"TextEdit","text":"Hello"}}
+{"action":"press_key","arguments":{"app":"TextEdit","key":"Return"}}
+```
 
-## Workflow
+1. Identify the target using `list_apps`. Start each interaction turn with
+   `get_app_state` to obtain the current screenshot and accessibility tree.
+2. Prefer indexed accessibility elements, and `set_value` for editable controls.
+   Never guess element indices; refresh state after navigation or major UI changes.
+3. For unfamiliar operations, use `describe` with `arguments.tool` to retrieve
+   that operation's exact schema from the installed runtime. `describe` without
+   arguments lists available native actions. Do not guess platform-specific fields.
+4. Act once, then use `get_app_state` again to verify. Coordinates refer to the
+   target app screenshot, not the old primary-screen coordinate system.
+5. The process persists across calls; element indices are process-local. After a
+   runtime restart or error, reacquire state instead of replaying a prior click.
 
-1. Call `screen_info` if you need bounds.
-2. `screenshot` and locate the target from the image (pixel coordinates, origin top-left on the **primary** display).
-3. Perform the smallest action (`click` / `type` / `key`).
-4. `screenshot` again (or `return_screenshot`) to verify.
-5. Repeat until the user goal is met. Do not thrash clicks.
+Available actions include `list_apps`, `get_app_state`, `click`,
+`perform_secondary_action`, `scroll`, `drag`, `type_text`, `press_key`, and
+`set_value`; `query` is macOS-only. Runtime discovery is authoritative.
 
 ## Safety
 
-- Plan mode: only `screenshot` / `screen_info` are allowed.
-- Auto mode: mutating actions require permission approval.
-- Avoid entering secrets into untrusted UI. Prefer app-native automation / files when possible.
-- Multi-monitor / DPI scaling can shift coordinates; if clicks miss, re-screenshot and adjust.
-
-## Args
-
-Optional Args may name the app or goal (e.g. `open Notepad and type hello`). Use them as the success criteria.
+- Treat this as the user's real desktop. Do not inspect unrelated private apps.
+- Ask before sending, deleting, purchasing, approving, uploading, or entering secrets.
+- Plan mode permits only describe/list_apps/query. Native get_app_state can
+  start or activate an app even with keep placement, so it and other desktop
+  actions require the normal mutating-tool approval path.
+- Do not enable global-pointer fallback environment variables or install Locked
+  Use privileged components automatically. Leave these opt-in upstream features off.
+- Never retry an uncertain mutating action automatically; inspect state first.

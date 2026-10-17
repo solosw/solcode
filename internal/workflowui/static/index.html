@@ -227,10 +227,10 @@
                 <div class="settings-row-main">
                   <strong>Computer Use</strong>
                   <div class="settings-row-detail">
-                    Desktop screenshot / mouse / keyboard automation and the bundled
-                    <code>computer-use</code> skill. Needs a build with the
-                    <code>computeruse</code> tag and CGO; without it the tool registers
-                    but returns a rebuild error.
+                    App accessibility / screenshots / input through the embedded
+                    <code>open-computer-use</code> native runtime and bundled skill.
+                    Starts only on first use; no CGO or robotgo build tag required.
+                    Enabling selects the new backend; old enabled-only settings stay off.
                   </div>
                 </div>
                 <input type="checkbox" id="set-computer-use" />

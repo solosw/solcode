@@ -16,7 +16,6 @@ import (
 	"github.com/solosw/solcode/internal/agent"
 	cpanthropic "github.com/solosw/solcode/internal/anthropic"
 	"github.com/solosw/solcode/internal/changegraph"
-	"github.com/solosw/solcode/internal/computeruse"
 	"github.com/solosw/solcode/internal/config"
 	"github.com/solosw/solcode/internal/embedding"
 	"github.com/solosw/solcode/internal/engine"
@@ -102,7 +101,11 @@ type options struct {
 func buildToolState(cfg config.Config, mcpFactory mcp.ClientFactory) (*tool.Registry, *skill.Registry, *mcp.Registry, *lsp.Manager, error) {
 	registry := tool.NewRegistry()
 	lspManager := newLSPManager(cfg)
-	registerBuiltins(registry, lspManager, cfg.Sandbox, cfg.Image, cfg.ImageEnabled(), cfg.ComputerUseEnabled())
+	registerBuiltins(registry, lspManager, cfg.Sandbox, cfg.Image, cfg.ImageEnabled())
+	if cfg.ComputerUseEnabled() {
+		registry.Register(tool.NewNativeComputerUseTool(mcp.NewComputerUseClient(
+			cfg.ComputerUse.Binary, filepath.Join(config.UserConfigDir(), "computer-use"), mcpFactory)))
+	}
 
 	skillRegistry := loadSkills(cfg)
 	if defs := skillRegistry.All(); len(defs) > 0 {
@@ -486,6 +489,9 @@ func (a *App) Close() error {
 	if a.MCPRegistry != nil {
 		firstErr = a.MCPRegistry.Close()
 	}
+	if err := closeComputerUseTool(a.Tools); firstErr == nil {
+		firstErr = err
+	}
 	if a.ChangeGraph != nil {
 		if err := a.ChangeGraph.Close(); firstErr == nil {
 			firstErr = err
@@ -602,11 +608,13 @@ func (a *App) ReloadFeatures(cfg config.Config, mcpFactory mcp.ClientFactory) er
 	graphStore, err := openChangeGraph(cfg)
 	if err != nil {
 		_ = mcpRegistry.Close()
+		_ = closeComputerUseTool(registry)
 		return err
 	}
 	if a.MCPRegistry != nil {
 		_ = a.MCPRegistry.Close()
 	}
+	_ = closeComputerUseTool(a.Tools)
 	if a.lspManager != nil {
 		_ = a.lspManager.Close()
 	}
@@ -3486,7 +3494,7 @@ func newFileChangeRecorder(store *changegraph.Store) func(context.Context, *tool
 	}
 }
 
-func registerBuiltins(registry *tool.Registry, lspManager *lsp.Manager, sandboxPolicy sandbox.Policy, imageCfg config.ImageConfig, imageEnabled bool, computerUseEnabled bool) {
+func registerBuiltins(registry *tool.Registry, lspManager *lsp.Manager, sandboxPolicy sandbox.Policy, imageCfg config.ImageConfig, imageEnabled bool) {
 	tools := []tool.Tool{
 		tool.NewAskUserTool(),
 		tool.NewBashToolWithSandbox(sandboxPolicy),
@@ -3519,10 +3527,7 @@ func registerBuiltins(registry *tool.Registry, lspManager *lsp.Manager, sandboxP
 		}
 		tools = append(tools, tool.NewImageGenerateTool(api), tool.NewImageEditTool(api))
 	}
-	if computerUseEnabled {
-		// Without -tags computeruse the driver is a stub that returns a rebuild error.
-		tools = append(tools, tool.NewComputerUseTool(computeruse.NewRobotgoDriver()))
-	}
+	// The legacy robotgo tool is intentionally never registered here.
 	if lspManager != nil {
 		tools = append(tools, tool.NewLSPTool(lspManager))
 	}
@@ -3881,4 +3886,15 @@ func skillRootsByName(registry *skill.Registry) map[string]string {
 		}
 	}
 	return out
+}
+
+// closeComputerUseTool also handles a configured-but-never-started sidecar.
+func closeComputerUseTool(registry *tool.Registry) error {
+	if registry == nil {
+		return nil
+	}
+	if closer, ok := registry.Find(tool.ComputerUseToolName).(interface{ Close() error }); ok {
+		return closer.Close()
+	}
+	return nil
 }

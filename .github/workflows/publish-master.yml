@@ -5,7 +5,7 @@ name: Publish master
 # There is no "latest" release channel.
 #
 # Only the computer-use flavor is published:
-#   solcode_<ver>_<os>_<arch>_computeruse.<pack>  CGO + robotgo desktop automation
+#   solcode_<ver>_<os>_<arch>_computeruse.<pack>  embedded open-computer-use native runtime
 
 on:
   push:
@@ -19,10 +19,8 @@ permissions:
 
 jobs:
   build-computeruse:
-    # robotgo needs CGO and a *native* toolchain for each target, so these legs
-    # run on matching runners instead of cross-compiling. ARM runners are newer
-    # and marked experimental: if one is unavailable or lacks a toolchain, the
-    # release still publishes the other computer-use assets.
+    # Host builds are pure Go. Retain the existing platform matrix and asset
+    # names while embedding checksum-pinned native runtime archives.
     strategy:
       fail-fast: false
       matrix:
@@ -65,47 +63,10 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Install Linux GUI libraries
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            gcc libc6-dev pkg-config zip \
-            libx11-dev libxkbcommon-dev libxkbcommon-x11-dev \
-            libxtst-dev libxinerama-dev libxrandr-dev libxcursor-dev \
-            libpng-dev
-
-      # windows-11-arm ships an emulated x86_64 MinGW gcc that cannot assemble
-      # runtime/cgo/gcc_arm64.S. Install a native aarch64 llvm-mingw instead.
-      - name: Install Windows ARM64 CGO toolchain
-        if: runner.os == 'Windows' && matrix.goarch == 'arm64'
-        shell: pwsh
-        run: ./scripts/setup-windows-arm64-cgo.ps1
-
-      - name: Verify C toolchain
-        shell: bash
-        run: |
-          # macOS exposes clang as cc/gcc via the Xcode shim; Linux/Windows use gcc.
-          if [[ -n "${CC:-}" ]] && command -v "$CC" >/dev/null 2>&1; then
-            cc_bin="$CC"
-          elif command -v cc >/dev/null 2>&1; then
-            cc_bin=cc
-          elif command -v gcc >/dev/null 2>&1; then
-            cc_bin=gcc
-          else
-            echo "no C compiler found (cc/gcc)" >&2
-            exit 1
-          fi
-          echo "C compiler: $cc_bin"
-          "$cc_bin" --version
-          machine="$("$cc_bin" -dumpmachine 2>/dev/null || true)"
-          echo "dumpmachine: ${machine:-unknown}"
-          if [[ "${{ matrix.goos }}" == "windows" && "${{ matrix.goarch }}" == "arm64" ]]; then
-            if [[ "$machine" != *aarch64* && "$machine" != *arm64* ]]; then
-              echo "windows/arm64 CGO needs an aarch64 MinGW toolchain (got '${machine:-none}')" >&2
-              exit 1
-            fi
-          fi
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
 
       - name: Resolve version label
         shell: bash
