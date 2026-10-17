@@ -23,24 +23,37 @@ const (
 	AgentCreated           AgentState = "created"
 	AgentRunning           AgentState = "running"
 	AgentWaitingPermission AgentState = "waiting_permission"
-	AgentCompleted         AgentState = "completed"
-	AgentCancelled         AgentState = "cancelled"
-	AgentFailed            AgentState = "failed"
+	AgentIdle              AgentState = "idle"
+	// AgentCompleted is the source-compatible name for a completed, reusable agent.
+	AgentCompleted   AgentState = AgentIdle
+	AgentInterrupted AgentState = "interrupted"
+	AgentArchived    AgentState = "archived"
+	AgentCancelled   AgentState = "cancelled"
+	AgentFailed      AgentState = "failed"
 )
 
 type AgentConfig struct {
-	ID              AgentID
-	ParentID        AgentID
-	Role            AgentRole
-	Description     string
-	WorkDir         string
-	Prompt          string
-	AllowedTools    []string
-	MaxTurns        int
-	UnlimitedTurns  bool
-	Model           string
-	ParentToolUseID string
-	TaskID          string
+	ParentSessionID         string
+	RunID                   string
+	ExecutionID             string
+	Attempt                 int
+	ForkContext             string
+	ForkLastN               int
+	ParentContext           Snapshot `json:"-"`
+	AcknowledgeInterruption bool
+	RecoveryNote            string `json:"-"`
+	ID                      AgentID
+	ParentID                AgentID
+	Role                    AgentRole
+	Description             string
+	WorkDir                 string
+	Prompt                  string
+	AllowedTools            []string
+	MaxTurns                int
+	UnlimitedTurns          bool
+	Model                   string
+	ParentToolUseID         string
+	TaskID                  string
 }
 
 type EventKind string
@@ -62,18 +75,24 @@ type Event struct {
 }
 
 type AgentResult struct {
-	AgentID AgentID
-	Output  string
-	Error   string
+	RunID   string  `json:"run_id,omitempty"`
+	NoRetry bool    `json:"no_retry,omitempty"`
+	AgentID AgentID `json:"agent_id"`
+	Output  string  `json:"output,omitempty"`
+	Error   string  `json:"error,omitempty"`
 }
 
 type AgentStatus struct {
-	ID        AgentID
-	ParentID  AgentID
-	Role      AgentRole
-	State     AgentState
-	StartedAt time.Time
-	EndedAt   *time.Time
+	RunID           string     `json:"run_id"`
+	ParentSessionID string     `json:"parent_session_id,omitempty"`
+	WorkDir         string     `json:"work_dir,omitempty"`
+	Description     string     `json:"description,omitempty"`
+	ID              AgentID    `json:"agent_id"`
+	ParentID        AgentID    `json:"parent_id,omitempty"`
+	Role            AgentRole  `json:"role"`
+	State           AgentState `json:"state"`
+	StartedAt       time.Time  `json:"started_at"`
+	EndedAt         *time.Time `json:"ended_at,omitempty"`
 }
 
 type Runner interface {
@@ -85,20 +104,25 @@ type Coordinator struct {
 	runner       Runner
 	agents       map[AgentID]*runningAgent
 	eventHandler func(Event)
+	store        Store
 }
 
 type runningAgent struct {
-	status AgentStatus
-	result AgentResult
-	cancel context.CancelFunc
-	done   chan struct{}
+	checkpointMu sync.Mutex
+	status       AgentStatus
+	result       AgentResult
+	cancel       context.CancelFunc
+	done         chan struct{}
+	record       *Record
+	fork         Snapshot
 }
 
-func NewCoordinator(runner Runner) *Coordinator {
-	return &Coordinator{
-		runner: runner,
-		agents: make(map[AgentID]*runningAgent),
+func NewCoordinator(runner Runner, stores ...Store) *Coordinator {
+	c := &Coordinator{runner: runner, agents: make(map[AgentID]*runningAgent)}
+	if len(stores) > 0 {
+		c.store = stores[0]
 	}
+	return c
 }
 
 func (c *Coordinator) SetEventHandler(handler func(Event)) {
@@ -111,75 +135,11 @@ func (c *Coordinator) SetEventHandler(handler func(Event)) {
 }
 
 func (c *Coordinator) Spawn(ctx context.Context, cfg AgentConfig) (AgentID, error) {
-	if cfg.ID == "" {
-		return "", fmt.Errorf("agent id is required")
-	}
+	return c.start(ctx, cfg, false)
+}
 
-	c.mu.Lock()
-	if _, exists := c.agents[cfg.ID]; exists {
-		c.mu.Unlock()
-		return "", fmt.Errorf("agent already exists: %s", cfg.ID)
-	}
-	runCtx, cancel := context.WithCancel(ctx)
-	running := &runningAgent{
-		status: AgentStatus{
-			ID:        cfg.ID,
-			ParentID:  cfg.ParentID,
-			Role:      cfg.Role,
-			State:     AgentRunning,
-			StartedAt: time.Now(),
-		},
-		cancel: cancel,
-		done:   make(chan struct{}),
-	}
-	c.agents[cfg.ID] = running
-	status := running.status
-	description := cfg.Description
-	parentToolUseID := cfg.ParentToolUseID
-	taskID := cfg.TaskID
-	handler := c.eventHandler
-	c.mu.Unlock()
-	c.emit(handler, Event{Kind: EventStarted, Status: status, Description: description, ParentToolUseID: parentToolUseID, TaskID: taskID})
-
-	go func() {
-		result := c.runner.Run(runCtx, cfg)
-		result.AgentID = cfg.ID
-		now := time.Now()
-		var event Event
-		var handler func(Event)
-
-		c.mu.Lock()
-		running.result = result
-		running.status.EndedAt = &now
-		if running.status.State != AgentCancelled {
-			if result.Error != "" {
-				running.status.State = AgentFailed
-			} else {
-				running.status.State = AgentCompleted
-			}
-		}
-		event = Event{
-			Status:          running.status,
-			Result:          result,
-			Description:     description,
-			ParentToolUseID: parentToolUseID,
-			TaskID:          taskID,
-		}
-		switch running.status.State {
-		case AgentCancelled:
-			event.Kind = EventCancelled
-		case AgentFailed:
-			event.Kind = EventFailed
-		default:
-			event.Kind = EventCompleted
-		}
-		handler = c.eventHandler
-		close(running.done)
-		c.mu.Unlock()
-		c.emit(handler, event)
-	}()
-
-	return cfg.ID, nil
+func (c *Coordinator) Resume(ctx context.Context, cfg AgentConfig) (AgentID, error) {
+	return c.start(ctx, cfg, true)
 }
 
 func (c *Coordinator) Wait(ctx context.Context, id AgentID) (AgentResult, error) {
@@ -187,7 +147,13 @@ func (c *Coordinator) Wait(ctx context.Context, id AgentID) (AgentResult, error)
 	running := c.agents[id]
 	c.mu.RUnlock()
 	if running == nil {
-		return AgentResult{}, fmt.Errorf("agent not found: %s", id)
+		c.mu.RLock()
+		record, err := c.load(ctx, id)
+		c.mu.RUnlock()
+		if err != nil {
+			return AgentResult{}, err
+		}
+		return c.WaitRun(ctx, id, record.Status.RunID)
 	}
 
 	select {
@@ -201,14 +167,20 @@ func (c *Coordinator) Wait(ctx context.Context, id AgentID) (AgentResult, error)
 	}
 }
 
-func (c *Coordinator) Cancel(id AgentID) error {
+func (c *Coordinator) Cancel(id AgentID) error { return c.cancelRun(id, "") }
+
+func (c *Coordinator) cancelRun(id AgentID, runID string) error {
 	c.mu.Lock()
 	running := c.agents[id]
 	if running == nil {
 		c.mu.Unlock()
 		return fmt.Errorf("agent not found: %s", id)
 	}
-	if running.status.State == AgentCompleted || running.status.State == AgentFailed || running.status.State == AgentCancelled {
+	if runID != "" && running.status.RunID != runID {
+		c.mu.Unlock()
+		return fmt.Errorf("run %s has been superseded", runID)
+	}
+	if !active(running) || running.status.State == AgentCancelled {
 		c.mu.Unlock()
 		return nil
 	}
@@ -233,9 +205,9 @@ func (c *Coordinator) Children(parentID AgentID) []AgentStatus {
 	defer c.mu.RUnlock()
 
 	children := make([]AgentStatus, 0)
-	for _, running := range c.agents {
-		if running.status.ParentID == parentID {
-			children = append(children, running.status)
+	for _, status := range c.listLocked() {
+		if status.ParentID == parentID {
+			children = append(children, status)
 		}
 	}
 	return children
@@ -245,9 +217,5 @@ func (c *Coordinator) List() []AgentStatus {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	statuses := make([]AgentStatus, 0, len(c.agents))
-	for _, running := range c.agents {
-		statuses = append(statuses, running.status)
-	}
-	return statuses
+	return c.listLocked()
 }

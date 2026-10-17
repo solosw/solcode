@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 )
@@ -122,8 +123,35 @@ func (s *FileStore) Save(ctx context.Context, session *Session) error {
 	if err != nil {
 		return fmt.Errorf("marshal session %q: %w", session.Metadata.ID, err)
 	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	// Replace only after a complete, synced write. Readers see the old or new
+	// snapshot, never truncated JSON. The caller owns the session's writer lock.
+	temp, err := os.CreateTemp(s.dir, ".session-*")
+	if err != nil {
+		return fmt.Errorf("create session temporary file: %w", err)
+	}
+	defer os.Remove(temp.Name())
+	if _, err = temp.Write(data); err == nil {
+		err = temp.Sync()
+	}
+	closeErr := temp.Close()
+	if err != nil {
 		return fmt.Errorf("write session %q: %w", session.Metadata.ID, err)
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	if err := os.Rename(temp.Name(), path); err != nil {
+		return fmt.Errorf("replace session %q: %w", session.Metadata.ID, err)
+	}
+	if runtime.GOOS != "windows" {
+		dir, err := os.Open(s.dir)
+		if err != nil {
+			return err
+		}
+		defer dir.Close()
+		if err := dir.Sync(); err != nil {
+			return fmt.Errorf("sync sessions directory: %w", err)
+		}
 	}
 	return nil
 }

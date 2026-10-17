@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -53,6 +54,8 @@ const (
 )
 
 type Session struct {
+	// Subagent is opaque coordinator metadata; messages use the normal session transcript.
+	Subagent          json.RawMessage    `json:"subagent,omitempty"`
 	Metadata          Metadata           `json:"metadata"`
 	Messages          []sdk.MessageParam `json:"messages,omitempty"`
 	MessageTimestamps []time.Time        `json:"message_timestamps,omitempty"`

@@ -3,9 +3,9 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/solosw/solcode/internal/agent"
@@ -13,15 +13,21 @@ import (
 
 const SubagentToolName = "Subagent"
 
-var subagentIDCounter uint64
-
 // SubagentParams runs a single child agent. Task orchestrates multiple of these.
 type SubagentParams struct {
-	Description  string   `json:"description"`
-	Prompt       string   `json:"prompt"`
-	AllowedTools []string `json:"allowed_tools,omitempty"`
-	Model        string   `json:"model,omitempty"`
-	Difficulty   string   `json:"difficulty,omitempty"`
+	AgentID                 string `json:"agent_id,omitempty"`
+	ForkContext             string `json:"fork_context,omitempty"`
+	ForkLastN               int    `json:"fork_last_n,omitempty"`
+	AcknowledgeInterruption bool   `json:"acknowledge_interruption,omitempty"`
+	resume                  bool
+	executionID             string
+	runID                   string
+	attempt                 int
+	Description             string   `json:"description"`
+	Prompt                  string   `json:"prompt"`
+	AllowedTools            []string `json:"allowed_tools,omitempty"`
+	Model                   string   `json:"model,omitempty"`
+	Difficulty              string   `json:"difficulty,omitempty"`
 	// FastModel is filled by the host / Task; not part of the model-facing schema.
 	FastModel string `json:"fast_model,omitempty"`
 	// TaskID is an optional orchestration id from Task (for progress correlation).
@@ -56,7 +62,7 @@ appear in the schema but fail at invoke time if called. For BatchTool operations
 func (t *subagentTool) InputSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
-		"properties": map[string]any{
+		"properties": agentReuseSchema(map[string]any{
 			"description": map[string]any{"type": "string", "description": "Short label for this sub-agent"},
 			"prompt":      map[string]any{"type": "string", "description": "Detailed prompt for the sub-agent"},
 			"allowed_tools": map[string]any{
@@ -69,7 +75,7 @@ func (t *subagentTool) InputSchema() map[string]any {
 			"model":      map[string]any{"type": "string", "description": "Optional explicit model or 'fast'"},
 			"difficulty": map[string]any{"type": "string", "enum": []string{"easy", "medium", "hard"}, "description": "Use easy for the configured fast model"},
 			"task_id":    map[string]any{"type": "string", "description": "Optional orchestration id from Task"},
-		},
+		}),
 		"required": []string{"description", "prompt"},
 	}
 }
@@ -82,6 +88,9 @@ func (t *subagentTool) Invoke(ctx context.Context, uctx *UseContext, input json.
 	var params SubagentParams
 	if err := json.Unmarshal(input, &params); err != nil {
 		return ErrorResult("invalid parameters: " + err.Error()), nil
+	}
+	if uctx != nil && uctx.AgentRole != "" && uctx.AgentRole != "main" {
+		return ErrorResult("nested subagents are not allowed"), nil
 	}
 	params.Description = strings.TrimSpace(params.Description)
 	params.Prompt = strings.TrimSpace(params.Prompt)
@@ -96,14 +105,23 @@ func (t *subagentTool) Invoke(ctx context.Context, uctx *UseContext, input json.
 		return ErrorResult("subagent coordinator is not configured"), nil
 	}
 
-	output, err := t.runWithRetry(ctx, uctx, params)
-	if err != nil {
-		return ErrorResult(err.Error()), nil
+	params.AgentID = strings.TrimSpace(params.AgentID)
+	params.resume = params.AgentID != ""
+	if !params.resume {
+		params.AgentID = agent.NewID("agent")
 	}
-	return Result(output), nil
+	params.executionID = agent.NewID("execution")
+	output, err := t.runWithRetry(ctx, uctx, &params)
+	result := Result(output)
+	if err != nil {
+		result = ErrorResult(err.Error())
+	}
+	result.AgentID = params.AgentID
+	result.RunID = params.runID
+	return result, nil
 }
 
-func (t *subagentTool) runWithRetry(ctx context.Context, uctx *UseContext, params SubagentParams) (string, error) {
+func (t *subagentTool) runWithRetry(ctx context.Context, uctx *UseContext, params *SubagentParams) (string, error) {
 	retryDelay := taskRetryDelay
 	if uctx != nil && uctx.TaskRetryDelay > 0 {
 		retryDelay = uctx.TaskRetryDelay
@@ -116,11 +134,15 @@ func (t *subagentTool) runWithRetry(ctx context.Context, uctx *UseContext, param
 
 	var lastErr error
 	for attempt := 0; attempt <= taskMaxRetries; attempt++ {
-		output, err := t.runAttempt(ctx, uctx, params)
+		params.attempt = attempt + 1
+		params.runID = agent.NewID("run")
+		output, err := t.runAttempt(ctx, uctx, *params)
+		params.resume = true
 		if err == nil {
 			return output, nil
 		}
-		if ctx.Err() != nil {
+		var permanent *subagentNoRetry
+		if ctx.Err() != nil || errors.As(err, &permanent) {
 			return "", err
 		}
 		lastErr = err
@@ -154,7 +176,7 @@ func (t *subagentTool) runAttempt(ctx context.Context, uctx *UseContext, params 
 	if uctx != nil {
 		workDir = uctx.WorkDir
 	}
-	id := agent.AgentID(fmt.Sprintf("task-%d", atomic.AddUint64(&subagentIDCounter, 1)))
+	id := agent.AgentID(params.AgentID)
 	emitAgentProgress(uctx, AgentProgressEvent{
 		Kind:            "started",
 		AgentID:         string(id),
@@ -163,7 +185,19 @@ func (t *subagentTool) runAttempt(ctx context.Context, uctx *UseContext, params 
 		TaskID:          params.TaskID,
 		Description:     params.Description,
 	})
-	_, err := t.coordinator.Spawn(ctx, agent.AgentConfig{
+	start := t.coordinator.Spawn
+	if params.resume {
+		start = t.coordinator.Resume
+	}
+	parentSession := ""
+	parentContext := agent.Snapshot{}
+	if uctx != nil {
+		parentSession = uctx.SessionID
+		parentContext = uctx.ParentContext
+	}
+	_, err := start(ctx, agent.AgentConfig{
+		ParentSessionID: parentSession, RunID: params.runID, ExecutionID: params.executionID, Attempt: params.attempt,
+		ForkContext: params.ForkContext, ForkLastN: params.ForkLastN, ParentContext: parentContext, AcknowledgeInterruption: params.AcknowledgeInterruption,
 		ID:              id,
 		ParentID:        agent.AgentID(parentID),
 		Role:            agent.AgentRoleTask,
@@ -187,9 +221,9 @@ func (t *subagentTool) runAttempt(ctx context.Context, uctx *UseContext, params 
 			Output:          err.Error(),
 			IsError:         true,
 		})
-		return "", fmt.Errorf("spawn task %s: %w", label, err)
+		return "", &subagentNoRetry{fmt.Errorf("start task %s (agent_id=%s): %w", label, id, err)}
 	}
-	result, err := t.coordinator.Wait(ctx, id)
+	result, err := t.coordinator.WaitRun(ctx, id, params.runID)
 	if err != nil {
 		emitAgentProgress(uctx, AgentProgressEvent{
 			Kind:            "failed",
@@ -214,7 +248,11 @@ func (t *subagentTool) runAttempt(ctx context.Context, uctx *UseContext, params 
 			Output:          result.Error,
 			IsError:         true,
 		})
-		return "", fmt.Errorf("task %s failed: %s", label, result.Error)
+		failure := fmt.Errorf("task %s failed: %s", label, result.Error)
+		if result.NoRetry {
+			return "", &subagentNoRetry{failure}
+		}
+		return "", failure
 	}
 	if err := ctx.Err(); err != nil {
 		emitAgentProgress(uctx, AgentProgressEvent{
@@ -240,6 +278,8 @@ func (t *subagentTool) runAttempt(ctx context.Context, uctx *UseContext, params 
 	})
 	return result.Output, nil
 }
+
+type subagentNoRetry struct{ error }
 
 func emitAgentProgress(uctx *UseContext, event AgentProgressEvent) {
 	if uctx == nil {

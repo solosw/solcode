@@ -48,16 +48,18 @@ type MessageClient interface {
 }
 
 type Config struct {
-	Model            Model
-	Client           MessageClient
-	Hooks            *hook.Runtime
-	Tools            *tool.Registry
-	Permissions      *permission.Service
-	ModelName        string
-	FastModelName    string
-	MaxContextTokens int64
-	MaxTokens        int64
-	SystemPrompt     string
+	// SubagentSessionDir enables independent child observation archives.
+	SubagentSessionDir string
+	Model              Model
+	Client             MessageClient
+	Hooks              *hook.Runtime
+	Tools              *tool.Registry
+	Permissions        *permission.Service
+	ModelName          string
+	FastModelName      string
+	MaxContextTokens   int64
+	MaxTokens          int64
+	SystemPrompt       string
 	// ProjectRules are project-only instructions loaded from
 	// <workDir>/.solcode (rules.md and rules/*.md) at startup.
 	ProjectRules     string
@@ -201,6 +203,10 @@ func orderedSkillRoots(active string, roots []string) []string {
 }
 
 type RunRequest struct {
+	WorkingSet       json.RawMessage
+	Checkpoint       func(agent.Checkpoint) error
+	CompactMessages  func(context.Context, []sdk.MessageParam) ([]sdk.MessageParam, error)
+	SkipPrompt       bool
 	AgentConfig      agent.AgentConfig
 	SessionID        string
 	Messages         []sdk.MessageParam
@@ -241,11 +247,18 @@ func (e *Engine) runLegacyModel(ctx context.Context, req RunRequest) RunResult {
 	// (ModeInstructions), never in the user prompt text or the system prefix.
 	prompt = permission.StripPlanModePrompt(prompt)
 	userMsg, modelText := userMessageFromPrompt(prompt, cfg.WorkDir)
-	messages = append(messages, userMsg)
-	if blocked || errText != "" {
-		return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: errText}, Messages: messages}
+	if !req.SkipPrompt {
+		messages = append(messages, userMsg)
 	}
-
+	if err := req.saveCheckpoint("prompt", messages, nil, agent.TokenUsage{}, false); err != nil {
+		return RunResult{AgentResult: agent.AgentResult{Error: err.Error(), NoRetry: true}, Messages: messages}
+	}
+	if blocked || errText != "" {
+		return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: errText, NoRetry: true}, Messages: messages}
+	}
+	if len(req.Messages) > 0 {
+		modelText = legacyHistoryPrompt(messages)
+	}
 	response, err := e.config.Model.Send(ctx, ModelRequest{
 		Prompt:  modelText,
 		WorkDir: cfg.WorkDir,
@@ -273,9 +286,11 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 	// Also strip any historical plan-mode prefix from older sessions / mode switches.
 	prompt = permission.StripPlanModePrompt(prompt)
 	userMsg, modelText := userMessageFromPrompt(prompt, cfg.WorkDir)
-	messages = append(messages, userMsg)
+	if !runReq.SkipPrompt {
+		messages = append(messages, userMsg)
+	}
 	if blocked || errText != "" {
-		return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: errText}, Messages: messages}
+		return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: errText, NoRetry: true}, Messages: messages}
 	}
 	// modelText is the expanded text used for local token estimation.
 	prompt = modelText
@@ -327,8 +342,25 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 	// Task working set (§5): tracks files read/modified and confirmed facts so
 	// later turns reuse local knowledge instead of re-exploring. Updated only
 	// from tool results; never a model request.
-	workingSet := NewWorkingSet()
+	workingSet := RestoreWorkingSet(runReq.WorkingSet)
 	workingSet.SetGoal(prompt)
+	var runUsage agent.TokenUsage
+	var issuedTool bool
+	defer func() {
+		if result.AgentResult.Error != "" && issuedTool {
+			result.AgentResult.NoRetry = true
+		}
+	}()
+	if cfg.RecoveryNote != "" {
+		messages = append(messages, sdk.NewUserMessage(sdk.NewTextBlock(cfg.RecoveryNote)))
+	}
+	if err := runReq.saveCheckpoint("prompt", messages, workingSet, runUsage, false); err != nil {
+		return RunResult{AgentResult: agent.AgentResult{Error: err.Error(), NoRetry: true}, Messages: messages}
+	}
+	compactMessages := runReq.CompactMessages
+	if compactMessages == nil {
+		compactMessages = e.config.CompactMessages
+	}
 	// Efficiency controller (§7): local anti-loop signals. Advisory only; it
 	// never issues requests, executes operations, or ends the run.
 	efficiency := NewRequestEfficiencyController()
@@ -548,12 +580,12 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 		}
 		// Mid-run guard uses the actual materialized transcript, including all
 		// newly appended context. Recovery metadata is restored before Create.
-		if e.config.MaxContextTokens > 0 && e.config.CompactMessages != nil {
+		if e.config.MaxContextTokens > 0 && compactMessages != nil {
 			est := requestBuilder.EstimateContextTokens(buildReq)
 			if est >= e.config.MaxContextTokens {
-				compacted, cerr := e.config.CompactMessages(ctx, messages)
+				compacted, cerr := compactMessages(ctx, messages)
 				if cerr != nil {
-					return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: fmt.Sprintf("context full (%d/%d tokens) and compaction failed: %v", est, e.config.MaxContextTokens, cerr)}, Messages: messages}
+					return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: fmt.Sprintf("context full (%d/%d tokens) and compaction failed: %v", est, e.config.MaxContextTokens, cerr), NoRetry: runReq.Checkpoint != nil}, Messages: messages}
 				}
 				if len(compacted) > 0 {
 					messages = compacted
@@ -575,8 +607,17 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 					builder.EfficiencyNote = ""
 					messages = dynamic.append(messages, builder, runReq, false)
 					buildReq.Messages = messages
+					if err := runReq.saveCheckpoint("compacted", messages, workingSet, runUsage, true); err != nil {
+						return RunResult{AgentResult: agent.AgentResult{Error: err.Error(), NoRetry: true}, Messages: messages}
+					}
 				}
 			}
+		}
+		if runReq.Checkpoint != nil && e.config.MaxContextTokens > 0 && requestBuilder.EstimateContextTokens(buildReq) >= e.config.MaxContextTokens {
+			return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: "subagent context still exceeds the configured budget after compaction", NoRetry: true}, Messages: messages}
+		}
+		if err := runReq.saveCheckpoint("request", messages, workingSet, runUsage, false); err != nil {
+			return RunResult{AgentResult: agent.AgentResult{Error: err.Error(), NoRetry: true}, Messages: messages}
 		}
 		req := requestBuilder.Build(buildReq)
 		if isMain {
@@ -587,6 +628,7 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 		if err != nil {
 			return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: err.Error()}, Messages: messages}
 		}
+		runUsage.Add(agent.TokenUsage{InputTokens: message.Usage.InputTokens, OutputTokens: message.Usage.OutputTokens, CacheCreationInputTokens: message.Usage.CacheCreationInputTokens, CacheReadInputTokens: message.Usage.CacheReadInputTokens})
 		estimatedContextTokens := requestBuilder.EstimateContextTokens(buildReq)
 		// Report billing usage for main and task/subagent turns. Only the main
 		// agent supplies EstimatedContextTokens so occupancy stays tied to the
@@ -604,13 +646,18 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 			}
 			e.config.OnUsage(usage)
 		}
-		if message.StopReason == sdk.StopReasonRefusal {
-			return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: "model refused request"}, Messages: messages}
-		}
-
 		finalText = cpanthropic.TextFromMessage(message)
 		messages = append(messages, message.ToParam())
+		if err := runReq.saveCheckpoint("response", messages, workingSet, runUsage, false); err != nil {
+			return RunResult{AgentResult: agent.AgentResult{Error: err.Error(), NoRetry: true}, Messages: messages}
+		}
+		if message.StopReason == sdk.StopReasonRefusal {
+			return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: "model refused request", NoRetry: true}, Messages: messages}
+		}
 		toolUses := cpanthropic.ToolUseBlocks(message)
+		if len(toolUses) > 0 {
+			issuedTool = true
+		}
 		if message.StopReason != sdk.StopReasonToolUse || len(toolUses) == 0 {
 			injected := drainBackground() + drainQueuedPrompts()
 			if injected > 0 {
@@ -661,6 +708,7 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 			toolEnv := ToolEnv{
 				UseContext: &tool.UseContext{
 					SessionID:      nonEmpty(runReq.SessionID, string(cfg.ID)),
+					ParentContext:  e.forkSource(use.Name, messages, workingSet),
 					MessageID:      use.ID,
 					WorkDir:        cfg.WorkDir,
 					SkillRoots:     callSkillRoots,
@@ -728,9 +776,6 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 			observeWorkingSet(workingSet, use.Name, input, toolEnv.UseContext, toolResult)
 			// Record local anti-loop signals (§7). No model request.
 			efficiency.ObserveCall(use.Name, input, toolResult)
-			if err := ctx.Err(); err != nil {
-				return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: err.Error()}, Messages: messages}
-			}
 			if use.Name == tool.SkillToolName && !toolResult.IsError {
 				if name := skillNameFromInput(input); name != "" {
 					if root := e.config.SkillRootsByName[name]; root != "" {
@@ -766,6 +811,15 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 			// loop — especially Task sub-agents, which should keep running and recover
 			// from is_error tool_results. Only context cancel / model errors stop the run.
 			results = append(results, apiResult)
+			// Persist each result, including a partial multi-call exchange, before
+			// executing the next call. Do not discard a result merely on cancellation.
+			partial := append(append([]sdk.MessageParam(nil), messages...), sdk.NewUserMessage(cpanthropic.ToolResultBlocks(results)...))
+			if err := runReq.saveCheckpoint("tool_result", partial, workingSet, runUsage, false); err != nil {
+				return RunResult{AgentResult: agent.AgentResult{Error: err.Error(), NoRetry: true}, Messages: partial}
+			}
+			if err := ctx.Err(); err != nil {
+				return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: err.Error(), NoRetry: true}, Messages: partial}
+			}
 		}
 		messages = append(messages, sdk.NewUserMessage(cpanthropic.ToolResultBlocks(results)...))
 	}

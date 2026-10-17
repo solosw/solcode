@@ -14,6 +14,7 @@ import (
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
 	"github.com/solosw/solcode/internal/agent"
+	"github.com/solosw/solcode/internal/agentsession"
 	cpanthropic "github.com/solosw/solcode/internal/anthropic"
 	"github.com/solosw/solcode/internal/changegraph"
 	"github.com/solosw/solcode/internal/config"
@@ -262,7 +263,11 @@ func New(cfg config.Config, opts ...Option) (*App, error) {
 	// turn-end recording still captures the final state plus pruned files.
 	engineCfg.OnTodosUpdated = application.recordTodoSessionMemory
 	eng := engine.NewEngine(engineCfg)
-	coordinator := agent.NewCoordinator(eng)
+	var childStore agent.Store
+	if cfg.Session.Enabled && cfg.Session.Persist {
+		childStore = agentsession.NewFileStore(cfg.Session.Dir)
+	}
+	coordinator := agent.NewCoordinator(eng, childStore)
 	subagent := tool.NewSubagentTool(coordinator)
 	registry.Register(subagent, tool.NewTaskToolWithSubagent(subagent), tool.NewBatchToolWithPTC(tool.BatchLimits{
 		MaxOperations:       cfg.Batch.MaxOperations,
@@ -1689,7 +1694,7 @@ func observationPathAllowed(path, sessionDir, workDir string) bool {
 
 // ReadObservation implements tool.ObservationReader so the model can recover
 // compacted tool results from a placeholder, observation_id, or stored path.
-func (a *App) ReadObservation(_ context.Context, req tool.ObservationReadRequest) (string, error) {
+func (a *App) ReadObservation(ctx context.Context, req tool.ObservationReadRequest) (string, error) {
 	if a == nil {
 		return "", fmt.Errorf("app is nil")
 	}
@@ -1721,6 +1726,22 @@ func (a *App) ReadObservation(_ context.Context, req tool.ObservationReadRequest
 		content, err := store.Load(id)
 		if err == nil && strings.TrimSpace(content) != "" {
 			return content, nil
+		}
+	}
+	// A fork can retain masked observations belonging to the parent session.
+	// Resolve through the durable parent relationship, never by guessing paths.
+	if id != "" && agent.ValidID(req.SessionID) {
+		if child, err := agentsession.NewFileStore(sessionDir).Load(ctx, agent.AgentID(req.SessionID)); err == nil && filepath.Clean(child.Config.WorkDir) == filepath.Clean(workDir) {
+			parentSessionID := child.ForkParentSessionID
+			if parentSessionID == "" {
+				parentSessionID = child.Config.ParentSessionID
+			}
+			if parentSessionID != "" {
+				parentStore := session.NewFileObservationStore(session.ObservationStoreDir(sessionDir, session.SessionID(parentSessionID)))
+				if content, err := parentStore.Load(id); err == nil && strings.TrimSpace(content) != "" {
+					return content, nil
+				}
+			}
 		}
 	}
 	if path != "" {
@@ -3423,7 +3444,12 @@ func (a *App) askUserAutoSelect(ctx context.Context, params tool.AskUserParams) 
 
 func engineConfig(cfg config.Config, client *cpanthropic.Client, runtime *hook.Runtime, registry *tool.Registry, permissions *permission.Service, onTextDelta, onThinkingDelta func(string), onToolStart func(name string, input json.RawMessage, toolUseID string), onToolDone func(name string, output string, isError bool, toolUseID string), onUsage func(engine.Usage), onStatus func(string), onAgentProgress func(tool.AgentProgressEvent), onAskUser func(ctx context.Context, params tool.AskUserParams) (map[string]string, error), textFileSystem tool.TextFileSystem, queuedPrompts func() []string, recordFileChange func(ctx context.Context, uctx *tool.UseContext, change tool.FileChange), captureCheckpoint func(path string, content *string), uncaptureCheckpoint func(path string), listCheckpointPaths func() []string, fingerprintBaseline func() map[string]tool.FileFingerprint, compactMessages func(ctx context.Context, messages []sdk.MessageParam) ([]sdk.MessageParam, error)) engine.Config {
 	skillRegistry := loadSkills(cfg)
+	childSessionDir := ""
+	if cfg.Session.Enabled && cfg.Session.Persist {
+		childSessionDir = cfg.Session.Dir
+	}
 	return engine.Config{
+		SubagentSessionDir:     childSessionDir,
 		Client:                 client,
 		Hooks:                  runtime,
 		Tools:                  registry,

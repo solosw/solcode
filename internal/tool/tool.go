@@ -6,6 +6,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"github.com/solosw/solcode/internal/agent"
 	"time"
 )
 
@@ -20,8 +21,10 @@ type TextFileSystem interface {
 }
 
 type UseContext struct {
+	// ParentContext is a read-only fork source; never carries execution permissions.
+	ParentContext agent.Snapshot
 	BatchDispatch func(ctx context.Context, name string, input json.RawMessage) (*ContentBlock, error)
-	BatchLookup func(name string) Tool
+	BatchLookup   func(name string) Tool
 
 	SessionID string
 	MessageID string
@@ -29,8 +32,8 @@ type UseContext struct {
 	// SkillRoots are absolute skill package directories (Agent Skills roots).
 	// Relative paths like scripts/… or references/… resolve against these
 	// when they are not found under WorkDir (or prefer them when skill-shaped).
-	SkillRoots       []string
-	AgentID          string
+	SkillRoots []string
+	AgentID    string
 	// AgentRole is the agent.AgentRole string for this invoke ("main", "task",
 	// "sub"). Empty means main. AskUser uses it to skip the interactive user
 	// dialog for nested agents and let Jev choose instead.
@@ -59,7 +62,7 @@ type UseContext struct {
 	// AskUserAutoSelect answers AskUser without a human. Used for nested agents
 	// and for timeouts while waiting on the interactive dialog. Nil falls back
 	// to the first option of each question.
-	AskUserAutoSelect   func(ctx context.Context, params AskUserParams) (map[string]string, error)
+	AskUserAutoSelect func(ctx context.Context, params AskUserParams) (map[string]string, error)
 	// OnAgentProgress reports nested sub-agent lifecycle / tool activity to the UI.
 	OnAgentProgress func(AgentProgressEvent)
 	// OnTodosUpdated is invoked after TodoWrite successfully persists a list.
@@ -94,6 +97,8 @@ type FileChange struct {
 
 // ContentBlock represents a content block in Anthropic's message format.
 type ContentBlock struct {
+	AgentID   string `json:"agent_id,omitempty"`
+	RunID     string `json:"run_id,omitempty"`
 	Type      string `json:"type"` // text | image | tool_use | tool_result
 	Text      string `json:"text,omitempty"`
 	IsError   bool   `json:"is_error,omitempty"`

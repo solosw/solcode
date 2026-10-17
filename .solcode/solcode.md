@@ -915,3 +915,92 @@ Organizer: 用户要求使用开源方案方式使用 Jev 做智能选择模型�
 - memory_ids: mem_21337d602406a50a, mem_32f833b690c2a2bd
 
 Organizer: User requested replacing local Jev ONNX inference with in-process GGUF shared-library/DLL calls, never llama-server/HTTP, and simplifying all local-model settings: fixed `~/.solcode/models`, filenames only, GPU-only, no CPU selector or CPU.
+
+## 2026-10-17 13:29:04 · session acp-1792214857514270000-1 · turn 0 · importance 0.50
+- keywords: turn, todolist, organizer, archival, retrieval, terms, model
+- memory_ids: mem_9b80c570925a0fcd
+
+Organizer: 用户要求使用开源方案进行智能模型路由，并询问是否可将每次路由结果存储到数据库以优化后续任务。
+
+## 2026-10-17 13:30:30 · session acp-1792214857514270000-1 · turn 1 · importance 0.50
+- keywords: turn, todolist, organizer, archival, retrieval, terms, batch
+- memory_ids: mem_32f833b690c2a2bd
+
+Organizer: 用户要求将本地 Jev ONNX 推理替换为 in-process GGUF shared-library/DLL 调用，不再使用 llama-server/HTTP，并简化所有本地修改。已修复工具目录限制，允许任意目录访问，并更新工具选择器以匹配 BatchTool 的 public 名称。当前会话中，用户请求了使用开源方案进行智能模型路由，并询问是否可将每次路由结果存储到数据库以优化后续任务。用户要求解析 ACP 协议带过来的 mcp 并注册为工具。已修复工具目录限制，并
+
+## 2026-10-17 13:34:05 · session acp-1792214857514270000-1 · turn 2 · importance 0.50
+- keywords: turn, todolist, organizer, archival, retrieval, terms, model
+- memory_ids: mem_9b80c570925a0fcd
+
+Organizer: 用户要求使用开源方案进行智能模型路由，并询问是否可将每次路由结果存储到数据库以优化后续任务。
+
+## 2026-10-17 19:48:02 · session acp-1792214857514270000-1 · turn 3 · importance 0.50
+- keywords: todolist, todo-write, turn, organizer, archival, retrieval, terms, model
+- files: docs/persistent-subagents.md, internal/agent/coordinator.go, internal/agent/fork_bench_test.go, internal/agent/lifecycle.go, internal/agent/reuse.go, internal/agent/session_store.go, internal/agent/session_store_test.go, internal/agent/state_view.go, internal/agentsession/file_store.go, internal/agentsession/file_store_test.go, internal/agentsession/lock_unix.go, internal/agentsession/lock_windows.go, internal/app/app.go, internal/app/subagent_observation_test.go, internal/engine/engine.go, internal/engine/fork_context.go, internal/engine/fork_context_test.go, internal/engine/persistent.go, internal/engine/persistent_test.go, internal/engine/working_set_state.go, internal/session/atomic_store_test.go, internal/session/file_store.go, internal/session/session.go, internal/tool/subagent.go, internal/tool/task.go, internal/tool/task_agents.go, internal/tool/task_agents_test.go, internal/tool/tool.go
+- memory_ids: mem_32f833b690c2a2bd
+
+Organizer: 用户要求将本地 Jev ONNX 推理替换为 in-process GGUF shared-library/DLL 调用，不再使用 llama-server/HTTP，并简化所有本地修改。
+
+## 2026-10-17 19:58:52 · session acp-1792214857514270000-1 · turn 4 · importance 0.40
+- keywords: organizer, archival, retrieval, terms, tool, turn, todolist
+- files: docs/persistent-subagents.md, internal/agent/coordinator.go, internal/agent/fork_bench_test.go, internal/agent/lifecycle.go, internal/agent/reuse.go, internal/agent/session_store.go, internal/agent/session_store_test.go, internal/agent/state_view.go, internal/agentsession/file_store.go, internal/agentsession/file_store_test.go, internal/agentsession/lock_unix.go, internal/agentsession/lock_windows.go, internal/app/app.go, internal/app/subagent_observation_test.go, internal/engine/engine.go, internal/engine/fork_context.go, internal/engine/fork_context_test.go, internal/engine/persistent.go, internal/engine/persistent_test.go, internal/engine/working_set_state.go, internal/session/atomic_store_test.go, internal/session/file_store.go, internal/session/session.go, internal/tool/subagent.go, internal/tool/task.go, internal/tool/task_agents.go, internal/tool/task_agents_test.go, internal/tool/tool.go
+- memory_ids: mem_21337d602406a50a
+
+Turn memory: 这次**没有新增公开工具**，主要是把现有 `Task` 从“一次性子任务”升级成了**可持久化、可继续对话的子代理工具**。其他文件、搜索和终端工具的调用方式不变。
+### 1. `Task` 可以继续使用同一个子代理
+以前每次调用通常新建子代理；现在结果会返回：
+- `agent_id`：子代理的稳定身份。
+- `run_id`：本次运行的身份。
+后续传入 `agent_id`，就能接着它自己的上下文继续工作，不必重新读文件、重复说明背景。
+```json
+{
+"agent_id": "上次返回的 agent_id",
+"description": "继续检查",
+"prompt": "接着检查剩余边界情况"
+}
+```
+注意：`agent_id` 和任务依赖图中的 `task_id` 不是一回事。
+### 2. 增加管理操作
+仍然通过 `Task` 调用：
+| `action` | 用途 |
+|---|---|
+| `list` | 列出子代理 |
+| `status` | 查看状态、用量等 |
+| `history` | 分页查看消息、运行记录或事件 |
+| `wait` | 等待运行完成 |
+| `cancel` | 取消当前运行 |
+| `archive` | 归档，保留历史但不再继续运行 |
+例如：
+```json
+{"action":"status","agent_id":"…"}
+```
+### 3. 可以选择继承哪些父上下文
+**新建子代理时**增加以下参数；继续已有代理时，则恢复它自己的上下文。
+| `fork_context` | 行为 |
+|---|---|
+| `none`，默认 | 不继承父会话 |
+| `last_n` | 继承最近若干轮，通过 `fork_last_n` 指定 |
+| `full` | 继承已完成的父会话 |
+| `wo … 工具调用**。
+- 如果某个工具可能已生效、但结果没保存，会阻止继续；需先核实实际状态，再用 `acknowledge_interruption: true` 明确确认。
+- 尚未发出工具调用的失败可以自动重试；一旦发出过工具调用，失败后不再自动重试，避免重复副作用。
+### 5. 权限没有放宽
+- **`Task` 仍然仅在显式 Ultra 模式可用，单独 bypass 不够。**
+- 恢复子代理仍检查当前权限、hooks 和 guardrails。
+- `allowed_tools` 可以进一步收紧，不能借恢复绕过原有工具范围。
+- 普通结果最多返回 12,000 个 Unicode 字符，完整输出保存在子代理历史中。
+**这些是源码中的变化；尚未替换当前运行的 SolCode，需要重新构建并重启后生效。** 详细说明见 `docs/persistent-subagents.md`。
+
+## 2026-10-17 20:02:22 · session acp-1792214857514270000-1 · turn 5 · importance 0.90
+- keywords: turn, todolist, organizer, archival, reuse, persistent, agent, fork, context
+- files: docs/persistent-subagents.md, internal/agent/coordinator.go, internal/agent/fork_bench_test.go, internal/agent/lifecycle.go, internal/agent/reuse.go, internal/agent/session_store.go, internal/agent/session_store_test.go, internal/agent/state_view.go, internal/agentsession/file_store.go, internal/agentsession/file_store_test.go, internal/agentsession/lock_unix.go, internal/agentsession/lock_windows.go, internal/app/app.go, internal/app/subagent_observation_test.go, internal/engine/engine.go, internal/engine/fork_context.go, internal/engine/fork_context_test.go, internal/engine/persistent.go, internal/engine/persistent_test.go, internal/engine/working_set_state.go, internal/session/atomic_store_test.go, internal/session/file_store.go, internal/session/session.go, internal/tool/subagent.go, internal/tool/task.go, internal/tool/task_agents.go, internal/tool/task_agents_test.go, internal/tool/tool.go
+- memory_ids: mem_23092aced351ec3b
+
+Organizer: 用户要求将 SolCode 的 persistent-subagent 工具升级，使其支持可持久化子代理（Agent）而非一次性子任务（Task）。升级包括：将 Task 升级为可继续对话的子代理，增加 agent_id/run_id 标识，支持 fork_context 继承父会话，实现工作集持久化，并保留所有现有 Task 调用方式。所有修改已完成，Go 编译和测试通过，无新工具或公开 API 新增。
+
+## 2026-10-17 20:11:47 · session acp-1792214857514270000-1 · turn 6 · importance 0.90
+- keywords: todolist, todo-write, turn, organizer, archival, retrieval, terms, persistent-subagent
+- files: docs/persistent-subagents.md, internal/agent/coordinator.go, internal/agent/fork_bench_test.go, internal/agent/lifecycle.go, internal/agent/reuse.go, internal/agent/session_store.go, internal/agent/session_store_test.go, internal/agent/state_view.go, internal/agentsession/file_store.go, internal/agentsession/file_store_test.go, internal/agentsession/lock_unix.go, internal/agentsession/lock_windows.go, internal/app/app.go, internal/app/subagent_observation_test.go, internal/engine/engine.go, internal/engine/fork_context.go, internal/engine/fork_context_test.go, internal/engine/persistent.go, internal/engine/persistent_test.go, internal/engine/working_set_state.go, internal/session/atomic_store_test.go, internal/session/file_store.go, internal/session/session.go, internal/tool/subagent.go, internal/tool/task.go, internal/tool/task_agents.go, internal/tool/task_agents_test.go, internal/tool/tool.go
+- memory_ids: mem_9b80c570925a0fcd
+
+Organizer: 用户要求使用开源方案进行智能模型路由，并询问是否可将每次路由结果存储到数据库以优化后续任务。用户已明确选择实施所有 A→B→C→D 的 SolCode 持久化子代理上下文复用计划，所有任务已完成，最终中文响应已送达。实现设计包括依赖约束 `session → permission → tool → agent` 防止子代理导入会话，定义 `Store` / `PersistentRunner` 接口，实现独立 `agent_id`、`run_id`、执行 ID 和重试机制；D
