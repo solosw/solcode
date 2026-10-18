@@ -59,6 +59,7 @@ type acpSession struct {
 	application *app.App
 	mu          sync.Mutex
 	cancel      context.CancelFunc
+	promptCtx   context.Context
 	prompting   bool
 	toolCalls   map[string]string
 	// toolCallsByID maps model tool_use ids (and generated ACP ids) to ACP toolCallIds.
@@ -121,11 +122,18 @@ func (s *Server) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 			continue
 		}
 		if msg.Method == MethodSessionPrompt {
-			go func(msg jsonrpcMessage) {
-				if err := s.handleSessionPrompt(ctx, msg); err != nil {
-					_ = s.conn.ReplyError(msg.ID, JSONRPCInternalError, err.Error())
-				}
-			}(msg)
+			// Register cancellation before reading another message: a cancel
+			// notification may already be queued immediately after this prompt.
+			run, err := s.prepareSessionPrompt(ctx, msg)
+			if err != nil {
+				_ = s.conn.ReplyError(msg.ID, JSONRPCInternalError, err.Error())
+			} else if run != nil {
+				go func() {
+					if err := run(); err != nil {
+						_ = s.conn.ReplyError(msg.ID, JSONRPCInternalError, err.Error())
+					}
+				}()
+			}
 			continue
 		}
 		if err := s.handle(ctx, msg); err != nil {
@@ -290,27 +298,41 @@ func (s *Server) handleSessionLoad(ctx context.Context, msg jsonrpcMessage) erro
 }
 
 func (s *Server) handleSessionPrompt(ctx context.Context, msg jsonrpcMessage) error {
+	run, err := s.prepareSessionPrompt(ctx, msg)
+	if err != nil || run == nil {
+		return err
+	}
+	return run()
+}
+
+func (s *Server) prepareSessionPrompt(ctx context.Context, msg jsonrpcMessage) (func() error, error) {
 	if err := s.requireInitialized(); err != nil {
-		return s.conn.ReplyError(msg.ID, JSONRPCInvalidRequest, err.Error())
+		return nil, s.conn.ReplyError(msg.ID, JSONRPCInvalidRequest, err.Error())
 	}
 	var params SessionPromptParams
 	if err := decodeParams(msg.Params, &params); err != nil {
-		return s.conn.ReplyError(msg.ID, JSONRPCInvalidParams, err.Error())
+		return nil, s.conn.ReplyError(msg.ID, JSONRPCInvalidParams, err.Error())
 	}
 	sess := s.getSession(params.SessionID)
 	if sess == nil {
-		return s.conn.ReplyError(msg.ID, JSONRPCInvalidParams, "unknown session")
+		return nil, s.conn.ReplyError(msg.ID, JSONRPCInvalidParams, "unknown session")
 	}
 	prompt := promptToText(params.Prompt, sess.workDir)
 	if prompt == "" {
-		return s.conn.ReplyError(msg.ID, JSONRPCInvalidParams, "prompt is required")
+		return nil, s.conn.ReplyError(msg.ID, JSONRPCInvalidParams, "prompt is required")
 	}
 
 	runCtx, cancel := conversationContext(ctx, s.timeout)
-	if !sess.beginPrompt(cancel) {
+	if !sess.beginPrompt(runCtx, cancel) {
 		cancel()
-		return s.conn.ReplyError(msg.ID, JSONRPCInvalidRequest, "session is already prompting")
+		return nil, s.conn.ReplyError(msg.ID, JSONRPCInvalidRequest, "session is already prompting")
 	}
+	return func() error {
+		return s.runSessionPrompt(runCtx, msg, sess, prompt)
+	}, nil
+}
+
+func (s *Server) runSessionPrompt(runCtx context.Context, msg jsonrpcMessage, sess *acpSession, prompt string) error {
 	ended := false
 	endPrompt := func() {
 		if !ended {
@@ -870,14 +892,17 @@ func (s *Server) requestPermission(sess *acpSession, toolName, description strin
 	if sess == nil || s.conn == nil {
 		return false
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-
 	sess.mu.Lock()
+	promptCtx := sess.promptCtx
 	id := sess.toolCalls[toolName]
 	input := sess.lastToolInput[toolName]
 	workDir := sess.workDir
 	sess.mu.Unlock()
+	if promptCtx == nil || promptCtx.Err() != nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(promptCtx, 5*time.Minute)
+	defer cancel()
 	if id == "" {
 		id = s.nextToolCallID()
 	}
@@ -908,6 +933,11 @@ func (s *Server) requestPermission(sess *acpSession, toolName, description strin
 	}, &result)
 	if err != nil {
 		log.Printf("acp permission request failed: %v", err)
+		return false
+	}
+	// Call may select a response when both it and cancellation are ready.
+	// Never let a late allow (especially allow_always) survive cancellation.
+	if ctx.Err() != nil || result.Outcome.Outcome != "selected" {
 		return false
 	}
 	switch result.Outcome.OptionID {
@@ -1018,13 +1048,14 @@ func (s *Server) nextToolCallID() string {
 	return fmt.Sprintf("tool-%d", n)
 }
 
-func (sess *acpSession) beginPrompt(cancel context.CancelFunc) bool {
+func (sess *acpSession) beginPrompt(ctx context.Context, cancel context.CancelFunc) bool {
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
 	if sess.prompting {
 		return false
 	}
 	sess.prompting = true
+	sess.promptCtx = ctx
 	sess.cancel = cancel
 	return true
 }
@@ -1033,6 +1064,7 @@ func (sess *acpSession) endPrompt() {
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
 	sess.prompting = false
+	sess.promptCtx = nil
 	if sess.cancel != nil {
 		sess.cancel()
 		sess.cancel = nil

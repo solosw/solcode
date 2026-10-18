@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/solosw/solcode/internal/executil"
 	"github.com/solosw/solcode/internal/sandbox"
 )
 
@@ -331,21 +332,16 @@ func (b *bashTool) runCommandTo(ctx context.Context, command, workDir string, st
 	cmd.Stdout = stdoutW
 	cmd.Stderr = stderrW
 
-	// Start+Wait (not Run) so we can attach platform process-tree guards
-	// before waiting. Completion is process-tree exit — not "first stdout".
-	if err := cmd.Start(); err != nil {
-		if guard != nil {
-			guard.Close()
-		}
-		return 0, err
-	}
 	if guard != nil {
-		guard.AfterStart(cmd.Process)
 		// Close only after WaitChildren so KILL_ON_JOB_CLOSE does not reap
 		// still-running children (python training, etc.) when cmd.exe exits.
 		defer guard.Close()
 	}
-	err := cmd.Wait()
+	err := executil.Run(ctx, cmd, func() {
+		if guard != nil {
+			guard.AfterStart(cmd.Process)
+		}
+	})
 	// On Windows, cmd.exe may exit while python/etc. children keep running in
 	// the job. Block until the job is empty (or ctx cancels/times out).
 	if guard != nil {

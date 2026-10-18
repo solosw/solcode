@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"syscall"
-	"time"
 )
 
 type processGuard interface {
@@ -19,21 +18,17 @@ type processGuard interface {
 
 type unixProcessGuard struct{}
 
-func (unixProcessGuard) AfterStart(*os.Process)              {}
+func (unixProcessGuard) AfterStart(*os.Process)             {}
 func (unixProcessGuard) WaitChildren(context.Context) error { return nil }
 func (unixProcessGuard) Close()                             {}
 
 // configureCommandCancellation puts the shell and all of its children in a
 // separate process group. Canceling the tool context then terminates the whole
 // group rather than merely the shell process.
-//
-// WaitDelay is armed only when Cancel runs. Setting it unconditionally made
-// long jobs that keep writing stdout look finished as soon as pipes drained
-// after a partial shutdown; normal completion must wait for the real exit.
+// Output pipe lifetime is managed separately by executil.Run.
 func configureCommandCancellation(cmd *exec.Cmd) processGuard {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
-		cmd.WaitDelay = 250 * time.Millisecond
 		if cmd.Process == nil {
 			return os.ErrProcessDone
 		}

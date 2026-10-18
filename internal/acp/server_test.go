@@ -378,11 +378,12 @@ func TestPromptToTextAndHistory(t *testing.T) {
 }
 
 type harnessClient struct {
-	server           *Server
-	conn             *Conn
-	permissionOption string
-	mu               sync.Mutex
-	updates          []SessionUpdateParams
+	server             *Server
+	conn               *Conn
+	permissionOption   string
+	permissionRequests chan jsonrpcMessage
+	mu                 sync.Mutex
+	updates            []SessionUpdateParams
 }
 
 func (c *harnessClient) snapshot() []SessionUpdateParams {
@@ -458,6 +459,13 @@ func (c *harnessClient) readLoop() {
 				c.mu.Unlock()
 			}
 		case MethodSessionRequestPermission:
+			c.mu.Lock()
+			requests := c.permissionRequests
+			c.mu.Unlock()
+			if requests != nil {
+				requests <- msg
+				continue
+			}
 			option := c.permissionOption
 			if option == "" {
 				option = PermissionAllowOnce

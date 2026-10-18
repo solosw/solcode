@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"syscall"
-	"time"
 )
 
 type processGuard interface {
@@ -26,7 +25,6 @@ func (unixProcessGuard) Close()                             {}
 func configureCommandCancellation(cmd *exec.Cmd) processGuard {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
-		cmd.WaitDelay = 250 * time.Millisecond
 		if cmd.Process == nil {
 			return os.ErrProcessDone
 		}

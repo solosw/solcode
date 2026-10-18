@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/solosw/solcode/internal/executil"
 )
 
 // Policy controls how strictly the sandbox confines a command.
@@ -116,17 +118,17 @@ func (s *Sandbox) unconfinedRun(ctx context.Context, cmd Command) (Result, error
 	co.configure(c, cmd)
 	guard := configureCommandCancellation(c)
 
-	if err := c.Start(); err != nil {
-		if guard != nil {
-			guard.Close()
-		}
-		return Result{}, fmt.Errorf("native sandbox (unconfined): %w", err)
-	}
 	if guard != nil {
-		guard.AfterStart(c.Process)
 		defer guard.Close()
 	}
-	err := c.Wait()
+	err := executil.Run(ctx, c, func() {
+		if guard != nil {
+			guard.AfterStart(c.Process)
+		}
+	})
+	if c.Process == nil {
+		return Result{}, fmt.Errorf("native sandbox (unconfined): %w", err)
+	}
 	if guard != nil {
 		if waitErr := guard.WaitChildren(ctx); waitErr != nil && err == nil {
 			err = waitErr

@@ -77,9 +77,15 @@ type processGuard interface {
 }
 
 type windowsJobGuard struct {
-	mu     sync.Mutex
-	job    windows.Handle
-	closed bool
+	mu        sync.Mutex
+	job       windows.Handle
+	process   windows.Handle // pins the original PID until Close, even after Wait
+	proc      *os.Process
+	assigned  bool
+	started   bool
+	cancelled bool
+	cancelErr error
+	closed    bool
 }
 
 func (g *windowsJobGuard) AfterStart(proc *os.Process) {
@@ -87,24 +93,94 @@ func (g *windowsJobGuard) AfterStart(proc *os.Process) {
 		return
 	}
 	g.mu.Lock()
-	job := g.job
-	closed := g.closed
-	g.mu.Unlock()
-	if job == 0 || closed {
+	defer g.mu.Unlock()
+	if g.closed {
+		// Close/Cancel can race with Start's context watcher before this hook.
+		_ = proc.Kill()
 		return
 	}
-	h, err := windows.OpenProcess(
-		windows.PROCESS_SET_QUOTA|windows.PROCESS_TERMINATE|windows.PROCESS_QUERY_INFORMATION,
-		false,
-		uint32(proc.Pid),
-	)
-	if err != nil {
+	if g.started {
 		return
 	}
-	_, _, _ = procAssignProcessToJobObject.Call(uintptr(job), uintptr(h))
-	_ = windows.CloseHandle(h)
+	g.started = true
+	g.proc = proc
+	// cmd.Wait has not started yet, so os.Process still pins this PID while
+	// we acquire our own handle. Keep it through output draining and taskkill.
+	h, err := windows.OpenProcess(windows.PROCESS_SET_QUOTA|windows.PROCESS_TERMINATE|windows.SYNCHRONIZE, false, uint32(proc.Pid))
+	if err == nil {
+		g.process = h
+		if g.job != 0 {
+			r1, _, _ := procAssignProcessToJobObject.Call(uintptr(g.job), uintptr(h))
+			g.assigned = r1 != 0
+		}
+	} else {
+		// A restricted host may deny job assignment rights but still let us
+		// pin, inspect and terminate our own process for the safe fallback.
+		g.process, _ = windows.OpenProcess(windows.PROCESS_TERMINATE|windows.SYNCHRONIZE, false, uint32(proc.Pid))
+	}
+	if g.cancelled {
+		g.cancelErr = g.cancelLocked()
+	}
 }
 
+func (g *windowsJobGuard) Cancel() error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.closed {
+		return os.ErrProcessDone
+	}
+	if !g.cancelled {
+		g.cancelled = true
+		// os/exec may invoke Cancel from inside Start, before AfterStart has
+		// captured the handle. The hook must finish this pending cancellation.
+		if g.started {
+			g.cancelErr = g.cancelLocked()
+		}
+	}
+	return g.cancelErr
+}
+
+// cancelLocked never targets a PID unless our retained handle pins its identity.
+func (g *windowsJobGuard) cancelLocked() error {
+	if g.assigned && g.job != 0 {
+		// This job already owns the whole tree. Do not also launch taskkill.
+		if err := windows.CloseHandle(g.job); err == nil {
+			g.job = 0
+			return nil
+		}
+	}
+	if g.process == 0 {
+		// No identity-pinning handle: os.Process.Kill uses its own handle and
+		// safely reports ErrProcessDone after Wait. Never use the bare PID.
+		return g.proc.Kill()
+	}
+	status, err := windows.WaitForSingleObject(g.process, 0)
+	if err != nil {
+		return err
+	}
+	if status != uint32(windows.WAIT_TIMEOUT) {
+		// The shell may already be reaped while descendants hold output open.
+		return os.ErrProcessDone
+	}
+	// Hold the lock and original handle until the tracked, bounded fallback
+	// exits. Close must not release the PID while taskkill is using it.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	err = exec.CommandContext(ctx, "taskkill", "/PID", fmt.Sprint(g.proc.Pid), "/T", "/F").Run()
+	if err == nil {
+		return nil
+	}
+	if killErr := windows.TerminateProcess(g.process, 1); killErr == nil {
+		return nil
+	}
+	if status, _ := windows.WaitForSingleObject(g.process, 0); status == windows.WAIT_OBJECT_0 {
+		return os.ErrProcessDone
+	}
+	return err
+}
+
+// WaitChildren polls only a successfully assigned job, holding the lock while
+// querying so Cancel/Close cannot release and reuse its handle mid-query.
 func (g *windowsJobGuard) WaitChildren(ctx context.Context) error {
 	if g == nil {
 		return nil
@@ -113,17 +189,13 @@ func (g *windowsJobGuard) WaitChildren(ctx context.Context) error {
 	defer ticker.Stop()
 	for {
 		g.mu.Lock()
-		job := g.job
-		closed := g.closed
+		if g.job == 0 || !g.assigned || g.closed {
+			g.mu.Unlock()
+			return nil
+		}
+		active, err := jobActiveProcesses(g.job)
 		g.mu.Unlock()
-		if job == 0 || closed {
-			return nil
-		}
-		active, err := jobActiveProcesses(job)
-		if err != nil {
-			return nil
-		}
-		if active == 0 {
+		if err != nil || active == 0 {
 			return nil
 		}
 		select {
@@ -148,6 +220,11 @@ func (g *windowsJobGuard) Close() {
 		_ = windows.CloseHandle(g.job)
 		g.job = 0
 	}
+	if g.process != 0 {
+		_ = windows.CloseHandle(g.process)
+		g.process = 0
+	}
+	g.proc = nil
 }
 
 func jobActiveProcesses(job windows.Handle) (uint32, error) {
@@ -171,30 +248,11 @@ func configureCommandCancellation(cmd *exec.Cmd) processGuard {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
 	}
 
-	job, err := createKillOnCloseJob()
-	var guard *windowsJobGuard
-	if err == nil && job != 0 {
-		guard = &windowsJobGuard{job: job}
-	}
-
-	cmd.Cancel = func() error {
-		cmd.WaitDelay = 250 * time.Millisecond
-		if guard != nil {
-			guard.Close()
-		}
-		if cmd.Process == nil {
-			return os.ErrProcessDone
-		}
-		pid := cmd.Process.Pid
-		go func() {
-			_ = exec.Command("taskkill", "/PID", fmt.Sprint(pid), "/T", "/F").Run()
-		}()
-		return cmd.Process.Kill()
-	}
-
-	if guard == nil {
-		return nil
-	}
+	job, _ := createKillOnCloseJob()
+	// Always register AfterStart, even if creating the Job failed: the fallback
+	// still needs an identity-pinning process handle and startup cancellation.
+	guard := &windowsJobGuard{job: job}
+	cmd.Cancel = guard.Cancel
 	return guard
 }
 

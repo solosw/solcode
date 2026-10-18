@@ -143,6 +143,9 @@ func timeoutForTool(selected tool.Tool) time.Duration {
 }
 
 func (x *ToolExecutor) Execute(ctx context.Context, call ToolCall, env ToolEnv) ToolResult {
+	if err := ctx.Err(); err != nil {
+		return ToolResult{Content: tool.ErrorResult(err.Error()), IsError: true}
+	}
 	selected := x.registry.Find(call.Name)
 	if selected == nil {
 		content := tool.ErrorResult(fmt.Sprintf("tool not found: %s", call.Name))
@@ -202,6 +205,11 @@ func (x *ToolExecutor) Execute(ctx context.Context, call ToolCall, env ToolEnv) 
 		}
 	}
 
+	// Approval and hooks may have waited while the owning prompt was canceled.
+	// A late approval must not start another tool or capture its checkpoints.
+	if err := ctx.Err(); err != nil {
+		return ToolResult{Content: tool.ErrorResult(err.Error()), IsError: true}
+	}
 	captureCheckpointBeforeInvoke(ctx, selected, input, env.UseContext)
 	beforeFP := captureFingerprintBeforeInvoke(selected, env.UseContext)
 
