@@ -931,6 +931,9 @@ func (a *App) RunPromptWithSession(ctx context.Context, sessionID, prompt, workD
 	current.Metadata.Model = a.Config.Model
 	if len(result.Messages) > 0 {
 		current.ReplaceMessages(session.StripEphemeralContextMessages(result.Messages))
+		if summary := session.CompactedSummary(current.Messages); summary != "" {
+			current.Summary = summary
+		}
 	}
 	if result.AgentResult.Error == "" && a.Config.Memory.Enabled {
 		a.rememberExplicitMemory(ctx, prompt, sessionID)
@@ -1288,7 +1291,8 @@ func (a *App) refreshSessionSummary(ctx context.Context, sessionID session.Sessi
 	}
 	unbindUsage := a.bindUsageSession(current)
 	defer unbindUsage()
-	transcript := session.Transcript(contextmessage.WithoutDynamicContext(session.StripEphemeralContextMessages(current.CopyMessages())))
+	messages := session.StripCompactedContextMessages(session.StripEphemeralContextMessages(current.CopyMessages()))
+	transcript := session.Transcript(contextmessage.WithoutDynamicContext(messages))
 	if strings.TrimSpace(transcript) == "" {
 		return fmt.Errorf("session summary transcript is empty")
 	}
@@ -1593,29 +1597,23 @@ func (w aiSessionSummaryWriter) Summarize(ctx context.Context, previous, transcr
 	if w.client == nil {
 		return "", fmt.Errorf("session summary client is unavailable")
 	}
-	input := strings.TrimSpace(transcript)
-	if previous = strings.TrimSpace(previous); previous != "" {
-		input = "Previous session summary:\n" + previous + "\n\nSession transcript to summarize:\n" + input
-	}
+	input := sessionSummaryInput(previous, transcript)
 	message, err := w.client.Create(ctx, cpanthropic.MessageRequest{
 		Model:     w.model,
-		MaxTokens: 2000,
-		System: strings.Join([]string{
-			"Summarize a coding-agent session for the next turn.",
-			"Return only the summary, with no preamble or analysis.",
-			"Preserve the user's active request, decisions, completed work, exact file paths and symbols when important, validation results, errors, and unresolved follow-up tasks.",
-			"Do not reproduce tool-call JSON, raw logs, code listings, or role prefixes.",
-			"Be concise and factual; do not invent details.",
-		}, " "),
-		Messages: []sdk.MessageParam{sdk.NewUserMessage(sdk.NewTextBlock(input))},
-		Thinking: false,
-		Stream:   false,
+		MaxTokens: sessionSummaryMaxTokens,
+		System:    sessionSummaryPrompt(),
+		Messages:  []sdk.MessageParam{sdk.NewUserMessage(sdk.NewTextBlock(input))},
+		Thinking:  false,
+		Stream:    false,
 	})
 	if err != nil {
 		return "", err
 	}
 	if w.onUsage != nil {
 		w.onUsage(message)
+	}
+	if message.StopReason == sdk.StopReasonMaxTokens {
+		return "", fmt.Errorf("session summary truncated at output token limit")
 	}
 	return strings.TrimSpace(cpanthropic.TextFromMessage(message)), nil
 }
@@ -1782,7 +1780,17 @@ func (a *App) compactSession(ctx context.Context, current *session.Session, forc
 	if cleanedHistory {
 		current.ReplaceMessages(cleanedMessages)
 	}
+	// The durable summary is the checkpoint actually visible to the model.
+	// In-flight compaction may not have a Session.Summary field populated.
+	previousSummary := session.CompactedSummary(cleanedMessages)
+	if previousSummary == "" {
+		previousSummary = current.Summary
+	}
+	previousSummary = sanitizeLoadedSessionSummary(previousSummary)
 	messagesToCompact := session.StripCompactedContextMessages(cleanedMessages)
+	if len(contextmessage.WithoutDynamicContext(messagesToCompact)) == 0 {
+		return cleanedHistory, nil
+	}
 	if a.onStatus != nil {
 		a.onStatus("Compacting...")
 		defer a.onStatus("Ready")
@@ -1810,7 +1818,8 @@ func (a *App) compactSession(ctx context.Context, current *session.Session, forc
 	if summaryGate <= 0 {
 		summaryGate = trigger
 	}
-	result, err := session.Compact(ctx, current.Summary, messagesToCompact, a.sessionSummaryWriter(), session.CompactOptions{
+	writer := a.sessionSummaryWriter()
+	result, err := session.Compact(ctx, previousSummary, messagesToCompact, writer, session.CompactOptions{
 		MaxRecentTurns:         a.Config.Memory.MaxRecentTurns,
 		SummaryThresholdTokens: trigger,
 		TargetTokens:           target,
@@ -1828,7 +1837,25 @@ func (a *App) compactSession(ctx context.Context, current *session.Session, forc
 		})
 		return false, err
 	}
-	previousSummary := sanitizeLoadedSessionSummary(current.Summary)
+	maskedOnly := result.ObservationsOnly
+	if !maskedOnly && !result.SummaryGenerated && (result.Changed || estimated >= trigger || force) {
+		// A composed request can exceed the trigger even when the transcript
+		// alone does not. Never discard that history using a stale summary.
+		transcript := session.Transcript(contextmessage.WithoutDynamicContext(messagesToCompact))
+		if writer != nil && strings.TrimSpace(transcript) != "" {
+			generated, err := writer.Summarize(ctx, previousSummary, transcript)
+			if err != nil {
+				return false, fmt.Errorf("generate session summary with AI: %w", err)
+			}
+			result.Summary = strings.TrimSpace(generated)
+			if result.Summary == "" {
+				return false, fmt.Errorf("generate session summary with AI: empty response")
+			}
+			result.SummaryGenerated = true
+		} else {
+			result.Summary = conciseSessionSummary(transcript, previousSummary)
+		}
+	}
 	if !result.Changed {
 		if estimated < trigger && !force {
 			a.recordCompactEvent("compact_skipped", map[string]any{
@@ -1844,9 +1871,6 @@ func (a *App) compactSession(ctx context.Context, current *session.Session, forc
 		// session history into Summary so the next request is exactly:
 		// project knowledge + session summary + latest user prompt.
 		current.Summary = result.Summary
-		if force || strings.TrimSpace(current.Summary) == "" || (current.Summary == previousSummary && strings.TrimSpace(result.OriginalTranscript) != "") {
-			current.Summary = conciseSessionSummary(session.Transcript(contextmessage.WithoutDynamicContext(cleanedMessages)), previousSummary)
-		}
 		if strings.TrimSpace(current.Summary) == "" {
 			a.recordCompactEvent("compact_skipped", map[string]any{
 				"session_id": string(current.Metadata.ID),
@@ -1865,14 +1889,13 @@ func (a *App) compactSession(ctx context.Context, current *session.Session, forc
 		a.recordCompactEvent("compact_succeeded", map[string]any{
 			"session_id":      string(current.Metadata.ID),
 			"messages_before": len(cleanedMessages),
-			"messages_after":  0,
+			"messages_after":  len(current.Messages),
 			"summary_runes":   len([]rune(current.Summary)),
 			"trigger_source":  "composed_context",
 		})
 		return true, nil
 	}
 	beforeMessages := len(current.Messages)
-	maskedOnly := result.Changed && strings.Contains(session.Transcript(result.Messages), session.ObservationMaskMarker) && strings.TrimSpace(result.Summary) == previousSummary
 	if maskedOnly {
 		current.ReplaceMessages(session.MergeCompactedContext(result.Messages, current.CopyMessages()))
 		a.recordCompactEvent("compact_succeeded", map[string]any{
@@ -1887,9 +1910,6 @@ func (a *App) compactSession(ctx context.Context, current *session.Session, forc
 		return true, nil
 	}
 	nextSummary := strings.TrimSpace(result.Summary)
-	if force || nextSummary == "" {
-		nextSummary = conciseSessionSummary(session.Transcript(contextmessage.WithoutDynamicContext(cleanedMessages)), previousSummary)
-	}
 	if strings.TrimSpace(nextSummary) == "" {
 		a.recordCompactEvent("compact_skipped", map[string]any{
 			"session_id": string(current.Metadata.ID),
@@ -1916,7 +1936,7 @@ func (a *App) compactSession(ctx context.Context, current *session.Session, forc
 		"retained_runes":      len([]rune(result.RetainedTranscript)),
 		"discarded_runes":     len([]rune(result.DiscardedTranscript)),
 		"retained_tokens":     retainedTokens,
-		"used_local_fallback": false,
+		"used_local_fallback": !result.SummaryGenerated,
 	})
 	return true, nil
 }
@@ -2534,6 +2554,9 @@ func sanitizeLoadedSessionSummary(summary string) string {
 	summary = strings.TrimSpace(summary)
 	if summary == "" {
 		return ""
+	}
+	if handoff, ok := sanitizeHandoffSummary(summary); ok {
+		return handoff
 	}
 	if isPlaceholderSessionSummary(summary) {
 		return ""

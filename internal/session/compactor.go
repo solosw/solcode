@@ -40,6 +40,11 @@ type CompactOptions struct {
 }
 
 type CompactResult struct {
+	// SummaryGenerated distinguishes a successful model handoff from an unchanged
+	// previous summary, even when the model returns the same text.
+	SummaryGenerated bool
+	// ObservationsOnly means no conversation messages were compressed or cut.
+	ObservationsOnly    bool
 	Summary             string
 	Messages            []sdk.MessageParam
 	OriginalTranscript  string
@@ -105,7 +110,9 @@ func Compact(ctx context.Context, summary string, messages []sdk.MessageParam, w
 	maskedTokens := ApproxTokensFromMessages(working)
 	needSummary := false
 	if writer != nil {
-		if opts.SummaryIfAboveTokens > 0 {
+		if opts.Force {
+			needSummary = true
+		} else if opts.SummaryIfAboveTokens > 0 {
 			needSummary = maskedTokens > opts.SummaryIfAboveTokens
 		} else {
 			// Callers that omit the gate still skip LLM summary when
@@ -117,7 +124,9 @@ func Compact(ctx context.Context, summary string, messages []sdk.MessageParam, w
 		// Summary generation is intentionally delegated to the model. Headroom
 		// still handles message compaction, while the model preserves intent,
 		// decisions, file changes, and unresolved work in natural language.
-		generated, err := writer.Summarize(ctx, summary, Transcript(working))
+		// Masking is a retention optimization, not the source of the handoff.
+		// Summarize original evidence so masked test/error output is not lost.
+		generated, err := writer.Summarize(ctx, summary, originalTranscript)
 		if err != nil {
 			return result, fmt.Errorf("generate session summary with AI: %w", err)
 		}
@@ -125,7 +134,9 @@ func Compact(ctx context.Context, summary string, messages []sdk.MessageParam, w
 		if result.Summary == "" {
 			return result, fmt.Errorf("generate session summary with AI: empty response")
 		}
+		result.SummaryGenerated = true
 	} else if result.Changed && !needSummary {
+		result.ObservationsOnly = true
 		result.OriginalTranscript = originalTranscript
 		result.CompactedTranscript = Transcript(working)
 		result.RetainedTranscript = result.CompactedTranscript
@@ -156,6 +167,7 @@ func Compact(ctx context.Context, summary string, messages []sdk.MessageParam, w
 	changed := Transcript(messages) != retainedTranscript
 	if !changed {
 		return CompactResult{
+			SummaryGenerated:    result.SummaryGenerated,
 			Summary:             result.Summary,
 			Messages:            append([]sdk.MessageParam(nil), messages...),
 			OriginalTranscript:  originalTranscript,
@@ -166,6 +178,7 @@ func Compact(ctx context.Context, summary string, messages []sdk.MessageParam, w
 		}, nil
 	}
 	return CompactResult{
+		SummaryGenerated:    result.SummaryGenerated,
 		Summary:             result.Summary,
 		Messages:            retained,
 		OriginalTranscript:  originalTranscript,

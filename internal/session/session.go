@@ -69,6 +69,25 @@ func NewCompactedSummaryMessage(summary string) sdk.MessageParam {
 	return sdk.NewUserMessage(sdk.NewTextBlock(CompactedSummaryPrefix + strings.TrimSpace(summary)))
 }
 
+// CompactedSummary returns the latest durable summary, including when only an
+// in-flight transcript is available rather than the persisted Session object.
+func CompactedSummary(messages []sdk.MessageParam) string {
+	var summary string
+	for _, message := range messages {
+		if !IsCompactedSummaryMessage(message) {
+			continue
+		}
+		for _, block := range message.Content {
+			if block.OfText != nil && strings.HasPrefix(strings.TrimSpace(block.OfText.Text), CompactedSummaryPrefix) {
+				if text := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(block.OfText.Text), CompactedSummaryPrefix)); text != "" {
+					summary = text
+				}
+			}
+		}
+	}
+	return summary
+}
+
 // NewCompactedProjectKnowledgeMessage creates the durable project knowledge
 // message captured at the same time as a session compaction.
 func NewCompactedProjectKnowledgeMessage(knowledge string) sdk.MessageParam {
