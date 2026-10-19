@@ -800,6 +800,7 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 				// cannot be undone by a stale local override after restart.
 				next.NormalizeLocalModels()
 				updates := map[string]any{
+					"permissions":        map[string]any{"bypass_subagents": next.Permissions.BypassSubagents},
 					"provider":           next.Provider,
 					"model":              next.Model,
 					"providers":          next.Providers,
@@ -861,6 +862,8 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 				// involve process startup and filesystem scans, so coalesce it in
 				// the background instead of blocking the browser request.
 				cfg = next
+				// Enforce permission toggles before replying, even if model setup is incomplete.
+				application.Permissions.SetBypassSubagents(next.Permissions.BypassSubagents)
 				settingsReload.Lock()
 				settingsReload.generation++
 				generation := settingsReload.generation

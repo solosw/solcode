@@ -47,16 +47,20 @@ func TestAvailableModesAreCanonicalAndUnique(t *testing.T) {
 	}
 }
 
-func TestDelegationRequiresBypassOrUltraEvenWhenAllowlisted(t *testing.T) {
-	for _, mode := range []Mode{ModeAuto, ModeAcceptEdits, ModeBypass, ModePlan, ModeGoal, ModeUltra, "ultrl"} {
-		t.Run(string(mode), func(t *testing.T) {
-			svc := NewService(mode)
-			for _, delegate := range []tool.Tool{tool.NewTaskTool(nil), tool.NewSubagentTool(nil)} {
-				svc.AllowTool(delegate.Name())
-				decision := svc.Check(delegate, []byte(`{"action":"spawn","agent_type":"explorer"}`))
-				if want := NormalizeMode(mode) == ModeUltra || NormalizeMode(mode) == ModeBypass; decision.Allowed != want {
-					t.Errorf("%s in %s: allowed = %v, want %v (%s)", delegate.Name(), mode, decision.Allowed, want, decision.Reason)
-				}
+func TestDelegationRequiresBypassOptInOrUltraEvenWhenAllowlisted(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(map[bool]string{false: "disabled", true: "enabled"}[enabled], func(t *testing.T) {
+			for _, mode := range []Mode{ModeAuto, ModeAcceptEdits, ModeBypass, ModePlan, ModeGoal, ModeUltra, "ultrl"} {
+				t.Run(string(mode), func(t *testing.T) {
+					svc := NewServiceWithConfig(Config{Mode: mode, BypassSubagents: enabled})
+					for _, delegate := range []tool.Tool{tool.NewTaskTool(nil), tool.NewSubagentTool(nil)} {
+						svc.AllowTool(delegate.Name())
+						decision := svc.Check(delegate, []byte(`{"action":"spawn","agent_type":"explorer"}`))
+						if want := NormalizeMode(mode) == ModeUltra || (NormalizeMode(mode) == ModeBypass && enabled); decision.Allowed != want {
+							t.Errorf("%s in %s: allowed = %v, want %v (%s)", delegate.Name(), mode, decision.Allowed, want, decision.Reason)
+						}
+					}
+				})
 			}
 		})
 	}

@@ -7,7 +7,7 @@ import (
 
 func TestBypassRejectsNonBuiltinRolesBeforeAllowlist(t *testing.T) {
 	for _, delegate := range []tool.Tool{tool.NewTaskTool(nil), tool.NewSubagentTool(nil)} {
-		svc := NewService(ModeBypass)
+		svc := NewServiceWithConfig(Config{Mode: ModeBypass, BypassSubagents: true})
 		svc.AllowTool(delegate.Name())
 		for _, input := range []string{
 			`{"agent_type":"custom"}`,

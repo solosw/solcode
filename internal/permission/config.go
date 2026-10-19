@@ -6,6 +6,9 @@ type Config struct {
 	Mode      Mode     `json:"mode,omitempty"`
 	Allow     []string `json:"allow,omitempty"`
 	AllowBash []string `json:"allow_bash,omitempty"`
+
+	// BypassSubagents opts bypass into built-in sub-agents; ultra is unaffected.
+	BypassSubagents bool `json:"bypass_subagents"`
 }
 
 func cleanStringSlice(values []string) []string {

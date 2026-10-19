@@ -86,7 +86,7 @@ func TestAsyncTaskMainContinuesThenExplicitlyWaits(t *testing.T) {
 					return nil, nil
 				}
 			})
-			eng := NewEngine(Config{Client: client, Tools: registry, MaxTurns: 5, Permissions: permission.NewService(permission.ModeBypass), BackgroundTasksEnabled: background, BackgroundYieldAfter: time.Nanosecond})
+			eng := NewEngine(Config{Client: client, Tools: registry, MaxTurns: 5, Permissions: permission.NewServiceWithConfig(permission.Config{Mode: permission.ModeBypass, BypassSubagents: true}), BackgroundTasksEnabled: background, BackgroundYieldAfter: time.Nanosecond})
 			result := eng.Run(t.Context(), agent.AgentConfig{ID: "main", WorkDir: t.TempDir(), Prompt: "work"})
 			if result.Error != "" || calls != 3 {
 				t.Fatalf("result=%+v calls=%d", result, calls)
@@ -111,7 +111,7 @@ func TestAsyncTaskSurvivesNormalTurnAndDeliversNextTurn(t *testing.T) {
 		id, run = parseAsyncReceipt(t, req)
 		return backgroundMessage(t), nil
 	})
-	cfg := Config{Client: client, Tools: registry, Permissions: permission.NewService(permission.ModeBypass), MaxTurns: 3}
+	cfg := Config{Client: client, Tools: registry, Permissions: permission.NewServiceWithConfig(permission.Config{Mode: permission.ModeBypass, BypassSubagents: true}), MaxTurns: 3}
 	eng := NewEngine(cfg)
 	ctx, cancel := context.WithCancel(t.Context())
 	request := RunRequest{SessionID: "parent-session", AgentConfig: agent.AgentConfig{ID: "main", WorkDir: t.TempDir(), Prompt: "submit"}}
@@ -151,7 +151,7 @@ func TestAsyncTaskStillChecksRevokedPermissions(t *testing.T) {
 	mutations := 0
 	registry.Register(&backgroundTestTool{name: "Mutate", run: func(context.Context) *tool.ContentBlock { mutations++; return tool.Result("changed") }})
 	started, release := make(chan struct{}), make(chan struct{})
-	permissions := permission.NewService(permission.ModeBypass)
+	permissions := permission.NewServiceWithConfig(permission.Config{Mode: permission.ModeBypass, BypassSubagents: true})
 	calls := 0
 	client := backgroundTestClient(func(ctx context.Context, req cpanthropic.MessageRequest) (*sdk.Message, error) {
 		calls++

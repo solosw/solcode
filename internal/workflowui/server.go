@@ -314,6 +314,9 @@ func (s *Server) handleSave(w http.ResponseWriter, r *http.Request) {
 // ---- Settings ----
 
 type settingsResponse struct {
+	// BypassSubagentsEnabled opts bypass into built-in sub-agents (default off).
+	BypassSubagentsEnabled bool `json:"bypass_subagents_enabled"`
+
 	Provider   string                   `json:"provider"`
 	Model      string                   `json:"model"`
 	Effort     string                   `json:"effort"`
@@ -608,6 +611,8 @@ func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
 	cfg := s.cfg.Settings()
 	cfg.NormalizeLocalModels()
 	resp := settingsResponse{
+		BypassSubagentsEnabled: cfg.Permissions.BypassSubagents,
+
 		Provider:   cfg.Provider,
 		Model:      settingsModelName(cfg),
 		Effort:     cfg.Effort,
@@ -774,6 +779,8 @@ func settingsModelName(cfg config.Config) string {
 }
 
 type settingsUpdate struct {
+	BypassSubagentsEnabled *bool `json:"bypass_subagents_enabled,omitempty"`
+
 	Provider   *string `json:"provider,omitempty"`
 	Model      *string `json:"model,omitempty"`
 	Effort     *string `json:"effort,omitempty"`
@@ -870,6 +877,9 @@ func (s *Server) postSettings(w http.ResponseWriter, r *http.Request) {
 		next.MaxContextTokens = *req.MaxContext
 	}
 	applyActiveModelSettings(&next, req)
+	if req.BypassSubagentsEnabled != nil {
+		next.Permissions.BypassSubagents = *req.BypassSubagentsEnabled
+	}
 	applyComputerUseSettings(&next, req)
 	applyJevSettings(&next, req)
 	applyORTSettings(&next, req)

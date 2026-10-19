@@ -59,7 +59,7 @@ func TestTaskRoleAndParentCeilingsReachExecutor(t *testing.T) {
 					return backgroundMessage(t), nil
 				}
 			}}
-			eng := NewEngine(Config{Client: client, Tools: registry, ModelName: "test", MaxTurns: 4, Permissions: permission.NewService(permission.ModeBypass)})
+			eng := NewEngine(Config{Client: client, Tools: registry, ModelName: "test", MaxTurns: 4, Permissions: permission.NewServiceWithConfig(permission.Config{Mode: permission.ModeBypass, BypassSubagents: true})})
 			coordinator := agent.NewCoordinator(eng)
 			registry.Register(tool.NewTaskTool(coordinator))
 			result := eng.Run(t.Context(), agent.AgentConfig{ID: "main", Role: agent.AgentRoleMain, WorkDir: t.TempDir(), Prompt: "Task", AllowedTools: tc.parentTools, MaxTurns: 4})

@@ -493,7 +493,7 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 				continue
 			}
 			if candidate.Name() == tool.TaskToolName || candidate.Name() == tool.SubagentToolName {
-				if e.config.Permissions == nil || (e.config.Permissions.Mode() != permission.ModeUltra && e.config.Permissions.Mode() != permission.ModeBypass) || !isMain {
+				if !e.config.Permissions.DelegationEnabled() || !isMain {
 					continue
 				}
 			}

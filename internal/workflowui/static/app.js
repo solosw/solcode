@@ -64,7 +64,8 @@
     newMcpUrl: document.getElementById("new-mcp-url"),
     newMcpEnv: document.getElementById("new-mcp-env"),
     newMcpHeaders: document.getElementById("new-mcp-headers"),
-    // features (computer use)
+    // features (bypass sub-agents + computer use)
+    setBypassSubagents: document.getElementById("set-bypass-subagents"),
     setComputerUse: document.getElementById("set-computer-use"),
     // jev
     jevState: document.getElementById("jev-state"),
@@ -853,6 +854,7 @@
   }
 
   function syncFeatureSettings(d) {
+    d.bypass_subagents_enabled = Boolean(el.setBypassSubagents.checked);
     d.computer_use = { ...d.computer_use, enabled: Boolean(el.setComputerUse.checked) };
     const jev = d.jev || (d.jev = {});
     jev.enabled = Boolean(el.setJevEnabled.checked);
@@ -1022,6 +1024,7 @@
   }
 
   function renderFeatureSettings(d) {
+    el.setBypassSubagents.checked = Boolean(d.bypass_subagents_enabled);
     el.setComputerUse.checked = Boolean(d.computer_use?.enabled);
 
     const jev = d.jev || {};
@@ -1289,6 +1292,7 @@
       mcp_disabled: Object.fromEntries((d.mcp_servers || []).map((s) => [s.name, Boolean(s.disabled)])),
       skills_enabled: Object.fromEntries((d.skills || []).filter((s) => s.enabled).map((s) => [s.name, true])),
       skills_disabled: Object.fromEntries((d.skills || []).filter((s) => !s.enabled).map((s) => [s.name, true])),
+      bypass_subagents_enabled: Boolean(d.bypass_subagents_enabled),
       computer_use_enabled: Boolean(d.computer_use?.enabled),
       jev_enabled: Boolean(d.jev?.enabled),
       jev_type: d.jev?.type || "api",
@@ -1554,6 +1558,7 @@
     // Features + Jev: sync the draft on every change so the save payload is
     // always built from what the user currently sees.
     [
+      el.setBypassSubagents,
       el.setComputerUse,
       el.setJevEnabled,
       el.setJevType,

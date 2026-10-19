@@ -1,7 +1,9 @@
 # Persistent subagents
 
-Task is available in Bypass for the three built-in roles: explorer, worker and
-reviewer. Ultra additionally permits configured custom roles. Other modes do not
+Task is disabled in Bypass by default. Enable **Settings → Features → Bypass
+sub-agents** or set `"permissions": {"bypass_subagents": true}` to allow the three
+built-in roles: explorer, worker and reviewer. Ultra is unaffected by this toggle
+and additionally permits configured custom roles. Other modes do not
 grant Task access, even through tool allowlists. No new public tool is introduced;
 existing Task graphs, dependencies, fast-model selection, retries and automatic
 background completion remain supported.

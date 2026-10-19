@@ -12,6 +12,9 @@
   "thinking_text": false,
   "effort": "medium",
   "permission_mode": "auto",
+  "permissions": {
+    "bypass_subagents": false
+  },
   "tui": {
     "theme": "dark",
     "background": "#101820"

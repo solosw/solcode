@@ -590,6 +590,7 @@ func (a *App) SwitchModel(cfg config.Config) error {
 		client = cpanthropic.NewClient(cpanthropic.Options{APIKey: cfg.APIKey, BaseURL: cfg.BaseURL, Format: cfg.APIFormat})
 	}
 	a.Config = cfg
+	a.Permissions.SetBypassSubagents(cfg.Permissions.BypassSubagents)
 	a.Client = client
 	if a.MemoryStore != nil && cfg.Memory.Enabled {
 		memoryModel := memoryModelName(cfg)
@@ -640,6 +641,7 @@ func (a *App) ReloadFeatures(cfg config.Config, mcpFactory mcp.ClientFactory) er
 		_ = a.ChangeGraph.Close()
 	}
 	a.Config = cfg
+	a.Permissions.SetBypassSubagents(cfg.Permissions.BypassSubagents)
 	a.Tools = registry
 	a.SkillRegistry = skillRegistry
 	a.WorkflowRegistry = loadWorkflows(cfg)

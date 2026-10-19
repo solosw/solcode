@@ -1468,6 +1468,10 @@ func applyPermissionsJSON(cfg *permission.Config, data []byte) error {
 			if err := json.Unmarshal(value, &cfg.Mode); err != nil {
 				return err
 			}
+		case "bypass_subagents":
+			if err := json.Unmarshal(value, &cfg.BypassSubagents); err != nil {
+				return err
+			}
 		case "allow", "allowed_tools":
 			if err := json.Unmarshal(value, &cfg.Allow); err != nil {
 				return err

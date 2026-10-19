@@ -682,6 +682,7 @@ All configuration lives in a JSON file. Example:
 | `thinking_text` | bool | Show thinking text in TUI |
 | `effort` | string | Thinking effort: `low`, `medium`, `high` |
 | `permission_mode` | string | One of `auto`, `accept_edits`, `bypass`, `yolo`, `plan` |
+| `permissions.bypass_subagents` | bool | Enable `Task` and explorer/worker/reviewer sub-agents in bypass; default `false`, does not affect ultra |
 | `providers` | array | Multi-provider configuration |
 | `skills.paths` | array | Directories to scan for skill files |
 | `mcp_servers` | array | MCP server definitions |
@@ -1001,7 +1002,7 @@ a new user task.
 |------|----------|
 | `auto` | Ask for destructive operations, auto-approve reads |
 | `accept_edits` | Auto-approve file edits, ask for other destructive tools |
-| `bypass` | Skip permission prompts; `Task` and sub-agents remain disabled |
+| `bypass` | Skip permission prompts; `Task` and built-in sub-agents can be enabled in settings (disabled by default) |
 | `plan` | Read-only tools plus `TodoWrite` and `ModeSwitch`; no `Task` or sub-agents |
 | `goal` | Work from `goal.md` until complete; `Task` and sub-agents remain disabled |
 | `ultra` | Bypass permissions and enable `Task`, sub-agents, and task workflows |
@@ -1013,6 +1014,13 @@ through `session/set_mode`. Mode changes are preserved when switching models or 
 Legacy `ultrl` settings and requests are accepted as an alias of `ultra`; mode lists,
 current-mode updates, and saved runtime settings use the canonical `ultra` name.
 `yolo` remains an alias of `bypass`.
+
+Enable **Settings → Features → Bypass sub-agents**, or set
+`"permissions": {"bypass_subagents": true}` in your settings file, to allow the
+built-in explorer, worker, and reviewer roles in bypass. Turning this off hides
+`Task` and blocks both `Task` and internal `Subagent` calls, including allowlisted
+calls. Ultra retains sub-agent access regardless of this toggle; task workflows
+still require ultra.
 
 In **plan** mode, planning instructions are supplied through dynamic context. Mutating
 tools (`Edit` / `Write` / `Patch` / …) are blocked; explore with read-only tools or

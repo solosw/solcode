@@ -29,6 +29,7 @@ func TestSettingsPersistFeaturesThroughDisk(t *testing.T) {
 	// adopt the new config.
 	apply := func(next config.Config) error {
 		if err := config.SaveLocalOverrides(settingsPath, map[string]any{
+			"permissions":  map[string]any{"bypass_subagents": next.Permissions.BypassSubagents},
 			"computer_use": map[string]any{"enabled": next.ComputerUse.Enabled, "backend": next.ComputerUse.Backend, "binary": next.ComputerUse.Binary},
 			"jev": map[string]any{
 				"enabled":              next.Jev.Enabled,
@@ -87,6 +88,7 @@ func TestSettingsPersistFeaturesThroughDisk(t *testing.T) {
 	defer func() { _ = srv.Close() }()
 
 	raw, _ := json.Marshal(map[string]any{
+		"bypass_subagents_enabled": true,
 		"computer_use_enabled":     true,
 		"jev_enabled":              true,
 		"jev_api_key":              "ts_persisted",
@@ -116,7 +118,7 @@ func TestSettingsPersistFeaturesThroughDisk(t *testing.T) {
 		t.Fatalf("status = %d", res.StatusCode)
 	}
 
-	// The settings file must now contain both blocks, nested as written.
+	// The settings file must now contain the feature blocks, nested as written.
 	fileRaw, err := os.ReadFile(settingsPath)
 	if err != nil {
 		t.Fatalf("read persisted settings: %v", err)
@@ -124,6 +126,10 @@ func TestSettingsPersistFeaturesThroughDisk(t *testing.T) {
 	var persisted map[string]any
 	if err := json.Unmarshal(fileRaw, &persisted); err != nil {
 		t.Fatal(err)
+	}
+	permissions, ok := persisted["permissions"].(map[string]any)
+	if !ok || permissions["bypass_subagents"] != true {
+		t.Fatalf("persisted permissions = %#v", persisted["permissions"])
 	}
 	cu, ok := persisted["computer_use"].(map[string]any)
 	if !ok || cu["enabled"] != true {
@@ -145,6 +151,9 @@ func TestSettingsPersistFeaturesThroughDisk(t *testing.T) {
 	reloaded, err := config.Load(settingsPath)
 	if err != nil {
 		t.Fatalf("reload: %v", err)
+	}
+	if !reloaded.Permissions.BypassSubagents {
+		t.Fatal("reloaded bypass sub-agents should be enabled")
 	}
 	if !reloaded.ComputerUseEnabled() {
 		t.Fatal("reloaded ComputerUse should be enabled")

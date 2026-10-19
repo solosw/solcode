@@ -17,12 +17,13 @@ type Decision struct {
 type AskFunc func(toolName string, description string) bool
 
 type Service struct {
-	mu           sync.RWMutex
-	mode         Mode
-	allowedTools map[string]bool
-	deniedTools  map[string]bool
-	allowedBash  []string
-	askFn        AskFunc
+	mu              sync.RWMutex
+	mode            Mode
+	bypassSubagents bool
+	allowedTools    map[string]bool
+	deniedTools     map[string]bool
+	allowedBash     []string
+	askFn           AskFunc
 }
 
 func NewService(mode Mode) *Service {
@@ -35,10 +36,11 @@ func NewServiceWithConfig(cfg Config) *Service {
 		mode = ModeAuto
 	}
 	service := &Service{
-		mode:         mode,
-		allowedTools: make(map[string]bool),
-		deniedTools:  make(map[string]bool),
-		allowedBash:  cleanStringSlice(cfg.AllowBash),
+		mode:            mode,
+		bypassSubagents: cfg.BypassSubagents,
+		allowedTools:    make(map[string]bool),
+		deniedTools:     make(map[string]bool),
+		allowedBash:     cleanStringSlice(cfg.AllowBash),
 	}
 	for _, name := range cleanStringSlice(cfg.Allow) {
 		service.allowedTools[name] = true
@@ -53,6 +55,26 @@ func (s *Service) Mode() Mode {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.mode
+}
+
+// DelegationEnabled reports whether the current mode and settings permit Task.
+func (s *Service) DelegationEnabled() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.mode == ModeUltra || (s.mode == ModeBypass && s.bypassSubagents)
+}
+
+// SetBypassSubagents applies the setting without resetting session approvals or mode.
+func (s *Service) SetBypassSubagents(enabled bool) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.bypassSubagents = enabled
 }
 
 func (s *Service) SetAskFunc(fn AskFunc) {
@@ -109,18 +131,22 @@ func (s *Service) Check(t tool.Tool, input json.RawMessage) Decision {
 
 	s.mu.RLock()
 	mode := s.mode
+	bypassSubagents := s.bypassSubagents
 	allowed := s.allowedTools[t.Name()]
 	denied := s.deniedTools[t.Name()]
 	allowedBash := append([]string(nil), s.allowedBash...)
 	askFn := s.askFn
 	s.mu.RUnlock()
 
-	// Delegation cannot be enabled by a tool allowlist in other modes.
+	// A tool allowlist cannot override the delegation mode/setting gate.
 	if t.Name() == tool.TaskToolName || t.Name() == tool.SubagentToolName {
 		if mode != ModeUltra && mode != ModeBypass {
 			return Decision{Allowed: false, Reason: "Task and sub-agents require bypass (built-in roles) or ultra mode"}
 		}
 		if mode == ModeBypass {
+			if !bypassSubagents {
+				return Decision{Allowed: false, Reason: "Task and sub-agents are disabled in bypass; enable permissions.bypass_subagents in settings or use ultra mode"}
+			}
 			if err := tool.CheckBypassAgentTypes(input); err != nil {
 				return Decision{Allowed: false, Reason: err.Error()}
 			}
