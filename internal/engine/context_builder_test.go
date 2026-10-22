@@ -121,9 +121,12 @@ func TestSystemPromptStableAcrossPlanMode(t *testing.T) {
 	if sysOff != sysOn {
 		t.Fatalf("system prompt must not change when plan mode toggles\noff:\n%s\non:\n%s", sysOff, sysOn)
 	}
-	// 短规则（READ-ONLY）常驻 system prompt，两种模式都有。
+	// 条件化的短规则常驻 system prompt，仅在动态模式为 plan 时生效。
 	if !strings.Contains(sysOn, permission.PlanModeShortInstructions) {
 		t.Fatalf("system prompt missing compact plan-mode rules: %q", sysOn)
+	}
+	if !strings.Contains(sysOff, "When plan mode is inactive, these rules do not restrict implementation or tool use") {
+		t.Fatal("stable policy must not restrict implementation outside plan mode")
 	}
 	// 详细的 ACTIVE 指令（角色 + 输出格式）不能进 system prompt。
 	if strings.Contains(sysOn, "(ACTIVE)") || strings.Contains(sysOn, "software architect") {
@@ -184,14 +187,21 @@ func TestSystemPromptDocumentsBatchExecutionContract(t *testing.T) {
 	}
 }
 
-func TestPlanModePromptUsesReadOnlyBatchOperations(t *testing.T) {
+func TestPlanModePromptAllowsBashAndProhibitsAskUser(t *testing.T) {
 	for name, prompt := range map[string]string{"stable": permission.PlanModeShortInstructions, "active": permission.PlanModeInstructions} {
-		if !strings.Contains(prompt, "BatchTool with only View/Grep/Glob/LS/LSP operations") {
-			t.Errorf("%s plan instructions must describe wrapped reads: %s", name, prompt)
+		if !strings.Contains(prompt, "BatchTool with View/Grep/Glob/LS/LSP/Bash operations") {
+			t.Errorf("%s plan instructions must allow Bash exploration: %s", name, prompt)
+		}
+		if !strings.Contains(prompt, "instead of opening an interactive dialog") {
+			t.Errorf("%s plan instructions must prohibit AskUser dialogs: %s", name, prompt)
 		}
 	}
-	if !strings.Contains(permission.PlanModeInstructions, "do not include edits or Bash") {
-		t.Fatal("plan mode prompt must exclude mutation operations")
+	if !strings.Contains(permission.PlanModeShortInstructions, "AskUser is prohibited") ||
+		!strings.Contains(permission.PlanModeInstructions, "or call AskUser in plan mode") {
+		t.Fatal("both plan prompts must explicitly prohibit AskUser")
+	}
+	if !strings.Contains(permission.PlanModeInstructions, "Do not include file edits") {
+		t.Fatal("plan mode prompt must still exclude file edits")
 	}
 }
 

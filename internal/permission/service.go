@@ -155,6 +155,18 @@ func (s *Service) Check(t tool.Tool, input json.RawMessage) Decision {
 	if denied {
 		return Decision{Allowed: false, Reason: fmt.Sprintf("tool denied for session: %s", t.Name())}
 	}
+	// Plan restrictions precede prior session approvals and configured allowlists.
+	// Bash is an explicit exception, not a read-only classification. Batch children
+	// still pass through this permission service before they can execute.
+	if mode == ModePlan {
+		if t.Name() == tool.AskUserToolName {
+			return Decision{Allowed: false, Reason: "AskUser is disabled in plan mode"}
+		}
+		if t.IsReadOnly(input) || IsPlanModeExtraTool(t.Name()) || tool.IsPlanModeBatch(t, input) {
+			return Decision{Allowed: true}
+		}
+		return Decision{Allowed: false, Reason: "plan mode only allows read-only tools, Bash, TodoWrite, and ModeSwitch"}
+	}
 	if allowed {
 		return Decision{Allowed: true}
 	}
@@ -166,15 +178,6 @@ func (s *Service) Check(t tool.Tool, input json.RawMessage) Decision {
 	switch mode {
 	case ModeBypass, ModeGoal, ModeUltra:
 		return Decision{Allowed: true}
-	case ModePlan:
-		if t.IsReadOnly(input) {
-			return Decision{Allowed: true}
-		}
-		// Planning session may use TodoWrite and ModeSwitch, but not Task.
-		if IsPlanModeExtraTool(t.Name()) {
-			return Decision{Allowed: true}
-		}
-		return Decision{Allowed: false, Reason: "plan mode only allows read-only tools, TodoWrite, and ModeSwitch"}
 	case ModeAcceptEdits:
 		if isAcceptEditsTool(t) {
 			return Decision{Allowed: true}

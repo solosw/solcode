@@ -32,7 +32,7 @@ func (t *planModeTool) Invoke(context.Context, *tool.UseContext, json.RawMessage
 	return tool.Result("ok"), nil
 }
 
-func TestPlanModeAllowsReadOnlyTodoWriteAndTask(t *testing.T) {
+func TestPlanModeAllowsReadOnlyAndPlanningTools(t *testing.T) {
 	svc := permission.NewService(permission.ModePlan)
 	input := json.RawMessage(`{}`)
 
@@ -44,10 +44,13 @@ func TestPlanModeAllowsReadOnlyTodoWriteAndTask(t *testing.T) {
 	}{
 		{"View", &planModeTool{name: "View", readOnly: true}, true, ""},
 		{"TodoWrite", &planModeTool{name: tool.TodoWriteToolName, readOnly: false}, true, ""},
-		{"Task", &planModeTool{name: tool.TaskToolName, readOnly: false}, true, ""},
+		{"ModeSwitch", &planModeTool{name: tool.ModeSwitchToolName, readOnly: false}, true, ""},
+		{"Task", &planModeTool{name: tool.TaskToolName, readOnly: false}, false, "require bypass"},
 		{"Edit", &planModeTool{name: "Edit", readOnly: false}, false, "plan mode"},
 		{"Write", &planModeTool{name: "Write", readOnly: false}, false, "plan mode"},
-		{"Bash", &planModeTool{name: "Bash", readOnly: false}, false, "plan mode"},
+		{"Bash", &planModeTool{name: tool.BashToolName, readOnly: false}, true, ""},
+		{"AskUser", &planModeTool{name: tool.AskUserToolName, readOnly: false}, false, "AskUser is disabled"},
+		{"AskUser read-only classification", &planModeTool{name: tool.AskUserToolName, readOnly: true}, false, "AskUser is disabled"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -117,8 +120,11 @@ func TestAppendPlanModeSystemPrompt(t *testing.T) {
 	if !strings.Contains(once, permission.PlanModePromptMarker) {
 		t.Fatal("expected plan mode marker appended to system prompt")
 	}
-	if !strings.Contains(once, permission.PlanModeInstructions) {
-		t.Fatal("expected full plan instructions in system prompt")
+	if !strings.Contains(once, permission.PlanModeShortInstructions) {
+		t.Fatal("expected conditional plan policy in system prompt")
+	}
+	if strings.Contains(once, permission.PlanModeInstructions) {
+		t.Fatal("active plan instructions must stay out of the stable system prompt")
 	}
 	twice := permission.AppendPlanModeSystemPrompt(once)
 	if strings.Count(twice, permission.PlanModePromptMarker) != 1 {
@@ -127,7 +133,7 @@ func TestAppendPlanModeSystemPrompt(t *testing.T) {
 }
 
 func TestContextBuilderPlanModeSystemPrompt(t *testing.T) {
-	on := engine.ContextBuilder{SystemPrompt: "custom", PlanMode: true}
+	on := engine.ContextBuilder{SystemPrompt: "custom", PlanMode: true, ModeInstructions: permission.PlanModeInstructions}
 	reqOn := on.Build(engine.BuildRequest{WorkDir: "/tmp"})
 	if !strings.Contains(reqOn.System, permission.PlanModePromptMarker) {
 		t.Fatal("plan mode should append plan instructions to system prompt")
@@ -138,8 +144,22 @@ func TestContextBuilderPlanModeSystemPrompt(t *testing.T) {
 
 	off := engine.ContextBuilder{SystemPrompt: "custom", PlanMode: false}
 	reqOff := off.Build(engine.BuildRequest{WorkDir: "/tmp"})
-	if strings.Contains(reqOff.System, permission.PlanModePromptMarker) {
-		t.Fatal("non-plan mode must strip plan instructions from system prompt")
+	if reqOff.System != reqOn.System {
+		t.Fatal("mode changes must not rewrite the stable system prompt")
+	}
+	activeMessages, err := json.Marshal(reqOn.Messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(activeMessages), permission.PlanModeMarkerLine) {
+		t.Fatal("active plan instructions must be injected dynamically")
+	}
+	inactiveMessages, err := json.Marshal(reqOff.Messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(inactiveMessages), permission.PlanModeMarkerLine) {
+		t.Fatal("inactive mode must not inject active plan instructions")
 	}
 
 	stale := engine.ContextBuilder{
@@ -147,8 +167,8 @@ func TestContextBuilderPlanModeSystemPrompt(t *testing.T) {
 		PlanMode:     false,
 	}
 	reqStale := stale.Build(engine.BuildRequest{WorkDir: "/tmp"})
-	if strings.Contains(reqStale.System, permission.PlanModePromptMarker) {
-		t.Fatal("stale plan block must be stripped when not in plan mode")
+	if reqStale.System != reqOff.System {
+		t.Fatal("stale plan block must be normalized to the conditional stable policy")
 	}
 	if !strings.Contains(reqStale.System, "custom") {
 		t.Fatal("custom text should remain after stripping plan block")

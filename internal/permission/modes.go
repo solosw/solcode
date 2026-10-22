@@ -48,7 +48,7 @@ func AvailableModes() []ModeInfo {
 		{ModeAuto, "Auto", "Ask before destructive tools"},
 		{ModeAcceptEdits, "Accept edits", "Auto-approve file edits; ask for other destructive tools"},
 		{ModeBypass, "Bypass", "Skip permission prompts; sub-agents disabled by default (optional explorer, worker, reviewer)"},
-		{ModePlan, "Plan", "Read-only tools plus planning tools; no Task or sub-agents"},
+		{ModePlan, "Plan", "Read-only tools, Bash, and planning tools; no AskUser, Task, or sub-agents"},
 		{ModeGoal, "Goal", "Work from goal.md until complete"},
 		{ModeUltra, "Ultra", "Bypass permissions and enable Task, sub-agents, and task workflows"},
 	}

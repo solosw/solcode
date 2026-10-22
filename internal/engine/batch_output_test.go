@@ -87,6 +87,9 @@ func TestBatchWrappedAllowlistAndPlanModePermissions(t *testing.T) {
 		wantSucceeded int
 	}{
 		{"read-only plan", permission.ModePlan, nil, `{"operations":[{"tool":"View","input":{"path":"a.txt"}}]}`, "success", 1},
+		{"bash plan", permission.ModePlan, nil, `{"operations":[{"tool":"Bash","input":{"command":"echo plan-bash"}}]}`, "success", 1},
+		{"mixed exploration plan", permission.ModePlan, nil, `{"operations":[{"tool":"View","input":{"path":"a.txt"}},{"tool":"Bash","input":{"command":"echo plan-bash"}}]}`, "success", 2},
+		{"plan bash respects agent allowlist", permission.ModePlan, []string{tool.ViewToolName}, `{"operations":[{"tool":"Bash","input":{"command":"echo plan-bash"}}]}`, "failed", 0},
 		{"wrapped readonly allowlist", permission.ModeBypass, []string{tool.ViewToolName}, `{"operations":[{"tool":"View","input":{"path":"a.txt"}},{"tool":"Write","input":{"path":"b.txt","content":"forbidden"}}]}`, "partial_success", 1},
 		{"container alone grants no children", permission.ModeBypass, []string{tool.BatchToolName}, `{"operations":[{"tool":"View","input":{"path":"a.txt"}}]}`, "failed", 0},
 	}
@@ -95,7 +98,7 @@ func TestBatchWrappedAllowlistAndPlanModePermissions(t *testing.T) {
 			dir := t.TempDir()
 			_ = os.WriteFile(filepath.Join(dir, "a.txt"), []byte("read me"), 0600)
 			registry := tool.NewRegistry()
-			registry.Register(tool.NewBatchTool(), tool.NewViewTool(), tool.NewWriteTool())
+			registry.Register(tool.NewBatchTool(), tool.NewViewTool(), tool.NewWriteTool(), tool.NewBashTool())
 			executor := NewToolExecutorWithPermissions(registry, nil, permission.NewService(tc.mode)).WithAllowedTools(tc.allowed)
 			uctx := &tool.UseContext{WorkDir: dir, BatchLookup: registry.Find}
 			uctx.BatchDispatch = func(ctx context.Context, name string, input json.RawMessage) (*tool.ContentBlock, error) {

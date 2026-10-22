@@ -420,7 +420,7 @@ func (b ContextBuilder) systemPrompt(workDir string) string {
 	parts = append(parts, toolUsagePrompt())
 	parts = append(parts, skillsPrompt(b.skillCatalog()))
 	// Compact plan-mode rules are appended EXACTLY ONCE, at the end of the
-	// stable system prompt. They describe the read-only policy both modes share
+	// stable system prompt. They apply only while the dynamic mode is plan
 	// and are never removed when leaving plan mode, so switching plan↔default
 	// does not rewrite this string or bust the Anthropic tools+system cache.
 	parts = append(parts, planModeRulesPrompt())

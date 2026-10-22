@@ -160,10 +160,25 @@ func (bt *batchTool) Description() string {
 	return fmt.Sprintf("Run 1-%d coding operations using the tool-specific input schemas below. IDs are optional (default op_1, op_2, ...); use explicit IDs for depends_on. Dependencies only order execution: they do NOT substitute results into later inputs. Only batch edits whose exact old_string is already known from a prior read. Independent safe reads run concurrently, mutations sequentially. In non-atomic batches, successful edits stay applied after unrelated failures, even when a MultiEdit partially fails. Default output_mode=compact omits repeated file diffs; read/search/Bash outputs remain useful within per-item and total text budgets. Truncated or summarized outputs include full_output_path; read it with View using offset/limit. output_mode=full keeps diffs but still obeys budgets. atomic=true attempts to roll back all file operations on any failure; supports Edit/MultiEdit/Write/MultiWrite/Patch, including repeated edits to the same file. Inspect atomic_status and reverted: after rolled_back, reapply the corrected transaction; after rollback_failed/unknown, read current targets first. Permissions and hooks still apply to each child.", bt.limits.MaxOperations)
 }
 
-// Classify read batches for plan-mode permissions. Mutation permissions are
-// still checked separately by the real child executor, never by this wrapper.
+// IsPlanModeBatch admits built-in PTC containers and static exploration batches,
+// including Bash. It does not classify Bash or arbitrary JavaScript as read-only;
+// every child must still run through the real executor and its permissions.
+func IsPlanModeBatch(t Tool, input json.RawMessage) bool {
+	bt, ok := t.(*batchTool)
+	return ok && (bt.ptcEnabled || bt.allowsOperations(input, true))
+}
+
+// Classify static read batches for plan-mode permissions. PTC remains non-read-only
+// because its children cannot be classified before running the program. Mutation
+// permissions are checked separately by the real child executor, never by this wrapper.
 func (bt *batchTool) IsReadOnly(input json.RawMessage) bool {
-	if bt.ptcEnabled { return false }
+	return bt.allowsOperations(input, false)
+}
+
+func (bt *batchTool) allowsOperations(input json.RawMessage, allowBash bool) bool {
+	if bt.ptcEnabled {
+		return false
+	}
 	var req batchRequest
 	if json.Unmarshal(input, &req) != nil || req.Atomic || len(req.Operations) == 0 {
 		return false
@@ -171,6 +186,10 @@ func (bt *batchTool) IsReadOnly(input json.RawMessage) bool {
 	for _, op := range req.Operations {
 		switch op.Tool {
 		case ViewToolName, GrepToolName, GlobToolName, LSToolName, "LSP":
+		case BashToolName:
+			if !allowBash {
+				return false
+			}
 		default:
 			return false
 		}
@@ -179,7 +198,9 @@ func (bt *batchTool) IsReadOnly(input json.RawMessage) bool {
 }
 func (*batchTool) IsConcurrencySafe(json.RawMessage) bool { return false }
 func (bt *batchTool) InputSchema() map[string]any {
-	if bt.ptcEnabled { return map[string]any{"type":"object","additionalProperties":false,"properties":map[string]any{"code":map[string]any{"type":"string","minLength":1,"maxLength":65536}},"required":[]string{"code"}} }
+	if bt.ptcEnabled {
+		return map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"code": map[string]any{"type": "string", "minLength": 1, "maxLength": 65536}}, "required": []string{"code"}}
+	}
 	return map[string]any{
 		"type": "object", "additionalProperties": false,
 		"properties": map[string]any{
@@ -192,7 +213,9 @@ func (bt *batchTool) InputSchema() map[string]any {
 }
 
 func (bt *batchTool) Invoke(ctx context.Context, uctx *UseContext, input json.RawMessage) (*ContentBlock, error) {
-	if bt.ptcEnabled { return bt.invokePTC(ctx, uctx, input) }
+	if bt.ptcEnabled {
+		return bt.invokePTC(ctx, uctx, input)
+	}
 	if uctx == nil || uctx.BatchDispatch == nil || uctx.BatchLookup == nil {
 		return ErrorResult("batch execution is not configured"), nil
 	}

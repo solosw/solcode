@@ -29,11 +29,12 @@ func (ptcTestGuardrail) CheckToolCall(_ context.Context, name string, _ json.Raw
 
 func TestPTCChildExecutorSafety(t *testing.T) {
 	for _, tc := range []struct {
-		name                                                       string
-		mode                                                       permission.Mode
-		allowed                                                    []string
-		denyWrite, hookBlock, guardrail, wantWrite, wantOuterError bool
-		code, want                                                 string
+		name                                                                 string
+		mode                                                                 permission.Mode
+		allowed                                                              []string
+		permissionAllow, allowBash                                           []string
+		denyWrite, denyBash, hookBlock, guardrail, wantWrite, wantOuterError bool
+		code, want                                                           string
 	}{
 		{name: "allowed read and denied write", mode: permission.ModeBypass, allowed: []string{tool.ViewToolName}, code: `const a=await tools.View({path:"a.txt"}); const b=await tools.Write({path:"b.txt",content:"x"}); console.log(a.ok,b.ok,b.content);`, want: "true false tool"},
 		{name: "container grants no children", mode: permission.ModeBypass, allowed: []string{tool.BatchToolName}, code: `console.log((await tools.View({path:"a.txt"})).content);`, want: "allowed_tools"},
@@ -41,7 +42,17 @@ func TestPTCChildExecutorSafety(t *testing.T) {
 		{name: "pre-tool hook", mode: permission.ModeBypass, hookBlock: true, code: `console.log((await tools.Write({path:"b.txt",content:"x"})).content);`, want: "hook blocked child"},
 		{name: "guardrail", mode: permission.ModeBypass, guardrail: true, code: `console.log((await tools.Write({path:"b.txt",content:"x"})).content);`, want: "guardrail blocked child"},
 		{name: "checkpoint preserved after failure", mode: permission.ModeBypass, wantWrite: true, wantOuterError: true, code: `await tools.Write({path:"b.txt",content:"x"}); throw new Error("after write");`, want: "after write"},
-		{name: "plan conservatively denies arbitrary code", mode: permission.ModePlan, wantOuterError: true, code: `await tools.Write({path:"b.txt",content:"x"});`, want: "plan mode only allows read-only"},
+		{name: "plan allows read-only code", mode: permission.ModePlan, code: `const r=await tools.View({path:"a.txt"}); console.log(r.ok,r.content);`, want: "true <file>"},
+		{name: "plan denies write child", mode: permission.ModePlan, code: `const r=await tools.Write({path:"b.txt",content:"x"}); console.log(r.ok,r.content);`, want: "false plan mode only allows read-only"},
+		{name: "plan mixed batch keeps read access", mode: permission.ModePlan, code: `const r=await Promise.all([tools.View({path:"a.txt"}),tools.Write({path:"b.txt",content:"x"})]); console.log(r[0].ok,r[1].ok,r[1].content);`, want: "true false plan mode only allows read-only"},
+		{name: "plan write allowlist cannot override child permissions", mode: permission.ModePlan, permissionAllow: []string{tool.BatchToolName, tool.WriteToolName}, code: `const r=await tools.Write({path:"b.txt",content:"x"}); console.log(r.ok,r.content);`, want: "false plan mode only allows read-only"},
+		{name: "plan allows bash child", mode: permission.ModePlan, code: `const r=await tools.Bash({command:"echo plan-bash"}); console.log(r.ok,r.content);`, want: "true plan-bash"},
+		{name: "plan allows bash with configured allowlist", mode: permission.ModePlan, allowBash: []string{"echo"}, code: `const r=await tools.Bash({command:"echo plan-bash"}); console.log(r.ok,r.content);`, want: "true plan-bash"},
+		{name: "plan bash respects session denial", mode: permission.ModePlan, denyBash: true, code: `const r=await tools.Bash({command:"echo plan-bash"}); console.log(r.ok,r.content);`, want: "false tool denied for session"},
+		{name: "plan bash respects agent allowlist", mode: permission.ModePlan, allowed: []string{tool.ViewToolName}, code: `const r=await tools.Bash({command:"echo plan-bash"}); console.log(r.ok,r.content);`, want: "allowed_tools"},
+		{name: "plan respects agent child allowlist", mode: permission.ModePlan, allowed: []string{tool.BatchToolName}, code: `const r=await tools.View({path:"a.txt"}); console.log(r.ok,r.content);`, want: "allowed_tools"},
+		{name: "plan respects explicit child denial", mode: permission.ModePlan, denyWrite: true, code: `const r=await tools.Write({path:"b.txt",content:"x"}); console.log(r.ok,r.content);`, want: "tool denied for session"},
+		{name: "plan read-only agent cannot write", mode: permission.ModePlan, allowed: []string{tool.ViewToolName}, code: `const a=await tools.View({path:"a.txt"}); const b=await tools.Write({path:"b.txt",content:"x"}); console.log(a.ok,b.ok,b.content);`, want: "true false plan mode only allows read-only"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if tc.hookBlock && runtime.GOOS == "windows" {
@@ -52,10 +63,13 @@ func TestPTCChildExecutorSafety(t *testing.T) {
 				t.Fatal(err)
 			}
 			registry := tool.NewRegistry()
-			registry.Register(tool.NewBatchToolWithPTC(tool.DefaultBatchLimits, true), tool.NewViewTool(), tool.NewWriteTool())
-			permissions := permission.NewService(tc.mode)
+			registry.Register(tool.NewBatchToolWithPTC(tool.DefaultBatchLimits, true), tool.NewViewTool(), tool.NewWriteTool(), tool.NewBashTool())
+			permissions := permission.NewServiceWithConfig(permission.Config{Mode: tc.mode, Allow: tc.permissionAllow, AllowBash: tc.allowBash})
 			if tc.denyWrite {
 				permissions.DenyTool(tool.WriteToolName)
+			}
+			if tc.denyBash {
+				permissions.DenyTool(tool.BashToolName)
 			}
 			var hooks *hook.Runtime
 			if tc.hookBlock {

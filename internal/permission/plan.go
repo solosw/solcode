@@ -16,10 +16,12 @@ const PlanModePromptMarker = "PLAN MODE"
 // Keep it short: this text is paid for on every cached request. The verbose
 // active-mode guidance (role + output format) stays dynamic, delivered via
 // ModeInstructions only while plan mode is actually on.
-const PlanModeShortInstructions = PlanModePromptMarker + ` (READ-ONLY):
+const PlanModeShortInstructions = PlanModePromptMarker + ` (CONDITIONAL READ-ONLY POLICY):
+Apply the following rules only while the current permission mode is plan, as reported by the latest mode context. When plan mode is inactive, these rules do not restrict implementation or tool use; follow the active permission policy instead.
 - Produce a plan. Do not create, modify, or delete files, and do not run state-changing commands.
-- Allowed anyway: TodoWrite, ModeSwitch, plus read-only tools (View, Grep, Glob, LS, LSP, WebSearch/Fetch).
-- Explore in the main agent using BatchTool with only View/Grep/Glob/LS/LSP operations; cite paths with short evidence.`
+- Allowed tools: Bash, TodoWrite, ModeSwitch, plus read-only tools (View, Grep, Glob, LS, LSP, WebSearch/Fetch). Bash is an explicit permission exception, not a guarantee that commands are read-only; use it for exploration without changing state.
+- AskUser is prohibited. Make reasonable assumptions and record unresolved questions in the plan instead of opening an interactive dialog.
+- Explore in the main agent using BatchTool with View/Grep/Glob/LS/LSP/Bash operations; cite paths with short evidence.`
 
 // PlanModeMarkerLine starts the dynamic active-mode block. It contains
 // PlanModePromptMarker so existing detectors (ephemeral-message stripping,
@@ -33,7 +35,7 @@ const PlanModeMarkerLine = PlanModePromptMarker + " (ACTIVE)"
 const PlanModeInstructions = PlanModeMarkerLine + `
 You are a software architect and planning specialist for solcode. Explore the codebase, then design an implementation plan.
 
-Do not spawn Task sub-agents in plan mode. Use BatchTool with only View/Grep/Glob/LS/LSP operations for exploration; do not include edits or Bash.
+Do not spawn Task sub-agents or call AskUser in plan mode. Use BatchTool with View/Grep/Glob/LS/LSP/Bash operations for exploration; Bash is allowed, but do not use it to change state or implement code. Do not include file edits. Make reasonable assumptions and record unresolved questions in the plan instead of opening an interactive dialog.
 
 === Required Output Format ===
 Markdown, every section in order. Write "None" or "N/A" with a one-line reason when unknown. Do not implement code, and do not dump large file contents — cite paths and short evidence only.
@@ -67,8 +69,10 @@ Exactly 3-5 repository-relative paths, one per line, no other commentary on thos
 Produce plans only. Do NOT implement code changes while plan mode is active.`
 
 // PlanModeExtraTools are non-read-only tools explicitly allowed in plan mode.
-// Everything else still requires IsReadOnly (or an explicit session allow).
+// Bash is an explicit exception and is not classified as read-only. AskUser is
+// prohibited even when allowlisted; batch children retain their own permissions.
 var PlanModeExtraTools = []string{
+	tool.BashToolName,
 	tool.TodoWriteToolName,
 	tool.ModeSwitchToolName,
 }
