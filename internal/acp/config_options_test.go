@@ -432,16 +432,20 @@ func TestACPReasoningEffortIDAndLegacyAlias(t *testing.T) {
 	}
 }
 
-func TestACPReasoningIDsCannotEnableUndeclaredCapabilities(t *testing.T) {
-	for _, levels := range [][]string{nil, {}} {
-		t.Run(fmt.Sprintf("levels=%#v", levels), func(t *testing.T) {
+func TestACPReasoningIDsCannotEnableDisabledCapabilities(t *testing.T) {
+	for _, explicit := range []bool{false, true} {
+		t.Run(fmt.Sprintf("explicit=%v", explicit), func(t *testing.T) {
 			client := newACPHarnessWithConfig(t, func(cfg config.Config) config.Config {
-				cfg.SupportedEfforts = levels
+				if explicit {
+					cfg.SupportedEfforts = []string{}
+				} else {
+					cfg.Thinking = false
+				}
 				return cfg
 			}, nil)
 			created := createConfiguredSession(t, client, t.TempDir())
 			if len(created.ConfigOptions) != 2 {
-				t.Fatalf("undeclared reasoning selector: %+v", created.ConfigOptions)
+				t.Fatalf("disabled reasoning selector: %+v", created.ConfigOptions)
 			}
 			for _, id := range []string{"reasoning_effort", "thought_level"} {
 				var ignored SessionSetConfigOptionResult

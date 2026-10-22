@@ -126,7 +126,7 @@ type Config struct {
 	defaultAPIFormat string
 	defaultThinking  bool
 
-	// SupportedEfforts describes a legacy single-model endpoint, when known.
+	// SupportedEfforts overrides compatibility defaults for a legacy endpoint.
 	SupportedEfforts []string `json:"supported_efforts"`
 	APIKey           string   `json:"api_key"`
 	BaseURL          string   `json:"base_url"`
@@ -539,7 +539,7 @@ type ResolvedProvider struct {
 }
 
 type ModelConfig struct {
-	// Nil means unknown; an empty list explicitly disables effort selection.
+	// Nil uses compatibility defaults; an empty list disables effort selection.
 	SupportedEfforts []string                   `json:"supported_efforts"`
 	Name             string                     `json:"name"`
 	ID               string                     `json:"id"`

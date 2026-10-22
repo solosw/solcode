@@ -113,12 +113,17 @@ func sessionConfigOptions(cfg config.Config) []SessionConfigOption {
 	options := []SessionConfigOption{mode, model}
 	if levels := cfg.ModelEfforts(); len(levels) > 0 {
 		thought := SessionConfigOption{ID: reasoningEffortConfigID, Name: "Reasoning effort", Description: "How much reasoning effort the model should use", Category: "thought_level", Type: "select", CurrentValue: cfg.Effort}
+		fallbackDescription := ""
+		if !cfg.ModelEffortsExplicit() {
+			fallbackDescription = "Compatibility choice; upstream support is not verified. Configure supported_efforts to restrict or disable these choices."
+			thought.Description = fallbackDescription
+		}
 		for _, effort := range levels {
 			label := strings.ToUpper(effort[:1]) + effort[1:]
 			if effort == "xhigh" {
 				label = "XHigh"
 			}
-			thought.Options = append(thought.Options, SessionConfigOptionValue{Value: effort, Name: label})
+			thought.Options = append(thought.Options, SessionConfigOptionValue{Value: effort, Name: label, Description: fallbackDescription})
 		}
 		options = append(options, thought)
 	}

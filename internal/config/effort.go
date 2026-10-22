@@ -4,13 +4,15 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+
+	"github.com/solosw/solcode/internal/anthropic"
 )
 
-// ModelEfforts returns the endpoint's explicitly declared capabilities. Unknown
-// capabilities are nil, NOT a guessed list based on a model/provider name.
-func (cfg Config) ModelEfforts() []string {
+// modelEffortConfig resolves metadata only within the active provider. The
+// legacy single-model endpoint is represented the same way as a catalog model.
+func (cfg Config) modelEffortConfig() (ModelConfig, string, bool) {
 	if len(cfg.Providers) == 0 {
-		return cfg.SupportedEfforts
+		return ModelConfig{SupportedEfforts: cfg.SupportedEfforts, Effort: cfg.Effort}, cfg.APIFormat, true
 	}
 	for _, provider := range cfg.Providers {
 		if cfg.Provider != "" && provider.Name != cfg.Provider {
@@ -18,17 +20,66 @@ func (cfg Config) ModelEfforts() []string {
 		}
 		for _, model := range provider.Models {
 			if model.Name == cfg.Model || model.ID == cfg.Model {
-				return model.SupportedEfforts
+				format := cfg.APIFormat
+				if provider.APIFormat != "" {
+					format = provider.APIFormat
+				}
+				return model, format, true
 			}
 		}
 	}
-	return nil
+	return ModelConfig{}, "", false
 }
 
-// WithModelEffort reconciles effort with known capabilities after model
-// selection/restoration. An invalid preference uses the target model's default,
-// then high if supported, then the first declared value. Unknown models keep
-// existing legacy behavior but never advertise an unverified selector.
+// ModelEffortsExplicit distinguishes endpoint-declared capabilities (including
+// [] to disable selection) from our compatibility defaults. ACP exposes that
+// distinction in the selector description; defaults are not upstream discovery.
+func (cfg Config) ModelEffortsExplicit() bool {
+	model, _, found := cfg.modelEffortConfig()
+	return found && model.SupportedEfforts != nil
+}
+
+// ModelEfforts prefers model-specific capabilities. For existing settings that
+// omit them, expose compatibility choices rather than hiding the ACP control.
+// As in BaoCode's native model settings, these defaults are UI conventions, not
+// a guarantee that every upstream implements every level. An explicit list
+// replaces them, and an explicit empty list disables selection.
+func (cfg Config) ModelEfforts() []string {
+	model, format, found := cfg.modelEffortConfig()
+	if !found {
+		return nil
+	}
+	if model.SupportedEfforts != nil {
+		return slices.Clone(model.SupportedEfforts)
+	}
+	thinking := cfg.Thinking
+	if model.Thinking != nil {
+		thinking = *model.Thinking
+	}
+	if !thinking {
+		return nil // Do not opt a non-thinking model into adjustable reasoning.
+	}
+	var levels []string
+	switch anthropic.NormalizeFormat(format) {
+	case anthropic.FormatOpenAI, anthropic.FormatResponses:
+		// BaoCode ProviderModel.defaultEfforts. Preserve these values verbatim;
+		// in particular max is not silently translated into xhigh.
+		levels = []string{"none", "low", "medium", "high", "xhigh", "max"}
+	default:
+		// Anthropic uses adaptive thinking + output_config.effort; do not send
+		// an implicit "none" or "xhigh" to that different wire protocol.
+		levels = []string{"low", "medium", "high", "max"}
+	}
+	// Existing custom defaults must not be silently rewritten on session/new.
+	// Use this model's configured default, never another model's capabilities.
+	if effort := strings.TrimSpace(model.Effort); effort != "" && !slices.Contains(levels, effort) {
+		levels = append(levels, effort)
+	}
+	return levels
+}
+
+// WithModelEffort reconciles effort after model selection/restoration. An invalid
+// preference uses the target model's default, then high, then the first level.
 func (cfg Config) WithModelEffort(preferred string) Config {
 	levels := cfg.ModelEfforts()
 	if levels == nil {

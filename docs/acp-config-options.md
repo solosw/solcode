@@ -49,7 +49,7 @@ Example request:
 | --- | --- |
 | `mode` | Auto, Accept Edits, Bypass, Plan, Goal, Ultra; the existing permission service remains authoritative |
 | `model` | All configured providers/models, provider-qualified labels and opaque values; same-named models across providers stay distinct |
-| `reasoning_effort` | Published only for the current model's nonempty, explicitly declared `supported_efforts` |
+| `reasoning_effort` | Model-specific `supported_efforts`, or compatibility defaults when omitted; `[]` disables the selector |
 
 A value currently encodes the escaped provider name and escaped model alias,
 separated by `/`. Clients **must not parse or construct this representation**;
@@ -87,17 +87,30 @@ for a legacy single-model endpoint). Use only levels verified for that endpoint:
 ```
 
 This is an illustrative declaration, not a claim about any particular model.
-Omitted/`null` capabilities are unknown: no thinking selector is advertised.
-An empty list explicitly disables adjustable reasoning, clearing `effort` and
-`thinking` for that model. Nonempty lists must contain unique, trimmed, nonempty
+Omitted/`null` capabilities now use **compatibility defaults** when thinking is
+enabled. Older Solcode versions hid the entire ACP selector in this case, even
+when `effort` was already configured; that made existing settings unusable from
+BaoCode. The defaults are project conventions, **not an assertion that an
+upstream supports every value**, and the ACP selector description says so:
+
+| API format | Compatibility choices |
+| --- | --- |
+| OpenAI Chat / Responses | `none`, `low`, `medium`, `high`, `xhigh`, `max` (BaoCode's native `ProviderModel.defaultEfforts`) |
+| Anthropic Messages | `low`, `medium`, `high`, `max` (no implicit `none`/`xhigh` on this wire format) |
+
+A custom configured default effort is retained among the compatibility choices.
+An explicit `thinking: false` suppresses fallback choices; an explicit nonempty
+`supported_efforts` list still takes precedence. An empty list explicitly
+disables adjustable reasoning, clearing `effort` and `thinking` for that model. Nonempty lists must contain unique, trimmed, nonempty
 values; a model's explicit default `effort` must belong to its list. On a model
 switch, preserve a supported old level; otherwise use the target's supported
 default, then `high` if supported, then the first declared level. Thinking
 settings control inference effort, not disclosure of private chains of thought.
 
 Effort values are opaque provider-defined strings, not a universal enum.
-Values such as `none`, `minimal`, or custom levels are accepted only when declared
-by that model, and are forwarded unchanged. No mapping between `max` and `xhigh`
+Published values, including `none`, `minimal`, or custom levels, are forwarded
+unchanged. Explicit lists replace the fallback choices, rather than merging
+with them. No mapping between `max` and `xhigh`
 is inferred. This does not change the independent `thinking` setting.
 
 Unlike codex-acp, Solcode calls provider HTTP APIs directly, not Codex App Server
@@ -111,8 +124,18 @@ Unlike codex-acp, Solcode calls provider HTTP APIs directly, not Codex App Serve
 
 These transport fields must not be confused with either the ACP category or the
 Codex App Server `effort` parameter. Solcode has no generic App Server
-`model/list` capability source; existing settings with only `effort` still need
-verified `supported_efforts` to enable an adjustable selector.
+`model/list` capability source. Existing settings with only `effort` now publish
+compatibility choices without requiring manual migration. Set verified
+`supported_efforts` when the endpoint has a smaller or different supported set;
+a rejection by the actual provider at inference time is not prevented by ACP
+validation against a compatibility list.
+
+BaoCode's ACP client (`lib/kernel/acp/acp_kernel.dart`) places the selector by
+`category`, sends the actual option ID, and replaces the complete snapshot on
+responses/notifications. Its ACP path does **not** invent missing thought
+choices. Its native model settings (`lib/models/model_provider.dart`) do provide
+fallback choices. Solcode must publish its own options for BaoCode to show them;
+renaming an ID alone cannot fix an omitted selector.
 
 See `examples/settings/settings.acp-selectors.example.json` for a neutral
 multi-provider fixture. Replace model IDs, endpoints, and capability lists with

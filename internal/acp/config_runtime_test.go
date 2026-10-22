@@ -32,7 +32,7 @@ func createConfiguredSession(t *testing.T, client *harnessClient, cwd string) Se
 	return created
 }
 
-func TestACPOnlyAdvertisesDeclaredModelEfforts(t *testing.T) {
+func TestACPExplicitModelEffortsOverrideCompatibilityDefaults(t *testing.T) {
 	client := newACPHarnessWithConfig(t, func(cfg config.Config) config.Config {
 		cfg = configuredACPModels(t, cfg)
 		cfg.Providers[1].Models[1].SupportedEfforts = []string{}
@@ -245,9 +245,22 @@ func TestACPConfirmedModelChangesNextHTTPCallWithinPrompt(t *testing.T) {
 // Capabilities here are a mock provider contract, not claims about any real
 // model. Ensure opaque levels survive ACP -> session -> engine -> HTTP intact.
 func TestACPReasoningEffortReachesProviderRequests(t *testing.T) {
-	levels := []string{"none", "minimal", "low", "high", "xhigh", "max", "provider-custom"}
-	for _, format := range []string{"anthropic", "openai", "responses"} {
-		t.Run(format, func(t *testing.T) {
+	for _, tc := range []struct {
+		format   string
+		defaults bool
+	}{
+		{"anthropic", false}, {"openai", false}, {"responses", false},
+		{"anthropic", true}, {"openai", true}, {"responses", true},
+	} {
+		t.Run(fmt.Sprintf("%s/defaults=%v", tc.format, tc.defaults), func(t *testing.T) {
+			format := tc.format
+			levels := []string{"none", "minimal", "low", "high", "xhigh", "max", "provider-custom"}
+			if tc.defaults {
+				levels = []string{"none", "low", "medium", "high", "xhigh", "max"}
+				if format == "anthropic" {
+					levels = []string{"low", "medium", "high", "max"}
+				}
+			}
 			type capturedRequest struct {
 				path string
 				body map[string]any
@@ -279,6 +292,9 @@ func TestACPReasoningEffortReachesProviderRequests(t *testing.T) {
 					Name: "mock", APIKey: "test-only", BaseURL: endpoint.URL, APIFormat: format,
 					Models: []config.ModelConfig{{Name: "mock-model", ID: "mock-model", Effort: "high", SupportedEfforts: levels}},
 				}}
+				if tc.defaults {
+					cfg.Providers[0].Models[0].SupportedEfforts = nil
+				}
 				if err := cfg.Normalize(); err != nil {
 					t.Fatal(err)
 				}
@@ -342,5 +358,74 @@ func TestACPReasoningEffortReachesProviderRequests(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestACPExistingResponsesSettingsAdvertiseAndRestoreEffort(t *testing.T) {
+	workDir, dir := t.TempDir(), t.TempDir()
+	mutate := func(cfg config.Config) config.Config {
+		// Same shape as legacy user settings: effort is configured, but no
+		// supported_efforts field exists. The model ID is deliberately opaque.
+		if err := json.Unmarshal([]byte(`{"provider":"mine","model":"smart","providers":[{"name":"mine","api_key":"test-only","api_format":"responses","models":[{"name":"smart","id":"custom-codex-model","effort":"high"},{"name":"restricted","id":"restricted-model","effort":"low","supported_efforts":["low","medium"]},{"name":"disabled","id":"plain-model","supported_efforts":[]}]}]}`), &cfg); err != nil {
+			t.Fatal(err)
+		}
+		cfg.Session.Dir = dir
+		if err := cfg.Normalize(); err != nil {
+			t.Fatal(err)
+		}
+		return cfg
+	}
+	first := newACPHarnessWithConfig(t, mutate, nil)
+	created := createConfiguredSession(t, first, workDir)
+	assertConfigOptions(t, created.ConfigOptions)
+	reasoning := findConfigOption(t, created.ConfigOptions, "reasoning_effort")
+	if reasoning.Category != "thought_level" || reasoning.CurrentValue != "high" || !strings.Contains(reasoning.Description, "Compatibility") {
+		t.Fatalf("BaoCode cannot identify the reasoning selector: %+v", reasoning)
+	}
+	var levels []string
+	for _, option := range reasoning.Options {
+		levels = append(levels, option.Value)
+		if !strings.Contains(option.Description, "Compatibility") {
+			t.Fatal("BaoCode's per-value help cannot distinguish fallback choices")
+		}
+	}
+	if !reflect.DeepEqual(levels, []string{"none", "low", "medium", "high", "xhigh", "max"}) {
+		t.Fatalf("missing BaoCode compatibility choices: %v", levels)
+	}
+	expected := setACPConfig(t, first, created.SessionID, reasoning.ID, "xhigh")
+	sess := first.server.getSession(created.SessionID)
+	if sess.application.Config.Effort != "xhigh" || sess.cfg.Providers[0].Models[0].SupportedEfforts != nil {
+		t.Fatal("effort was not applied, or defaults mutated user model metadata")
+	}
+	// New sessions keep the configured default, not another session's choice.
+	var other SessionNewResult
+	if err := json.Unmarshal(mustCall(t, first, MethodSessionNew, SessionNewParams{Cwd: workDir}), &other); err != nil {
+		t.Fatal(err)
+	}
+	if got := findConfigOption(t, other.ConfigOptions, reasoning.ID).CurrentValue; got != "high" {
+		t.Fatalf("another session inherited effort %q", got)
+	}
+	// A fresh server restores the confirmed fallback selection as well.
+	second := newACPHarnessWithConfig(t, mutate, nil)
+	mustCall(t, second, MethodInitialize, map[string]any{"protocolVersion": 1})
+	var loaded SessionLoadResult
+	if err := json.Unmarshal(mustCall(t, second, MethodSessionLoad, SessionLoadParams{SessionID: created.SessionID, Cwd: workDir}), &loaded); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(loaded.ConfigOptions, expected) {
+		t.Fatal("session/load did not restore complete compatibility configuration")
+	}
+	options := setACPConfig(t, second, created.SessionID, "model", "mine/restricted")
+	limited := findConfigOption(t, options, reasoning.ID)
+	if limited.CurrentValue != "low" || len(limited.Options) != 2 || strings.Contains(limited.Description, "Compatibility") {
+		t.Fatalf("explicit model metadata did not override defaults: %+v", limited)
+	}
+	options = setACPConfig(t, second, created.SessionID, "model", "mine/disabled")
+	if len(options) != 2 {
+		t.Fatal("explicitly disabled model still published reasoning")
+	}
+	options = setACPConfig(t, second, created.SessionID, "model", "mine/smart")
+	if got := findConfigOption(t, options, reasoning.ID).CurrentValue; got != "high" {
+		t.Fatalf("switching back did not restore usable defaults: %q", got)
 	}
 }

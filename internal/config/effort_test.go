@@ -13,7 +13,7 @@ func TestExplicitEffortCapabilities(t *testing.T) {
 		current, preferred, want string
 		thinking                 bool
 	}{
-		{"unknown", nil, "high", "max", "high", true},
+		{"compatibility defaults", nil, "high", "max", "max", true},
 		{"disabled", []string{}, "high", "max", "", false},
 		{"preserve supported preference", []string{"low", "max"}, "low", "max", "max", true},
 		{"target default", []string{"low", "max"}, "low", "high", "low", true},
@@ -143,5 +143,92 @@ func TestRuntimeJSONUpdatesModelFallbackDefaults(t *testing.T) {
 	}
 	if next.APIFormat != "openai" || next.Thinking {
 		t.Fatalf("updated defaults not applied: format=%s thinking=%v", next.APIFormat, next.Thinking)
+	}
+}
+
+func TestModelEffortCompatibilityDefaults(t *testing.T) {
+	for _, tc := range []struct {
+		format string
+		want   []string
+	}{
+		{"anthropic", []string{"low", "medium", "high", "max"}},
+		{"openai", []string{"none", "low", "medium", "high", "xhigh", "max"}},
+		{"responses", []string{"none", "low", "medium", "high", "xhigh", "max"}},
+	} {
+		t.Run(tc.format, func(t *testing.T) {
+			cfg := Default()
+			// Provider override must win over the top-level wire format.
+			cfg.APIFormat = "anthropic"
+			cfg.Provider, cfg.Model = "p", "alias"
+			cfg.Providers = []ProviderConfig{{Name: "p", APIFormat: tc.format, Models: []ModelConfig{{Name: "alias", ID: "custom-id", Effort: "high"}}}}
+			if cfg.ModelEffortsExplicit() {
+				t.Fatal("compatibility defaults reported as verified metadata")
+			}
+			if got := cfg.ModelEfforts(); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("default levels = %v, want %v", got, tc.want)
+			}
+			// Resolved model IDs work just like configured aliases.
+			cfg.Model = "custom-id"
+			if got := cfg.ModelEfforts(); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("resolved ID lost its levels: %v", got)
+			}
+			got := cfg.ModelEfforts()
+			got[0] = "mutated"
+			if !reflect.DeepEqual(cfg.ModelEfforts(), tc.want) || cfg.Providers[0].Models[0].SupportedEfforts != nil {
+				t.Fatal("reading defaults mutated or filled user settings")
+			}
+		})
+	}
+}
+
+func TestModelEffortExplicitOverridesAndThinkingDisabled(t *testing.T) {
+	cfg := Default()
+	cfg.APIFormat = "responses"
+	cfg.SupportedEfforts = []string{"minimal", "custom"}
+	if !cfg.ModelEffortsExplicit() || !reflect.DeepEqual(cfg.ModelEfforts(), cfg.SupportedEfforts) {
+		t.Fatal("explicit list did not replace defaults")
+	}
+	got := cfg.ModelEfforts()
+	got[0] = "mutated"
+	if cfg.SupportedEfforts[0] != "minimal" {
+		t.Fatal("caller mutated declared capabilities")
+	}
+	cfg.SupportedEfforts = []string{}
+	if !cfg.ModelEffortsExplicit() || cfg.ModelEfforts() == nil || len(cfg.ModelEfforts()) != 0 {
+		t.Fatal("explicit empty list was replaced with defaults")
+	}
+	cfg.SupportedEfforts = nil
+	cfg.Thinking = false
+	if cfg.ModelEfforts() != nil {
+		t.Fatal("thinking-disabled legacy endpoint got fallback levels")
+	}
+	thinking := false
+	cfg.Thinking = true
+	cfg.Provider, cfg.Model = "p", "plain"
+	cfg.Providers = []ProviderConfig{{Name: "p", APIFormat: "responses", Models: []ModelConfig{{Name: "plain", ID: "plain", Thinking: &thinking}}}}
+	if cfg.ModelEfforts() != nil {
+		t.Fatal("thinking-disabled model got fallback levels")
+	}
+}
+
+func TestModelEffortCompatibilityPreservesCustomDefault(t *testing.T) {
+	cfg := Default()
+	cfg.Effort = "provider-custom"
+	if got := cfg.WithModelEffort(cfg.Effort); got.Effort != cfg.Effort {
+		t.Fatal("compatibility defaults rewrote a legacy custom effort")
+	}
+	cfg.Provider, cfg.Model = "p", "custom"
+	cfg.Providers = []ProviderConfig{{Name: "p", Models: []ModelConfig{
+		{Name: "custom", ID: "custom", Effort: "provider-custom"},
+		{Name: "other", ID: "other", Effort: "high"},
+	}}}
+	if got := cfg.WithModelEffort(cfg.Effort); got.Effort != cfg.Effort {
+		t.Fatal("compatibility defaults rewrote a model-specific custom effort")
+	}
+	cfg.Model = "other"
+	for _, effort := range cfg.ModelEfforts() {
+		if effort == "provider-custom" {
+			t.Fatal("another model inherited a custom capability")
+		}
 	}
 }
