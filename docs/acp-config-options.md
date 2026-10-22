@@ -14,7 +14,7 @@ implemented here.
 - `session/set_config_option` accepts `sessionId`, `configId`, and a string
   `value`. Use the exact option ID and value returned by the Agent.
 - Success returns **all** options under `result.configOptions`. A subsequent
-  model switch may remove `thought_level` entirely; replace, never merge.
+  model switch may remove `reasoning_effort` entirely; replace, never merge.
 - Solcode also emits the complete snapshot via `session/update`, with
   `update.sessionUpdate: "config_option_update"` and `update.configOptions`.
   It emits a snapshot for successful client changes, including same-value
@@ -45,15 +45,34 @@ Example request:
 
 ## Options and capability declarations
 
-| Solcode ID / category | Behavior |
+| Solcode configuration ID | Behavior |
 | --- | --- |
 | `mode` | Auto, Accept Edits, Bypass, Plan, Goal, Ultra; the existing permission service remains authoritative |
 | `model` | All configured providers/models, provider-qualified labels and opaque values; same-named models across providers stay distinct |
-| `thought_level` | Published only for the current model's nonempty, explicitly declared `supported_efforts` |
+| `reasoning_effort` | Published only for the current model's nonempty, explicitly declared `supported_efforts` |
 
 A value currently encodes the escaped provider name and escaped model alias,
 separated by `/`. Clients **must not parse or construct this representation**;
 use Agent-published values. Credentials and endpoint secrets are never included.
+
+The reasoning selector uses `id: "reasoning_effort"` and
+`category: "thought_level"`, matching codex-acp. The category only tells the
+client where to render the control; send the published ID when changing it:
+
+```json
+{
+  "method": "session/set_config_option",
+  "params": {
+    "sessionId": "current-session-id",
+    "configId": "reasoning_effort",
+    "value": "high"
+  }
+}
+```
+
+The old Solcode `configId: "thought_level"` is still accepted as a compatibility
+alias. Both IDs use the same validation and commit logic and return the complete
+snapshot with only the canonical ID; no duplicate selectors are published.
 
 Declare `supported_efforts` on a provider's model (or on the top-level settings
 for a legacy single-model endpoint). Use only levels verified for that endpoint:
@@ -75,6 +94,25 @@ values; a model's explicit default `effort` must belong to its list. On a model
 switch, preserve a supported old level; otherwise use the target's supported
 default, then `high` if supported, then the first declared level. Thinking
 settings control inference effort, not disclosure of private chains of thought.
+
+Effort values are opaque provider-defined strings, not a universal enum.
+Values such as `none`, `minimal`, or custom levels are accepted only when declared
+by that model, and are forwarded unchanged. No mapping between `max` and `xhigh`
+is inferred. This does not change the independent `thinking` setting.
+
+Unlike codex-acp, Solcode calls provider HTTP APIs directly, not Codex App Server
+`turn/start`. The confirmed session `effort` reaches the next main-agent call as:
+
+| Provider API | Request field |
+|---|---|
+| Anthropic Messages | `output_config.effort` |
+| OpenAI Chat Completions | `reasoning_effort` |
+| OpenAI Responses | `reasoning.effort` |
+
+These transport fields must not be confused with either the ACP category or the
+Codex App Server `effort` parameter. Solcode has no generic App Server
+`model/list` capability source; existing settings with only `effort` still need
+verified `supported_efforts` to enable an adjustable selector.
 
 See `examples/settings/settings.acp-selectors.example.json` for a neutral
 multi-provider fixture. Replace model IDs, endpoints, and capability lists with

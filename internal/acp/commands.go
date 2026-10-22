@@ -347,7 +347,7 @@ func (s *Server) slashPickEffort(ctx context.Context, sess *acpSession, persiste
 		return "", err
 	}
 	defer s.emitConfigOptions(sess)
-	if _, err := sess.setConfigOption("thought_level", choice); err != nil {
+	if _, err := sess.setConfigOption(reasoningEffortConfigID, choice); err != nil {
 		return fmt.Sprintf("Could not switch effort to %q: %v", choice, err), nil
 	}
 	return fmt.Sprintf("Switched effort to %s.", choice), nil

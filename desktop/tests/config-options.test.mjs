@@ -11,7 +11,7 @@ const option = (id, category, currentValue, values) => ({
 const initial = () => [
   option('agent-mode', 'mode', 'auto', ['auto', 'plan']),
   option('provider-model', 'model', 'a/same', ['a/same', 'b/same']),
-  option('reasoning', 'thought_level', 'high', ['low', 'high']),
+  option('reasoning_effort', 'thought_level', 'high', ['low', 'high']),
 ]
 const deferred = () => {
   let resolve, reject
@@ -50,10 +50,25 @@ test('reads opaque IDs, grouped values and unknown categories; ignores unsupport
   assert.deepEqual(readConfigOptions([]), [])
 })
 
+test('codex-acp reasoning ID is sent unchanged, not its thought_level category', async () => {
+  const { calls, session } = fixture()
+  const change = session.setConfigOption('reasoning_effort', 'low')
+  await tick()
+  assert.deepEqual(calls[0].args, ['s1', 'reasoning_effort', 'low'])
+  const next = initial()
+  next[2].currentValue = 'low'
+  calls[0].resolve({ configOptions: next, sequence: 2 })
+  await change
+  const reasoning = session.snapshot().configOptions[2]
+  assert.equal(reasoning.id, 'reasoning_effort')
+  assert.equal(reasoning.category, 'thought_level')
+  assert.equal(reasoning.currentValue, 'low')
+})
+
 test('serial mutations use actual IDs and revalidate dependent options on the latest full snapshot', async () => {
   const { calls, session } = fixture()
   const model = session.setConfigOption('provider-model', 'b/same')
-  const effort = session.setConfigOption('reasoning', 'low')
+  const effort = session.setConfigOption('reasoning_effort', 'low')
   const rejectedEffort = assert.rejects(effort, /no longer available/)
   await tick()
   assert.equal(calls.length, 1)
@@ -99,7 +114,7 @@ test('prompt barrier waits for every queued change, including changes appended w
   let ready = false
   const waiting = session.waitForConfiguration().then(() => { ready = true })
   await tick()
-  const second = session.setConfigOption('reasoning', 'low')
+  const second = session.setConfigOption('reasoning_effort', 'low')
   const next = initial()
   next[0].currentValue = 'plan'
   calls[0].resolve({ configOptions: next, sequence: 2 })
@@ -137,7 +152,7 @@ test('early notifications survive adoption; disposing cancels queued work and ig
   early.adoptSession({ sessionId: 's2', configOptions: initial(), sequence: 8 }, '/new')
   assert.deepEqual(early.snapshot().configOptions, [])
   const first = session.setConfigOption('agent-mode', 'plan')
-  const second = session.setConfigOption('reasoning', 'low')
+  const second = session.setConfigOption('reasoning_effort', 'low')
   const failFirst = assert.rejects(first, /Session changed/)
   const failSecond = assert.rejects(second, /Session changed/)
   await tick()

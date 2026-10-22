@@ -43,6 +43,11 @@ type configModelChoice struct {
 	model    string
 }
 
+// The configuration ID is opaque; thought_level is the ACP UI category, not
+// the ID. Match codex-acp while accepting our previously published ID below.
+const reasoningEffortConfigID = "reasoning_effort"
+const legacyThoughtLevelConfigID = "thought_level"
+
 // Qualify model values by provider, since names/IDs can overlap across providers.
 func configModelValue(provider, model string) string {
 	if provider == "" {
@@ -107,7 +112,7 @@ func sessionConfigOptions(cfg config.Config) []SessionConfigOption {
 	}
 	options := []SessionConfigOption{mode, model}
 	if levels := cfg.ModelEfforts(); len(levels) > 0 {
-		thought := SessionConfigOption{ID: "thought_level", Name: "Thinking Level", Category: "thought_level", Type: "select", CurrentValue: cfg.Effort}
+		thought := SessionConfigOption{ID: reasoningEffortConfigID, Name: "Reasoning effort", Description: "How much reasoning effort the model should use", Category: "thought_level", Type: "select", CurrentValue: cfg.Effort}
 		for _, effort := range levels {
 			label := strings.ToUpper(effort[:1]) + effort[1:]
 			if effort == "xhigh" {
@@ -178,6 +183,11 @@ func (sess *acpSession) setConfigOption(id, value string) ([]SessionConfigOption
 }
 
 func (sess *acpSession) setConfigOptionLocked(id, value string) ([]SessionConfigOption, error) {
+	// Normalize before validation so both IDs share capability checks, no-op
+	// handling and the same atomic commit path. Never publish duplicate controls.
+	if id == legacyThoughtLevelConfigID {
+		id = reasoningEffortConfigID
+	}
 	options := sessionConfigOptions(sess.cfg)
 	valid := false
 	for _, option := range options {
@@ -209,7 +219,7 @@ func (sess *acpSession) setConfigOptionLocked(id, value string) ([]SessionConfig
 	case "mode":
 		next.PermissionMode = permission.Mode(value)
 		next.Permissions.Mode = next.PermissionMode
-	case "thought_level":
+	case reasoningEffortConfigID:
 		next.Effort = value
 	}
 	if err := sess.commitConfigLocked(next); err != nil {

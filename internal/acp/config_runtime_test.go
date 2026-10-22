@@ -40,9 +40,9 @@ func TestACPOnlyAdvertisesDeclaredModelEfforts(t *testing.T) {
 		return cfg
 	}, nil)
 	created := createConfiguredSession(t, client, t.TempDir())
-	setACPConfig(t, client, created.SessionID, "thought_level", "max")
+	setACPConfig(t, client, created.SessionID, reasoningEffortConfigID, "max")
 	options := setACPConfig(t, client, created.SessionID, "model", "gpt/shared")
-	if got := findConfigOption(t, options, "thought_level"); len(got.Options) != 3 || got.CurrentValue != "max" {
+	if got := findConfigOption(t, options, reasoningEffortConfigID); len(got.Options) != 3 || got.CurrentValue != "max" {
 		t.Fatalf("valid effort not preserved: %+v", got)
 	}
 	options = setACPConfig(t, client, created.SessionID, "model", "gpt/other")
@@ -54,7 +54,7 @@ func TestACPOnlyAdvertisesDeclaredModelEfforts(t *testing.T) {
 		t.Fatal("non-reasoning model retained reasoning settings")
 	}
 	options = setACPConfig(t, client, created.SessionID, "model", "claude/shared")
-	if got := findConfigOption(t, options, "thought_level").CurrentValue; got != "high" {
+	if got := findConfigOption(t, options, reasoningEffortConfigID).CurrentValue; got != "high" {
 		t.Fatalf("invalid target default: %s", got)
 	}
 	if !sess.cfg.Thinking {
@@ -115,7 +115,7 @@ func TestACPSavedConfigurationRestoresAndAdjusts(t *testing.T) {
 			first := newACPHarnessWithConfig(t, mutate, nil)
 			created := createConfiguredSession(t, first, workDir)
 			setACPConfig(t, first, created.SessionID, "model", "gpt/shared")
-			setACPConfig(t, first, created.SessionID, "thought_level", "max")
+			setACPConfig(t, first, created.SessionID, reasoningEffortConfigID, "max")
 			expected := setACPConfig(t, first, created.SessionID, "mode", "plan")
 			path := first.server.getSession(created.SessionID).configStatePath()
 			saved, err := os.ReadFile(path)
@@ -213,7 +213,7 @@ func TestACPConfirmedModelChangesNextHTTPCallWithinPrompt(t *testing.T) {
 		t.Fatal("first model call did not start")
 	}
 	setACPConfig(t, client, created.SessionID, "model", "gpt/shared")
-	setACPConfig(t, client, created.SessionID, "thought_level", "max")
+	setACPConfig(t, client, created.SessionID, reasoningEffortConfigID, "max")
 	close(release)
 	select {
 	case err := <-done:
@@ -239,5 +239,108 @@ func TestACPConfirmedModelChangesNextHTTPCallWithinPrompt(t *testing.T) {
 		}
 	default:
 		t.Fatal("confirmed model did not affect the next actual call in the same prompt")
+	}
+}
+
+// Capabilities here are a mock provider contract, not claims about any real
+// model. Ensure opaque levels survive ACP -> session -> engine -> HTTP intact.
+func TestACPReasoningEffortReachesProviderRequests(t *testing.T) {
+	levels := []string{"none", "minimal", "low", "high", "xhigh", "max", "provider-custom"}
+	for _, format := range []string{"anthropic", "openai", "responses"} {
+		t.Run(format, func(t *testing.T) {
+			type capturedRequest struct {
+				path string
+				body map[string]any
+			}
+			requests := make(chan capturedRequest, len(levels))
+			endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var body map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Errorf("decode provider request: %v", err)
+					http.Error(w, "invalid JSON", http.StatusBadRequest)
+					return
+				}
+				requests <- capturedRequest{r.URL.Path, body}
+				w.Header().Set("Content-Type", "application/json")
+				switch format {
+				case "anthropic":
+					_, _ = io.WriteString(w, `{"id":"m1","type":"message","role":"assistant","model":"mock-model","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`)
+				case "openai":
+					_, _ = io.WriteString(w, `{"id":"c1","object":"chat.completion","model":"mock-model","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+				case "responses":
+					_, _ = io.WriteString(w, `{"id":"r1","model":"mock-model","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1}}`)
+				}
+			}))
+			defer endpoint.Close()
+			client := newACPHarnessWithConfig(t, func(cfg config.Config) config.Config {
+				cfg.Stream = false
+				cfg.Provider, cfg.Model = "mock", "mock-model"
+				cfg.Providers = []config.ProviderConfig{{
+					Name: "mock", APIKey: "test-only", BaseURL: endpoint.URL, APIFormat: format,
+					Models: []config.ModelConfig{{Name: "mock-model", ID: "mock-model", Effort: "high", SupportedEfforts: levels}},
+				}}
+				if err := cfg.Normalize(); err != nil {
+					t.Fatal(err)
+				}
+				return cfg
+			}, func(ctx context.Context, a *app.App, _, prompt, dir string, _ int, _ StreamEmitter) (agent.AgentResult, error) {
+				result := a.Engine.RunWithHistory(ctx, engine.RunRequest{AgentConfig: agent.AgentConfig{
+					ID: "main", Role: agent.AgentRoleMain, WorkDir: dir, Prompt: prompt, MaxTurns: 1,
+				}})
+				if result.AgentResult.Error != "" {
+					t.Errorf("mock model call failed: %s", result.AgentResult.Error)
+				}
+				return result.AgentResult, nil
+			})
+			created := createConfiguredSession(t, client, t.TempDir())
+			option := findConfigOption(t, created.ConfigOptions, "reasoning_effort")
+			var advertised []string
+			for _, choice := range option.Options {
+				advertised = append(advertised, choice.Value)
+			}
+			if !reflect.DeepEqual(advertised, levels) {
+				t.Fatalf("hardcoded/reordered effort capabilities: %v", advertised)
+			}
+			for _, level := range levels {
+				setACPConfig(t, client, created.SessionID, "reasoning_effort", level)
+				mustCall(t, client, MethodSessionPrompt, SessionPromptParams{
+					SessionID: created.SessionID, Prompt: []ContentBlock{{Type: "text", Text: "verify " + level}},
+				})
+				select {
+				case request := <-requests:
+					var effort any
+					var wantPath string
+					var forbidden []string
+					switch format {
+					case "anthropic":
+						wantPath = "/v1/messages"
+						if output, ok := request.body["output_config"].(map[string]any); ok {
+							effort = output["effort"]
+						}
+						forbidden = []string{"reasoning_effort", "reasoning"}
+					case "openai":
+						wantPath = "/v1/chat/completions"
+						effort = request.body["reasoning_effort"]
+						forbidden = []string{"output_config", "reasoning"}
+					case "responses":
+						wantPath = "/v1/responses"
+						if reasoning, ok := request.body["reasoning"].(map[string]any); ok {
+							effort = reasoning["effort"]
+						}
+						forbidden = []string{"output_config", "reasoning_effort"}
+					}
+					if request.path != wantPath || effort != level || request.body["model"] != "mock-model" {
+						t.Fatalf("%s: path=%s (want %s), effort=%v, model=%v", level, request.path, wantPath, effort, request.body["model"])
+					}
+					for _, key := range append(forbidden, "thought_level", "effort") {
+						if _, exists := request.body[key]; exists {
+							t.Errorf("%s: unexpected transport field %q", level, key)
+						}
+					}
+				default:
+					t.Fatalf("%s: confirmed effort did not reach provider", level)
+				}
+			}
+		})
 	}
 }

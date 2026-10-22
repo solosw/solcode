@@ -3,6 +3,7 @@ package acp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -33,7 +34,11 @@ func assertConfigOptions(t *testing.T, options []SessionConfigOption) {
 	}
 	for _, option := range options {
 		id := option.ID
-		if option.Category != id || option.Name == "" || option.Type != "select" || !configOptionHasValue(option, option.CurrentValue) {
+		wantCategory := id
+		if id == reasoningEffortConfigID {
+			wantCategory = "thought_level"
+		}
+		if option.Category != wantCategory || option.Name == "" || option.Type != "select" || !configOptionHasValue(option, option.CurrentValue) {
 			t.Fatalf("invalid %s option: %+v", id, option)
 		}
 		seen := make(map[string]bool)
@@ -124,11 +129,11 @@ func TestACPSetConfigOptionAppliesModelModeAndEffort(t *testing.T) {
 		t.Fatalf("all-provider catalog missing or ambiguous: %+v", model)
 	}
 	options := setACPConfig(t, client, created.SessionID, "model", "gpt/shared")
-	if got := findConfigOption(t, options, "thought_level").CurrentValue; got != "low" {
+	if got := findConfigOption(t, options, reasoningEffortConfigID).CurrentValue; got != "low" {
 		t.Fatalf("model-dependent effort was not returned: %q", got)
 	}
 	setACPConfig(t, client, created.SessionID, "mode", "plan")
-	options = setACPConfig(t, client, created.SessionID, "thought_level", "max")
+	options = setACPConfig(t, client, created.SessionID, reasoningEffortConfigID, "max")
 	if reselected := setACPConfig(t, client, created.SessionID, "model", "gpt/shared"); !reflect.DeepEqual(options, reselected) {
 		t.Fatal("reselecting the current model reset explicit thinking effort")
 	}
@@ -146,7 +151,7 @@ func TestACPSetConfigOptionAppliesModelModeAndEffort(t *testing.T) {
 	if err := json.Unmarshal(mustCall(t, client, MethodSessionNew, SessionNewParams{Cwd: t.TempDir()}), &other); err != nil {
 		t.Fatal(err)
 	}
-	if findConfigOption(t, other.ConfigOptions, "model").CurrentValue != "claude/shared" || findConfigOption(t, other.ConfigOptions, "thought_level").CurrentValue != "high" {
+	if findConfigOption(t, other.ConfigOptions, "model").CurrentValue != "claude/shared" || findConfigOption(t, other.ConfigOptions, reasoningEffortConfigID).CurrentValue != "high" {
 		t.Fatal("configuration changes leaked into a new session")
 	}
 }
@@ -170,8 +175,8 @@ func TestACPSetConfigOptionRejectsInvalidRequests(t *testing.T) {
 		{"configId": "mode", "value": "unknown"},
 		{"configId": "mode", "value": "ultrl"}, // New select values must be advertised canonical IDs.
 		{"configId": "model", "value": "not-advertised"},
-		{"configId": "thought_level", "value": "invalid"},
-		{"configId": "thought_level", "value": true},
+		{"configId": reasoningEffortConfigID, "value": "invalid"},
+		{"configId": reasoningEffortConfigID, "value": true},
 		{"configId": "mode", "type": "boolean", "value": "plan"},
 		{"configId": "mode", "type": "id", "value": "plan"},
 		{"configId": "mode"},
@@ -272,7 +277,7 @@ func TestACPConfigOptionsCanChangeDuringPrompt(t *testing.T) {
 		t.Fatal("prompt did not start")
 	}
 	setACPConfig(t, client, created.SessionID, "model", "gpt/shared")
-	setACPConfig(t, client, created.SessionID, "thought_level", "max")
+	setACPConfig(t, client, created.SessionID, reasoningEffortConfigID, "max")
 	setACPConfig(t, client, created.SessionID, "mode", "plan")
 	close(release)
 	if err := <-done; err != nil {
@@ -336,7 +341,7 @@ func TestACPConfigOptionsFollowSlashSelections(t *testing.T) {
 	}{
 		{"/provider", "gpt", "model", "gpt/shared"},
 		{"/model", "other", "model", "gpt/other"},
-		{"/effort", "max", "thought_level", "max"},
+		{"/effort", "max", reasoningEffortConfigID, "max"},
 	} {
 		done := make(chan error, 1)
 		go func() {
@@ -363,6 +368,90 @@ func TestACPConfigOptionsFollowSlashSelections(t *testing.T) {
 				}
 			}
 			return false
+		})
+	}
+}
+
+func TestACPReasoningEffortIDAndLegacyAlias(t *testing.T) {
+	client := newACPHarnessWithConfig(t, func(cfg config.Config) config.Config {
+		return configuredACPModels(t, cfg)
+	}, nil)
+	created := createConfiguredSession(t, client, t.TempDir())
+	thought := findConfigOption(t, created.ConfigOptions, "reasoning_effort")
+	if thought.Category != "thought_level" {
+		t.Fatalf("reasoning category = %q", thought.Category)
+	}
+
+	// Old clients may still send the previously published ID. The response and
+	// notification must contain only the canonical ID, not a second control.
+	var result SessionSetConfigOptionResult
+	if err := json.Unmarshal(mustCall(t, client, MethodSessionSetConfigOption, SessionSetConfigOptionParams{
+		SessionID: created.SessionID, ConfigID: "thought_level", Value: "low",
+	}), &result); err != nil {
+		t.Fatal(err)
+	}
+	assertConfigOptions(t, result.ConfigOptions)
+	if got := findConfigOption(t, result.ConfigOptions, "reasoning_effort").CurrentValue; got != "low" {
+		t.Fatalf("legacy alias did not update reasoning effort: %q", got)
+	}
+	for _, option := range result.ConfigOptions {
+		if option.ID == "thought_level" {
+			t.Fatal("published a duplicate legacy reasoning selector")
+		}
+	}
+	waitFor(t, func() bool {
+		for _, update := range client.snapshot() {
+			if update.Update.SessionUpdate == "config_option_update" && reflect.DeepEqual(update.Update.ConfigOptions, result.ConfigOptions) {
+				return true
+			}
+		}
+		return false
+	})
+	canonical := setACPConfig(t, client, created.SessionID, "reasoning_effort", "max")
+	var repeated SessionSetConfigOptionResult
+	if err := json.Unmarshal(mustCall(t, client, MethodSessionSetConfigOption, SessionSetConfigOptionParams{
+		SessionID: created.SessionID, ConfigID: "thought_level", Value: "max",
+	}), &repeated); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(canonical, repeated.ConfigOptions) {
+		t.Fatal("same-value legacy alias changed the confirmed snapshot")
+	}
+
+	for _, id := range []string{"reasoning_effort", "thought_level"} {
+		var ignored SessionSetConfigOptionResult
+		err := client.conn.Call(t.Context(), MethodSessionSetConfigOption, SessionSetConfigOptionParams{
+			SessionID: created.SessionID, ConfigID: id, Value: "unsupported",
+		}, &ignored)
+		if rpcErr, ok := err.(*jsonrpcError); !ok || rpcErr.Code != JSONRPCInvalidParams {
+			t.Fatalf("%s accepted an unsupported effort: %v", id, err)
+		}
+		if !reflect.DeepEqual(canonical, client.server.getSession(created.SessionID).configOptions()) {
+			t.Fatal("rejected effort modified confirmed state")
+		}
+	}
+}
+
+func TestACPReasoningIDsCannotEnableUndeclaredCapabilities(t *testing.T) {
+	for _, levels := range [][]string{nil, {}} {
+		t.Run(fmt.Sprintf("levels=%#v", levels), func(t *testing.T) {
+			client := newACPHarnessWithConfig(t, func(cfg config.Config) config.Config {
+				cfg.SupportedEfforts = levels
+				return cfg
+			}, nil)
+			created := createConfiguredSession(t, client, t.TempDir())
+			if len(created.ConfigOptions) != 2 {
+				t.Fatalf("undeclared reasoning selector: %+v", created.ConfigOptions)
+			}
+			for _, id := range []string{"reasoning_effort", "thought_level"} {
+				var ignored SessionSetConfigOptionResult
+				err := client.conn.Call(t.Context(), MethodSessionSetConfigOption, SessionSetConfigOptionParams{
+					SessionID: created.SessionID, ConfigID: id, Value: "high",
+				}, &ignored)
+				if rpcErr, ok := err.(*jsonrpcError); !ok || rpcErr.Code != JSONRPCInvalidParams {
+					t.Fatalf("%s bypassed absent capabilities: %v", id, err)
+				}
+			}
 		})
 	}
 }
