@@ -98,33 +98,35 @@ export function Sidebar({ snapshot, onSetMode }: {
           </p>
         </section>
 
-        <section className="space-y-1.5">
-          <h2 className="flex items-center gap-1.5 px-1 text-[10.5px] font-semibold tracking-wider text-muted-foreground uppercase">
-            <FolderTree className="size-3" /> Permission mode
-          </h2>
-          <div className="space-y-0.5">
-            {snapshot.modes.map(mode => (
-              <button
-                key={mode.id}
-                type="button"
-                onClick={() => { onSetMode(mode.id) }}
-                title={mode.description ?? ''}
-                className={cn(
-                  'flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-[12px]',
-                  mode.id === snapshot.currentModeId
-                    ? 'bg-muted text-foreground'
-                    : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground',
-                )}
-              >
-                <span className={cn(
-                  'size-1.5 shrink-0 rounded-full',
-                  mode.id === snapshot.currentModeId ? 'bg-primary' : 'bg-muted-foreground/40',
-                )} />
-                {mode.name}
-              </button>
-            ))}
-          </div>
-        </section>
+        {snapshot.configOptions === undefined ? (
+          <section className="space-y-1.5">
+            <h2 className="flex items-center gap-1.5 px-1 text-[10.5px] font-semibold tracking-wider text-muted-foreground uppercase">
+              <FolderTree className="size-3" /> Permission mode
+            </h2>
+            <div className="space-y-0.5">
+              {snapshot.modes.map(mode => (
+                <button
+                  key={mode.id}
+                  type="button"
+                  onClick={() => { onSetMode(mode.id) }}
+                  title={mode.description ?? ''}
+                  className={cn(
+                    'flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-[12px]',
+                    mode.id === snapshot.currentModeId
+                      ? 'bg-muted text-foreground'
+                      : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground',
+                  )}
+                >
+                  <span className={cn(
+                    'size-1.5 shrink-0 rounded-full',
+                    mode.id === snapshot.currentModeId ? 'bg-primary' : 'bg-muted-foreground/40',
+                  )} />
+                  {mode.name}
+                </button>
+              ))}
+            </div>
+          </section>
+        ) : null}
 
         {snapshot.plan.length > 0 ? (
           <section className="space-y-1.5">

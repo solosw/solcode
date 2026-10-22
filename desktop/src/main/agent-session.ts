@@ -26,6 +26,8 @@ import type {
   TranscriptEntry,
 } from '../shared/protocol.js'
 
+import { readConfigOptions, hasConfigValue, type ConfigOption } from '../shared/config-options.js'
+
 /** Snapshot listeners; called on every observable change. */
 type Listener = (snapshot: SessionSnapshot) => void
 
@@ -115,6 +117,13 @@ function readUsage(update: AcpSessionUpdate): AcpUsage | undefined {
 }
 
 export class AgentSession {
+  private disposed = false
+  private configOptions: ConfigOption[] | undefined
+  private configSequence = -1
+  private readonly earlyConfig = new Map<string, { options: unknown; sequence: number }>()
+  private configTail: Promise<void> = Promise.resolve()
+  private configPending = 0
+  private configError: string | undefined
   private readonly listeners = new Set<Listener>()
   private transcript: TranscriptEntry[] = []
   private messageSeq = 0
@@ -148,6 +157,9 @@ export class AgentSession {
       transcript: this.transcript,
       permission: this.permission,
     }
+    if (this.configOptions !== undefined) base.configOptions = this.configOptions
+    base.configPending = this.configPending
+    if (this.configError !== undefined) base.configError = this.configError
     if (this.error !== undefined) base.error = this.error
     if (this.agentVersion !== undefined) base.agentVersion = this.agentVersion
     if (this.currentModeId !== undefined) base.currentModeId = this.currentModeId
@@ -180,13 +192,83 @@ export class AgentSession {
   adoptSession(result: NewSessionResult, cwd: string): void {
     this.sessionIdValue = result.sessionId
     this.cwdValue = cwd
+    this.modes = []
+    this.currentModeId = undefined
     if (result.modes !== undefined) {
       this.modes = result.modes.availableModes
       this.currentModeId = result.modes.currentModeId
     }
+    if (result.configOptions !== undefined) this.applyConfigSnapshot(result.sessionId, result.configOptions, result.sequence ?? 0)
+    const early = this.earlyConfig.get(result.sessionId)
+    if (early !== undefined) this.applyConfigSnapshot(result.sessionId, early.options, early.sequence)
+    this.earlyConfig.clear()
     this.status = 'ready'
     this.error = undefined
     this.emit()
+  }
+
+  /** Transport calls this synchronously in receive order, before resolving RPCs. */
+  applyConfigSnapshot(sessionId: string, options: unknown, sequence: number): void {
+    if (this.disposed) return
+    if (this.sessionId === null) {
+      const previous = this.earlyConfig.get(sessionId)
+      if (previous === undefined || sequence > previous.sequence) this.earlyConfig.set(sessionId, { options, sequence })
+      return
+    }
+    if (sessionId !== this.sessionId || sequence <= this.configSequence) return
+    this.configSequence = sequence
+    this.configOptions = readConfigOptions(options)
+    this.currentModeId = this.configOptions.find(option => option.category === 'mode')?.currentValue
+    this.emit()
+  }
+
+  /** Serialize mutations; every queued value is revalidated against the latest
+   * confirmed full snapshot, not the snapshot rendered when it was clicked. */
+  async setConfigOption(configId: string, value: string): Promise<void> {
+    const sessionId = this.sessionId
+    if (this.disposed || sessionId === null) throw new Error('No active session')
+    if (this.configPending === 0) {
+      this.configTail = Promise.resolve()
+      this.configError = undefined
+    }
+    this.configPending++
+    this.emit()
+    const operation = this.configTail.then(async () => {
+      if (this.disposed || this.sessionId !== sessionId) throw new Error('Session changed; configuration cancelled')
+      const option = this.configOptions?.find(candidate => candidate.id === configId)
+      if (option === undefined || !hasConfigValue(option, value)) throw new Error('This configuration value is no longer available; choose again')
+      if (option.currentValue === value) return
+      const result = await this.client.setConfigOption(sessionId, configId, value)
+      if (this.disposed || this.sessionId !== sessionId) throw new Error('Session changed; configuration cancelled')
+      this.applyConfigSnapshot(sessionId, result.configOptions, result.sequence)
+    })
+    this.configTail = operation
+    try {
+      await operation
+    } catch (cause) {
+      if (!this.disposed) this.configError = cause instanceof Error ? cause.message : String(cause)
+      throw cause
+    } finally {
+      this.configPending--
+      if (!this.disposed) this.emit()
+    }
+  }
+
+  async waitForConfiguration(): Promise<void> {
+    // Keep waiting if another selection was queued during the previous await.
+    let tail: Promise<void>
+    do {
+      tail = this.configTail
+      await tail
+    } while (tail !== this.configTail)
+    if (this.disposed) throw new Error('Session changed')
+    if (this.configError !== undefined) throw new Error(this.configError)
+  }
+
+  dispose(): void {
+    this.disposed = true
+    this.listeners.clear()
+    this.earlyConfig.clear()
   }
 
   markReady(): void {
@@ -201,6 +283,7 @@ export class AgentSession {
   }
 
   markExited(code: number | null): void {
+    this.disposed = true
     this.status = 'exited'
     this.error = `solcode --acp exited (code ${String(code)})`
     this.emit()
@@ -229,7 +312,8 @@ export class AgentSession {
   }
 
   /** Apply one `session/update` notification. */
-  apply(update: AcpSessionUpdate): void {
+  apply(update: AcpSessionUpdate, sessionId = this.sessionId, sequence = this.configSequence + 1): void {
+    if (this.disposed || (this.sessionId !== null && sessionId !== this.sessionId)) return
     switch (update.sessionUpdate) {
       case 'agent_message_chunk':
         this.appendToOpenMessage(readChunkText(update))
@@ -255,7 +339,11 @@ export class AgentSession {
         this.commands = Array.isArray(update.availableCommands) ? update.availableCommands : []
         this.emit()
         return
+      case 'config_option_update':
+        if (sessionId !== null) this.applyConfigSnapshot(sessionId, update.configOptions, sequence)
+        return
       case 'current_mode_update':
+        if (this.configOptions !== undefined) return
         if (typeof update.currentModeId === 'string') this.currentModeId = update.currentModeId
         this.emit()
         return

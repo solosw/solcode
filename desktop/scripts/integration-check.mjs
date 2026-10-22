@@ -14,9 +14,12 @@ const bin = process.argv[3] ?? resolve(cwd, 'solcode.exe')
 
 const events = []
 let session = null
-const client = new AcpClient(bin, ['--acp'], cwd, process.env, {
+const args = ['--acp']
+if (process.env.SOLCODE_CONFIG) args.push('--config', process.env.SOLCODE_CONFIG)
+const client = new AcpClient(bin, args, cwd, process.env, {
   // Wire updates into the session exactly as the main process does.
-  onUpdate: (update) => { events.push(update.sessionUpdate); session?.apply(update) },
+  onUpdate: (update, id, sequence) => { events.push(update.sessionUpdate); session?.apply(update, id, sequence) },
+  onConfigOptions: (id, options, sequence) => { session?.applyConfigSnapshot(id, options, sequence) },
   onRequestPermission: (id) => { console.log(`permission request ${id}`) },
   onStderr: () => {},
   onExit: (code) => { console.log(`exit ${code}`) },
@@ -43,6 +46,17 @@ await new Promise(r => setTimeout(r, 1500))
 console.log(`commands advertised: ${latest.commands.length}`)
 console.log(`usage: ${JSON.stringify(latest.usage)}`)
 
+// Exercise the standard selector using the Agent's real opaque configuration ID.
+const modeOption = latest.configOptions?.find(option => option.category === 'mode')
+let configOK = false
+if (modeOption !== undefined) {
+  const value = modeOption.currentValue === 'plan' ? 'auto' : 'plan'
+  await session.setConfigOption(modeOption.id, value)
+  await session.waitForConfiguration()
+  configOK = latest.configOptions?.find(option => option.id === modeOption.id)?.currentValue === value
+  console.log(`session configuration: ${latest.configOptions.length} options, mode=${latest.currentModeId}`)
+}
+
 // A slash command exercises the full request/response path without needing an
 // API key, and proves the agent answers prompts end to end.
 session.addUserMessage('/status')
@@ -64,5 +78,6 @@ client.stop()
 const ok = info.protocolVersion === 1
   && created.sessionId.length > 0
   && assistantText.length > 0
+  && configOK
 console.log(ok ? '\nRESULT: PASS' : '\nRESULT: FAIL')
 process.exit(ok ? 0 : 1)

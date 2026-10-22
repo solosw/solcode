@@ -1,0 +1,47 @@
+{
+  "_comment": "Illustrative ACP capabilities, not model recommendations. Replace IDs/endpoints and verify supported_efforts for each actual model.",
+  "provider": "provider-a",
+  "model": "shared",
+  "providers": [
+    {
+      "name": "provider-a",
+      "api_key_env": "PROVIDER_A_API_KEY",
+      "base_url": "https://provider-a.example",
+      "api_format": "anthropic",
+      "models": [
+        {
+          "name": "shared",
+          "id": "your-reasoning-model-a",
+          "display_name": "Reasoning A",
+          "default": true,
+          "thinking": true,
+          "supported_efforts": ["low", "medium", "high"],
+          "effort": "high"
+        }
+      ]
+    },
+    {
+      "name": "provider-b",
+      "api_key_env": "PROVIDER_B_API_KEY",
+      "base_url": "https://provider-b.example/v1",
+      "api_format": "openai",
+      "models": [
+        {
+          "name": "shared",
+          "id": "your-reasoning-model-b",
+          "display_name": "Reasoning B",
+          "default": true,
+          "thinking": true,
+          "supported_efforts": ["low", "medium"],
+          "effort": "medium"
+        },
+        {
+          "name": "plain",
+          "id": "your-non-reasoning-model",
+          "thinking": false,
+          "supported_efforts": []
+        }
+      ]
+    }
+  ]
+}

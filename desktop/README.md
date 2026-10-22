@@ -3,7 +3,7 @@
 An Electron desktop front end for the [solcode](../) coding agent. It talks to
 `solcode --acp` over the [Agent Client Protocol](https://agentclientprotocol.com)
 and renders the session as a Codex-style workspace: sidebar, streaming
-transcript, tool cards with inline diffs, and a permission-mode switcher.
+transcript, tool cards with inline diffs, and session-scoped mode/model/thinking selectors.
 
 The app owns no agent logic. solcode remains the agent; this is a client.
 
@@ -26,6 +26,24 @@ Three files carry the integration:
 | `src/main/acp-client.ts` | Framing, request/response correlation, permission replies |
 | `src/main/agent-session.ts` | Turns raw `session/update` notifications into transcript state |
 | `src/shared/protocol.ts` | Wire types mirroring solcode's `internal/acp/protocol.go` |
+
+### Session settings
+
+Mode, model and thinking controls are built from the Agent's ACP v1
+`configOptions`, not slash-command text or hardcoded model capabilities. The
+first option in each semantic category appears next to the composer; additional
+and unknown categories use More settings. Missing or unsupported options do not
+create controls. Agent names, grouped values, ordering, and opaque IDs are
+preserved.
+
+Changes are serialized and revalidated against the latest complete snapshot.
+While pending, controls keep their last confirmed values and show a waiting
+indicator. A failed change keeps those values and blocks prompt submission until
+an explicit successful retry. Prompt text is retained when submission fails.
+Switching/restarting invalidates the old session queue and ignores old replies.
+The legacy sidebar mode UI is used only when `configOptions` is absent.
+
+ACP v2 is not negotiated. See [the integration contract](../docs/acp-config-options.md).
 
 ### Protocol notes
 
@@ -61,6 +79,7 @@ it searches `process.resourcesPath`, the project directory, and `PATH`.
 
 ```sh
 npm run typecheck                        # both tsconfigs
+npm test                                 # configuration parsing, queue, ordering/lifecycle
 node scripts/integration-check.mjs       # ACP protocol, headless
 node scripts/window-check.mjs            # full stack over CDP, drives a real turn
 node scripts/screenshot.mjs              # writes .verify/window.png

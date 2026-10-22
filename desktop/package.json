@@ -10,6 +10,7 @@
     "build:main": "tsc -p tsconfig.main.json",
     "build:renderer": "vite build",
     "build": "yarn build:main && yarn build:renderer",
+    "test": "npm run build:main && tsc -p tsconfig.test.json && node --test tests/*.test.mjs",
     "typecheck": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.renderer.json --noEmit",
     "start": "yarn build && electron .",
     "package:dir": "yarn build && electron-builder --dir",

@@ -120,8 +120,16 @@ func DefaultKnowledgeGraphPath(workDir string) string {
 }
 
 type Config struct {
-	APIKey  string `json:"api_key"`
-	BaseURL string `json:"base_url"`
+	// Keep top-level defaults separate from active model/provider overrides.
+	// Switching back must not inherit the last provider's wire format or a
+	// non-reasoning model's disabled thinking. Runtime-only settings.
+	defaultAPIFormat string
+	defaultThinking  bool
+
+	// SupportedEfforts describes a legacy single-model endpoint, when known.
+	SupportedEfforts []string `json:"supported_efforts"`
+	APIKey           string   `json:"api_key"`
+	BaseURL          string   `json:"base_url"`
 	// APIFormat selects "anthropic" (default), "openai" (Chat Completions), or
 	// "responses" (OpenAI Responses). Internal Anthropic message/tool types
 	// remain the compatibility boundary for the engine/session stack.
@@ -531,6 +539,8 @@ type ResolvedProvider struct {
 }
 
 type ModelConfig struct {
+	// Nil means unknown; an empty list explicitly disables effort selection.
+	SupportedEfforts []string                   `json:"supported_efforts"`
 	Name             string                     `json:"name"`
 	ID               string                     `json:"id"`
 	DisplayName      string                     `json:"display_name,omitempty"`
@@ -680,7 +690,14 @@ func defaultSettingsPayload(workDir string) map[string]any {
 }
 
 func (cfg *Config) Normalize() error {
-	cfg.APIFormat = anthropic.NormalizeFormat(cfg.APIFormat)
+	if err := validateEfforts(cfg.SupportedEfforts); err != nil {
+		return err
+	}
+	if cfg.defaultAPIFormat == "" {
+		cfg.defaultAPIFormat = anthropic.NormalizeFormat(cfg.APIFormat)
+		cfg.defaultThinking = cfg.Thinking
+	}
+	cfg.APIFormat = cfg.defaultAPIFormat
 	if cfg.BackgroundTasks.YieldAfterMS <= 0 {
 		cfg.BackgroundTasks.YieldAfterMS = DefaultBackgroundYieldAfterMS
 	}
@@ -764,7 +781,7 @@ func (cfg *Config) Normalize() error {
 	if strings.TrimSpace(prov.APIFormat) != "" {
 		cfg.APIFormat = anthropic.NormalizeFormat(prov.APIFormat)
 	} else {
-		cfg.APIFormat = anthropic.NormalizeFormat(cfg.APIFormat)
+		cfg.APIFormat = cfg.defaultAPIFormat
 	}
 	cfg.Model = mdl.ID
 	if mdl.MaxContextTokens > 0 {
@@ -857,6 +874,9 @@ func (cfg Config) WithModel(model string) (Config, error) {
 	}
 	next := cfg
 	next.Model = model
+	if cfg.defaultAPIFormat != "" {
+		next.Thinking = cfg.defaultThinking
+	}
 	// Keep the active provider so /model only switches within the current provider.
 	// If the model is not on that provider, fall back to resolving by model name.
 	if len(next.Providers) > 0 {
@@ -894,6 +914,9 @@ func (cfg Config) WithProvider(provider string) (Config, error) {
 	}
 	next := cfg
 	next.Provider = provider
+	if cfg.defaultAPIFormat != "" {
+		next.Thinking = cfg.defaultThinking
+	}
 	if err := next.Normalize(); err != nil {
 		return cfg, err
 	}
@@ -1018,6 +1041,16 @@ func (cfg Config) validateProviders() error {
 			return fmt.Errorf("provider name is required")
 		}
 		for _, m := range p.Models {
+			seenEfforts := make(map[string]bool)
+			for _, effort := range m.SupportedEfforts {
+				if strings.TrimSpace(effort) == "" || effort != strings.TrimSpace(effort) || seenEfforts[effort] {
+					return fmt.Errorf("invalid supported_efforts (provider %q, model %q)", p.Name, m.Name)
+				}
+				seenEfforts[effort] = true
+			}
+			if m.SupportedEfforts != nil && m.Effort != "" && !seenEfforts[m.Effort] {
+				return fmt.Errorf("default effort is not in supported_efforts (provider %q, model %q)", p.Name, m.Name)
+			}
 			if m.Name == "" {
 				return fmt.Errorf("model name is required (provider %q)", p.Name)
 			}
@@ -1316,6 +1349,9 @@ func applyJSONConfig(cfg *Config, data []byte) error {
 			if err := json.Unmarshal(value, &cfg.APIFormat); err != nil {
 				return err
 			}
+			if cfg.defaultAPIFormat != "" {
+				cfg.defaultAPIFormat = anthropic.NormalizeFormat(cfg.APIFormat)
+			}
 		case "proxy":
 			if err := json.Unmarshal(value, &cfg.Proxy); err != nil {
 				return err
@@ -1356,8 +1392,15 @@ func applyJSONConfig(cfg *Config, data []byte) error {
 			if err := json.Unmarshal(value, &cfg.Thinking); err != nil {
 				return err
 			}
+			if cfg.defaultAPIFormat != "" {
+				cfg.defaultThinking = cfg.Thinking
+			}
 		case "thinking_text":
 			if err := json.Unmarshal(value, &cfg.ThinkingText); err != nil {
+				return err
+			}
+		case "supported_efforts":
+			if err := json.Unmarshal(value, &cfg.SupportedEfforts); err != nil {
 				return err
 			}
 		case "effort":

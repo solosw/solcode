@@ -512,12 +512,80 @@ Notable session behavior:
 | Streaming | Thought, message, tool-call, and usage updates over `session/update` |
 | Permissions | `session/request_permission` with allow/reject once or always; edit tools can include a diff preview |
 | Cancel | `session/cancel` cancels the in-flight prompt (`stopReason=cancelled`) |
-| Modes | `session/set_mode` maps to permission modes and emits `current_mode_update` |
+| Configuration | `session/new` / `session/load` advertise `configOptions`; `session/set_config_option` selects a model, agent mode, or thinking level and returns the complete updated configuration |
+| Modes | `session/set_mode` remains supported; both APIs synchronize `current_mode_update` and `config_option_update` |
 | History | `session/load` replays saved user/assistant turns |
 | Cross-session memory | `session/new` enables cross-session memory by default and schedules first-prompt recall when memory is enabled. `session/load` preserves the saved choice; `/new-session` still offers an explicit yes/no choice. |
 | Tool diffs | `Edit` / `Write` / `MultiEdit` / `MultiWrite` emit ACP `type: "diff"` content plus `locations` |
 | Plan updates | Successful `TodoWrite` calls emit a full `plan` (`sessionUpdate: "plan"`) update; when every item is `completed`, the agent sends `entries: []` (cleared plan) |
 | Client filesystem | When the client advertises FS capabilities at `initialize`, text tools use per-session `fs/read_text_file` and `fs/write_text_file`; otherwise they fall back to the local disk. `TodoWrite` always stays on the agent-local todo file (never client FS). In `bypass` / `goal` modes, writes also fall back to local disk so the client does not show a second file-accept prompt |
+
+#### Session configuration options
+
+ACP clients can render three selectors from the `configOptions` returned by
+`session/new` and `session/load`:
+
+| `id` / `category` | Values |
+|-------------------|--------|
+| `model` | All models in the configured providers, with provider-qualified value IDs to distinguish duplicate names |
+| `mode` | `auto`, `accept_edits`, `bypass`, `plan`, `goal`, `ultra` (Solcode permission modes, not generic Ask/Code labels) |
+| `thought_level` | Only the current model's declared `supported_efforts`, mapped to Solcode's `effort`; omitted when capabilities are unknown or empty |
+
+Use each option's advertised `value` rather than deriving it from its display name:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "method": "session/set_config_option",
+  "params": {
+    "sessionId": "<sessionId>",
+    "configId": "thought_level",
+    "value": "high"
+  }
+}
+```
+
+The response contains the full `configOptions` array, including dependent changes
+such as a selected model's default effort. `config_option_update` notifications
+also carry the full array after config changes, legacy mode switches,
+agent-initiated mode changes, and `/model`, `/provider`, or `/effort` selections.
+Legacy `modes` metadata is still provided for older clients.
+
+These selections (including ACP `/model`, `/provider`, and `/effort`) are
+session-scoped and never rewrite global settings. When session persistence is
+enabled, stable model/mode/effort IDs are saved in an `acp-config/` sidecar in the
+session directory, separate from the transcript and without credentials.
+`session/load` restores them, validates them against the current catalog, and
+reports unavailable saved settings in visible adjustment notices.
+
+Settings can change during generation: an already-started model API call keeps
+its captured configuration; the next main-agent API call uses the confirmed
+provider/model/effort, even within the same prompt. Visible history and tool
+calls/results are preserved across providers; model-specific opaque reasoning
+blocks are removed. Child agents already running keep their model snapshot.
+Permission-mode changes take effect immediately through the existing permission
+service. Local preflight validates model IDs, endpoints, and credentials; it does
+not probe paid endpoints or guarantee a provider is reachable.
+
+Declare verified reasoning capabilities on each provider's model, for example
+`"supported_efforts": ["low", "medium", "high"]` and `"effort": "high"` **only if
+the configured endpoint actually supports them**. Omission/`null` means unknown
+(no selector); `[]` means explicitly no adjustable reasoning (clears effort and
+thinking). A legacy single-model configuration may declare `supported_efforts`
+at the top level. Switching models retains a still-supported level, otherwise
+uses the target's valid default. No capabilities are guessed from model names.
+
+The bundled desktop client renders the first `mode`, `model`, and
+`thought_level` options alongside the composer, with other select options in
+More settings. It serializes changes, replaces complete snapshots in wire
+arrival order, waits for changes before sending a prompt, and retains confirmed
+state on failure. BaoCode is a separate client and must implement the same
+contract. See [ACP selector integration](docs/acp-config-options.md).
+
+This implementation negotiates **ACP v1 only** (`id` in option objects). It does
+not claim v2 support; a future v2 adapter must translate `configId`, value types,
+and the rest of the session lifecycle rather than changing the version number.
 
 Client FS access is capability-gated per session (captured at `session/new` / `session/load`). `ViewImage` stays on the local path because ACP text-file RPCs are text-only.
 
@@ -680,7 +748,8 @@ All configuration lives in a JSON file. Example:
 | `stream` | bool | Enable streaming responses |
 | `thinking` | bool | Enable extended thinking |
 | `thinking_text` | bool | Show thinking text in TUI |
-| `effort` | string | Thinking effort: `low`, `medium`, `high` |
+| `effort` | string | Thinking effort sent to the configured model; must be supported by its endpoint |
+| `supported_efforts` | string[] | Verified per-model (or legacy top-level) levels for ACP; omitted/null = unknown, empty = no adjustable reasoning |
 | `permission_mode` | string | One of `auto`, `accept_edits`, `bypass`, `yolo`, `plan` |
 | `permissions.bypass_subagents` | bool | Enable `Task` and explorer/worker/reviewer sub-agents in bypass; default `false`, does not affect ultra |
 | `providers` | array | Multi-provider configuration |

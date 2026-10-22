@@ -277,7 +277,7 @@ func TestACPMCPServerEnvironmentDecoding(t *testing.T) {
 func TestACPSlashHelpAndModelPicker(t *testing.T) {
 	client := newACPHarnessWithConfig(t, func(cfg config.Config) config.Config {
 		cfg.Providers = []config.ProviderConfig{{
-			Name: "local",
+			Name: "local", APIKey: "test",
 			Models: []config.ModelConfig{
 				{Name: "fast", ID: "fast-id"},
 				{Name: "smart", ID: "smart-id", Default: true},

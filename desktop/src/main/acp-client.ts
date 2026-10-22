@@ -11,13 +11,16 @@ import type { AcpSessionMode, AcpSessionUpdate, AcpToolLocation } from '../share
 
 /** A JSON-RPC request still waiting for its response. */
 interface PendingCall {
+  method: string
+  sessionId?: string
   resolve(value: unknown): void
   reject(error: Error): void
 }
 
 /** Callbacks the session layer supplies to react to agent traffic. */
 export interface AcpClientEvents {
-  onUpdate(update: AcpSessionUpdate): void
+  onUpdate(update: AcpSessionUpdate, sessionId: string, sequence: number): void
+  onConfigOptions?(sessionId: string, options: unknown, sequence: number): void
   /** The agent asked permission; the returned value answers `requestId`. */
   onRequestPermission(requestId: number, params: unknown): void
   onStderr(line: string): void
@@ -32,6 +35,8 @@ export interface InitializeResult {
 
 /** Result of a successful `session/new`. */
 export interface NewSessionResult {
+  configOptions?: unknown
+  sequence?: number
   sessionId: string
   modes?: { currentModeId: string; availableModes: AcpSessionMode[] }
 }
@@ -45,6 +50,7 @@ export interface NewSessionResult {
 export class AcpClient {
   private child: ChildProcessWithoutNullStreams | null = null
   private buffer = ''
+  private receiveSequence = 0
   private nextId = 1
   private readonly pending = new Map<number, PendingCall>()
   private closed = false
@@ -98,7 +104,7 @@ export class AcpClient {
 
   /** Send `initialize` and return the negotiated protocol details. */
   async initialize(): Promise<InitializeResult> {
-    return await this.call('initialize', {
+    const result = await this.call('initialize', {
       protocolVersion: 1,
       clientInfo: { name: 'solcode-desktop', title: 'Solcode Desktop', version: '0.1.0' },
       // solcode routes file reads/writes through the client only when these are
@@ -106,6 +112,8 @@ export class AcpClient {
       // already given as its working directory.
       clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
     }) as InitializeResult
+    if (result.protocolVersion !== 1) throw new Error(`Unsupported ACP protocol version: ${String(result.protocolVersion)}`)
+    return result
   }
 
   /** Create a session rooted at `cwd`. */
@@ -115,7 +123,8 @@ export class AcpClient {
 
   /** Resume a persisted session by id. */
   async loadSession(sessionId: string, cwd: string): Promise<NewSessionResult> {
-    return await this.call('session/load', { sessionId, cwd, mcpServers: [] }) as NewSessionResult
+    const result = await this.call('session/load', { sessionId, cwd, mcpServers: [] }) as Omit<NewSessionResult, 'sessionId'>
+    return { ...result, sessionId }
   }
 
   /**
@@ -138,6 +147,10 @@ export class AcpClient {
   /** Switch the session's permission mode. */
   async setMode(sessionId: string, modeId: string): Promise<void> {
     await this.call('session/set_mode', { sessionId, modeId })
+  }
+
+  async setConfigOption(sessionId: string, configId: string, value: string): Promise<{ configOptions: unknown; sequence: number }> {
+    return await this.call('session/set_config_option', { sessionId, configId, value }) as { configOptions: unknown; sequence: number }
   }
 
   /** Answer a `session/request_permission` call. */
@@ -179,6 +192,8 @@ export class AcpClient {
       this.events.onStderr(line)
       return
     }
+    if (typeof message !== 'object' || message === null) return
+    this.receiveSequence++
     if (typeof message.method === 'string') {
       this.handleIncoming(message)
       return
@@ -192,14 +207,24 @@ export class AcpClient {
       call.reject(new Error(message.error.message))
       return
     }
+    const result = message.result as { sessionId?: string; configOptions?: unknown; sequence?: number } | undefined
+    if (call.method === 'session/set_config_option' && !Array.isArray(result?.configOptions)) {
+      call.reject(new Error('Agent did not return a complete configuration snapshot'))
+      return
+    }
+    if (result !== undefined && typeof result === 'object' && result !== null && 'configOptions' in result) {
+      result.sequence = this.receiveSequence
+      const sessionId = call.sessionId ?? result.sessionId
+      if (sessionId !== undefined) this.events.onConfigOptions?.(sessionId, result.configOptions, this.receiveSequence)
+    }
     call.resolve(message.result)
   }
 
   /** Handle an agent-initiated request (permission) or notification (update). */
   private handleIncoming(message: JsonRpcMessage): void {
     if (message.method === 'session/update') {
-      const params = message.params as { update?: AcpSessionUpdate } | undefined
-      if (params?.update !== undefined) this.events.onUpdate(params.update)
+      const params = message.params as { sessionId?: string; update?: AcpSessionUpdate } | undefined
+      if (params?.update !== undefined && typeof params.sessionId === 'string') this.events.onUpdate(params.update, params.sessionId, this.receiveSequence)
       return
     }
     if (message.method === 'session/request_permission') {
@@ -219,7 +244,10 @@ export class AcpClient {
     if (this.closed || this.child === null) throw new Error('solcode --acp is not running')
     const id = this.nextId++
     const promise = new Promise<unknown>((resolve, reject) => {
-      this.pending.set(id, { resolve, reject })
+      const request = params as { sessionId?: string }
+      const pending: PendingCall = { resolve, reject, method }
+      if (typeof request.sessionId === 'string') pending.sessionId = request.sessionId
+      this.pending.set(id, pending)
     })
     this.write({ jsonrpc: '2.0', id, method, params })
     return await promise

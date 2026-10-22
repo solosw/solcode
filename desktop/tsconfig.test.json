@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.renderer.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "allowImportingTsExtensions": false,
+    "rootDir": "src",
+    "outDir": "dist/test-renderer"
+  },
+  "include": ["src/renderer/components/ConfigSelectors.tsx"]
+}

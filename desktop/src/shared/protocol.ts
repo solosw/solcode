@@ -1,3 +1,5 @@
+import type { ConfigOption } from './config-options.js'
+
 /**
  * Wire types shared by the ACP client (main process) and the renderer.
  *
@@ -16,6 +18,7 @@ export const ACP_METHOD = {
   sessionPrompt: 'session/prompt',
   sessionCancel: 'session/cancel',
   sessionSetMode: 'session/set_mode',
+  sessionSetConfigOption: 'session/set_config_option',
   sessionUpdate: 'session/update',
   requestPermission: 'session/request_permission',
   fsReadTextFile: 'fs/read_text_file',
@@ -76,6 +79,7 @@ export interface AcpToolLocation {
  * because each variant populates a different subset.
  */
 export interface AcpSessionUpdate {
+  configOptions?: unknown
   sessionUpdate: string
   /** Text or image content for message/thought chunks. */
   text?: string
@@ -150,6 +154,9 @@ export type TranscriptEntry =
 
 /** Snapshot of agent state pushed to the renderer. */
 export interface SessionSnapshot {
+  configOptions?: ConfigOption[]
+  configPending?: number
+  configError?: string
   sessionId: string | null
   cwd: string | null
   status: 'starting' | 'ready' | 'prompting' | 'error' | 'exited'
@@ -167,9 +174,10 @@ export interface SessionSnapshot {
 /** Actions the renderer can invoke on the main process. */
 export interface DesktopBridge {
   getSnapshot(): Promise<SessionSnapshot>
-  prompt(text: string): Promise<void>
+  prompt(text: string, sessionId: string): Promise<void>
   cancel(): Promise<void>
-  setMode(modeId: string): Promise<void>
+  setMode(modeId: string, sessionId: string): Promise<void>
+  setConfigOption(sessionId: string, configId: string, value: string): Promise<void>
   newSession(cwd: string): Promise<void>
   pickDirectory(): Promise<string | null>
   respondPermission(requestId: number, optionId: string | null): Promise<void>

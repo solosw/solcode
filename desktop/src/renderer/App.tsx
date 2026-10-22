@@ -36,24 +36,33 @@ export function App(): JSX.Element {
       }))
       return
     }
-    const unsubscribe = bridge.onSnapshot(setSnapshot)
-    void bridge.getSnapshot().then(current => { if (current !== null) setSnapshot(current) })
-    return unsubscribe
+    let received = false
+    let mounted = true
+    const unsubscribe = bridge.onSnapshot(current => { received = true; setSnapshot(current) })
+    void bridge.getSnapshot().then(current => { if (mounted && !received && current !== null) setSnapshot(current) })
+    return () => { mounted = false; unsubscribe() }
   }, [])
 
-  const onPrompt = useCallback((text: string) => {
-    void bridge?.prompt(text).catch((cause: unknown) => {
-      setSnapshot(previous => ({
-        ...previous,
-        status: 'error',
-        error: cause instanceof Error ? cause.message : String(cause),
-      }))
-    })
-  }, [])
+  const [actionError, setActionError] = useState<string>()
+  const onPrompt = useCallback(async (text: string): Promise<void> => {
+    if (bridge === undefined || snapshot.sessionId === null) throw new Error('No active session')
+    await bridge.prompt(text, snapshot.sessionId)
+  }, [snapshot.sessionId])
+
+  const onConfigChange = useCallback(async (configId: string, value: string): Promise<void> => {
+    if (bridge === undefined || snapshot.sessionId === null) throw new Error('No active session')
+    await bridge.setConfigOption(snapshot.sessionId, configId, value)
+  }, [snapshot.sessionId])
 
   const onCancel = useCallback(() => { void bridge?.cancel() }, [])
-
-  const onSetMode = useCallback((modeId: string) => { void bridge?.setMode(modeId) }, [])
+  const onSetMode = useCallback((modeId: string) => {
+    if (snapshot.sessionId === null) return
+    setActionError(undefined)
+    void bridge?.setMode(modeId, snapshot.sessionId).catch((cause: unknown) => {
+      setActionError(cause instanceof Error ? cause.message : String(cause))
+    })
+  }, [snapshot.sessionId])
+  useEffect(() => { setActionError(undefined) }, [snapshot.sessionId])
 
   const onPickDirectory = useCallback(() => {
     void bridge?.pickDirectory().then((path) => {
@@ -102,6 +111,8 @@ export function App(): JSX.Element {
           </div>
         ) : null}
 
+        {actionError !== undefined ? <p role="alert" className="px-4 py-2 text-[12px] text-removed">{actionError}</p> : null}
+
         <Transcript
           entries={snapshot.transcript}
           cwd={snapshot.cwd}
@@ -109,6 +120,8 @@ export function App(): JSX.Element {
         />
 
         <Composer
+          key={snapshot.sessionId}
+          onConfigChange={onConfigChange}
           snapshot={snapshot}
           onPrompt={onPrompt}
           onCancel={onCancel}

@@ -241,7 +241,10 @@ func (sess *acpSession) persistID() string {
 }
 
 func (s *Server) slashPickModel(ctx context.Context, sess *acpSession, persistencePath string) (string, error) {
-	models := sess.cfg.ListModels()
+	sess.mu.Lock()
+	cfg := sess.cfg
+	sess.mu.Unlock()
+	models := cfg.ListModels()
 	if len(models) == 0 {
 		return "No models available for the current provider.", nil
 	}
@@ -260,29 +263,26 @@ func (s *Server) slashPickModel(ctx context.Context, sess *acpSession, persisten
 	if err != nil {
 		return "", err
 	}
-	next, err := sess.cfg.WithModel(choice)
-	if err != nil {
+	defer s.emitConfigOptions(sess)
+	// The choice is scoped to the provider shown when the picker opened. The
+	// standard setter revalidates it against the latest confirmed catalog.
+	if _, err := sess.setConfigOption("model", configModelValue(cfg.Provider, choice)); err != nil {
 		return fmt.Sprintf("Could not switch model to %q: %v", choice, err), nil
 	}
-	if err := sess.application.SwitchModel(next); err != nil {
-		return fmt.Sprintf("Could not switch model to %q: %v", choice, err), nil
-	}
-	sess.cfg = next
-	msg := fmt.Sprintf("Switched model to %s. Future prompts will use this model.", next.Model)
-	if err := config.SaveLocalOverrides(persistencePath, map[string]any{"model": choice}); err != nil {
-		msg += fmt.Sprintf("\nWarning: could not persist model selection: %v", err)
-	}
-	return msg, nil
+	return fmt.Sprintf("Switched model to %s. The next model call will use this model.", choice), nil
 }
 
 func (s *Server) slashPickProvider(ctx context.Context, sess *acpSession, persistencePath string) (string, error) {
-	if len(sess.cfg.Providers) == 0 {
+	sess.mu.Lock()
+	cfg := sess.cfg
+	sess.mu.Unlock()
+	if len(cfg.Providers) == 0 {
 		return "No providers configured.", nil
 	}
-	options := make([]PermissionOption, 0, len(sess.cfg.Providers))
-	for _, p := range sess.cfg.Providers {
+	options := make([]PermissionOption, 0, len(cfg.Providers))
+	for _, p := range cfg.Providers {
 		label := p.Name
-		if sess.cfg.Provider == p.Name {
+		if cfg.Provider == p.Name {
 			label += " (current)"
 		}
 		options = append(options, PermissionOption{OptionID: p.Name, Name: label, Kind: "allow_once"})
@@ -291,27 +291,53 @@ func (s *Server) slashPickProvider(ctx context.Context, sess *acpSession, persis
 	if err != nil {
 		return "", err
 	}
-	next, err := sess.cfg.WithProvider(choice)
+	defer s.emitConfigOptions(sess)
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	candidate := cloneModelCatalog(sess.cfg)
+	candidate.Provider, candidate.Model = choice, ""
+	// Resolve this provider's default, then pass through the same runtime
+	// validation, capability reconciliation, and per-session commit path.
+	model := ""
+	for _, provider := range candidate.Providers {
+		if provider.Name != choice {
+			continue
+		}
+		for _, entry := range provider.Models {
+			if model == "" || entry.Default {
+				model = entry.Name
+				if model == "" {
+					model = entry.ID
+				}
+			}
+			if entry.Default {
+				break
+			}
+		}
+	}
+	next, err := selectSessionModel(candidate, choice, model)
 	if err != nil {
 		return fmt.Sprintf("Could not switch provider to %q: %v", choice, err), nil
 	}
-	if err := sess.application.SwitchModel(next); err != nil {
+	next = next.WithModelEffort(sess.cfg.Effort)
+	if err := sess.commitConfigLocked(next); err != nil {
 		return fmt.Sprintf("Could not switch provider to %q: %v", choice, err), nil
 	}
-	sess.cfg = next
-	msg := fmt.Sprintf("Switched provider to %s. Model is now %s.", next.Provider, next.Model)
-	if err := config.SaveLocalOverrides(persistencePath, map[string]any{"provider": choice}); err != nil {
-		msg += fmt.Sprintf("\nWarning: could not persist provider selection: %v", err)
-	}
-	return msg, nil
+	return fmt.Sprintf("Switched provider to %s. Model is now %s.", next.Provider, next.Model), nil
 }
 
 func (s *Server) slashPickEffort(ctx context.Context, sess *acpSession, persistencePath string) (string, error) {
-	efforts := []string{"low", "medium", "high", "xhigh", "max"}
+	sess.mu.Lock()
+	cfg := sess.cfg
+	sess.mu.Unlock()
+	efforts := cfg.ModelEfforts()
+	if len(efforts) == 0 {
+		return "The current model does not declare adjustable thinking levels.", nil
+	}
 	options := make([]PermissionOption, 0, len(efforts))
 	for _, effort := range efforts {
 		label := effort
-		if sess.cfg.Effort == effort {
+		if cfg.Effort == effort {
 			label += " (current)"
 		}
 		options = append(options, PermissionOption{OptionID: effort, Name: label, Kind: "allow_once"})
@@ -320,17 +346,11 @@ func (s *Server) slashPickEffort(ctx context.Context, sess *acpSession, persiste
 	if err != nil {
 		return "", err
 	}
-	next := sess.cfg
-	next.Effort = choice
-	if err := sess.application.SwitchModel(next); err != nil {
+	defer s.emitConfigOptions(sess)
+	if _, err := sess.setConfigOption("thought_level", choice); err != nil {
 		return fmt.Sprintf("Could not switch effort to %q: %v", choice, err), nil
 	}
-	sess.cfg = next
-	msg := fmt.Sprintf("Switched effort to %s.", choice)
-	if err := config.SaveLocalOverrides(persistencePath, map[string]any{"effort": choice}); err != nil {
-		msg += fmt.Sprintf("\nWarning: could not persist effort selection: %v", err)
-	}
-	return msg, nil
+	return fmt.Sprintf("Switched effort to %s.", choice), nil
 }
 
 func (s *Server) slashSessions(ctx context.Context, sess *acpSession, persistencePath string) (string, error) {

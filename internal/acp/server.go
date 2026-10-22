@@ -52,16 +52,18 @@ type Server struct {
 }
 
 type acpSession struct {
-	id          string
-	diskID      string // persisted session id used by App.RunPromptWithSession
-	workDir     string
-	cfg         config.Config
-	application *app.App
-	mu          sync.Mutex
-	cancel      context.CancelFunc
-	promptCtx   context.Context
-	prompting   bool
-	toolCalls   map[string]string
+	id            string
+	diskID        string // persisted session id used by App.RunPromptWithSession
+	workDir       string
+	cfg           config.Config
+	application   *app.App
+	mu            sync.Mutex
+	cancel        context.CancelFunc
+	promptCtx     context.Context
+	prompting     bool
+	pendingConfig bool
+	configNotices []string
+	toolCalls     map[string]string
 	// toolCallsByID maps model tool_use ids (and generated ACP ids) to ACP toolCallIds.
 	toolCallsByID map[string]string
 	// lastToolInput caches the most recent input per tool name for permission diffs.
@@ -171,6 +173,8 @@ func (s *Server) handle(ctx context.Context, msg jsonrpcMessage) error {
 		return s.handleSessionCancel(msg)
 	case MethodSessionSetMode:
 		return s.handleSessionSetMode(msg)
+	case MethodSessionSetConfigOption:
+		return s.handleSessionSetConfigOption(msg)
 	default:
 		return s.conn.ReplyError(msg.ID, JSONRPCMethodNotFound, "method not found: "+msg.Method)
 	}
@@ -226,9 +230,18 @@ func (s *Server) handleSessionNew(ctx context.Context, msg jsonrpcMessage) error
 		s.removeSession(sess.id)
 		return s.conn.ReplyError(msg.ID, JSONRPCInternalError, err.Error())
 	}
+	sess.mu.Lock()
+	err = sess.saveConfigLocked(sess.cfg)
+	sess.mu.Unlock()
+	if err != nil {
+		sess.close()
+		s.removeSession(sess.id)
+		return s.conn.ReplyError(msg.ID, JSONRPCInternalError, "could not save initial session configuration: "+err.Error())
+	}
 	if err := s.conn.Reply(msg.ID, SessionNewResult{
-		SessionID: sess.id,
-		Modes:     modeState(sess.application.Permissions.Mode()),
+		ConfigOptions: sess.configOptions(),
+		SessionID:     sess.id,
+		Modes:         modeState(sess.application.Permissions.Mode()),
 	}); err != nil {
 		return err
 	}
@@ -290,7 +303,7 @@ func (s *Server) handleSessionLoad(ctx context.Context, msg jsonrpcMessage) erro
 		}
 		return s.conn.ReplyError(msg.ID, JSONRPCInternalError, err.Error())
 	}
-	if err := s.conn.Reply(msg.ID, SessionLoadResult{Modes: modeState(sess.application.Permissions.Mode())}); err != nil {
+	if err := s.conn.Reply(msg.ID, SessionLoadResult{Modes: modeState(sess.application.Permissions.Mode()), ConfigOptions: sess.configOptions()}); err != nil {
 		return err
 	}
 	s.emitSessionBootstrap(sess)
@@ -322,6 +335,9 @@ func (s *Server) prepareSessionPrompt(ctx context.Context, msg jsonrpcMessage) (
 		return nil, s.conn.ReplyError(msg.ID, JSONRPCInvalidParams, "prompt is required")
 	}
 
+	if err := sess.applyPendingConfig(); err != nil {
+		return nil, s.conn.ReplyError(msg.ID, JSONRPCInternalError, err.Error())
+	}
 	runCtx, cancel := conversationContext(ctx, s.timeout)
 	if !sess.beginPrompt(runCtx, cancel) {
 		cancel()
@@ -414,41 +430,23 @@ func (s *Server) handleSessionSetMode(msg jsonrpcMessage) error {
 		return s.conn.ReplyError(msg.ID, JSONRPCInvalidParams, "invalid mode")
 	}
 	next := permission.NormalizeMode(permission.Mode(params.ModeID))
-	if err := sess.setMode(next); err != nil {
-		return s.conn.ReplyError(msg.ID, JSONRPCInvalidParams, err.Error())
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	options, err := sess.setConfigOptionLocked("mode", string(next))
+	if err != nil {
+		return s.conn.ReplyError(msg.ID, configErrorCode(err), err.Error())
 	}
-	s.emitUpdate(sess.id, SessionUpdate{
-		SessionUpdate: "current_mode_update",
-		CurrentModeID: string(next),
-	})
+	s.emitUpdate(sess.id, SessionUpdate{SessionUpdate: "current_mode_update", CurrentModeID: string(next)})
+	s.emitUpdate(sess.id, SessionUpdate{SessionUpdate: "config_option_update", ConfigOptions: options})
 	return s.conn.Reply(msg.ID, map[string]any{})
 }
 
-func applyMode(application *app.App, next permission.Mode) error {
-	if application == nil || application.Permissions == nil {
-		return fmt.Errorf("permission service is not configured")
-	}
-	if !permission.IsSupportedMode(next) {
-		return fmt.Errorf("unsupported mode %q", next)
-	}
-	next = permission.NormalizeMode(next)
-	application.Permissions.SetMode(next)
-	application.Config.PermissionMode = next
-	application.Config.Permissions.Mode = next
-	return nil
-}
-
 func (sess *acpSession) setMode(next permission.Mode) error {
-	sess.mu.Lock()
-	defer sess.mu.Unlock()
-	if err := applyMode(sess.application, next); err != nil {
-		return err
+	if !permission.IsSupportedMode(next) {
+		return invalidConfigError("unsupported mode %q", next)
 	}
-	// Reloading providers, models, or skills starts from this session config.
-	// Keep it in sync or a later reload silently restores the previous mode.
-	sess.cfg.PermissionMode = sess.application.Permissions.Mode()
-	sess.cfg.Permissions.Mode = sess.cfg.PermissionMode
-	return nil
+	_, err := sess.setConfigOption("mode", string(permission.NormalizeMode(next)))
+	return err
 }
 
 func defaultPromptFunc(ctx context.Context, application *app.App, sessionID, prompt, workDir string, maxTurns int, _ StreamEmitter) (agent.AgentResult, error) {
@@ -502,6 +500,7 @@ func (s *Server) createSession(ctx context.Context, id, cwd string, mcpServers [
 		agentProgressLines: make(map[string][]string),
 	}
 
+	cfg = cfg.WithModelEffort(cfg.Effort)
 	application, cfg, err := s.newApp(cfg,
 		app.WithTextFileSystem(s.textFileSystem(id, fsCapabilities)),
 		app.WithStreamCallbacks(
@@ -531,16 +530,16 @@ func (s *Server) createSession(ctx context.Context, id, cwd string, mcpServers [
 		app.WithAgentProgressCallback(func(event tool.AgentProgressEvent) {
 			s.emitAgentProgress(sess, event)
 		}),
-		app.WithModeChangeCallback(func(mode permission.Mode) error {
-			mode = permission.NormalizeMode(mode)
+		app.WithModeChangeHandler(func(mode permission.Mode) error {
 			sess.mu.Lock()
-			sess.cfg.PermissionMode = mode
-			sess.cfg.Permissions.Mode = mode
-			sess.mu.Unlock()
-			s.emitUpdate(sess.id, SessionUpdate{
-				SessionUpdate: "current_mode_update",
-				CurrentModeID: string(mode),
-			})
+			defer sess.mu.Unlock()
+			mode = permission.NormalizeMode(mode)
+			options, err := sess.setConfigOptionLocked("mode", string(mode))
+			if err != nil {
+				return err
+			}
+			s.emitUpdate(sess.id, SessionUpdate{SessionUpdate: "current_mode_update", CurrentModeID: string(mode)})
+			s.emitUpdate(sess.id, SessionUpdate{SessionUpdate: "config_option_update", ConfigOptions: options})
 			return nil
 		}),
 		app.WithAskUserCallback(func(ctx context.Context, params tool.AskUserParams) (map[string]string, error) {
@@ -585,6 +584,14 @@ func (s *Server) replayPersistedHistory(ctx context.Context, sess *acpSession, r
 		}
 		return err
 	}
+	// Confirm the transcript exists before restoring/re-saving its settings.
+	if err := sess.restoreConfig(ctx); err != nil {
+		return err
+	}
+	// A restored transcript may predate a configuration save or come from
+	// another provider with the same model ID. Never trust opaque signatures
+	// without provider provenance, including after a process restart.
+	sess.application.Engine.InvalidateReasoningHistory()
 	sess.application.SanitizeLoadedSession(loaded)
 	for _, update := range sessionHistoryUpdates(loaded) {
 		s.emitUpdate(sess.id, update)
@@ -609,6 +616,14 @@ func (s *Server) emitSessionBootstrap(sess *acpSession) {
 			CurrentModeID: string(sess.application.Permissions.Mode()),
 		})
 	}
+	s.emitConfigOptions(sess)
+	sess.mu.Lock()
+	notices := append([]string(nil), sess.configNotices...)
+	sess.configNotices = nil
+	sess.mu.Unlock()
+	for _, notice := range notices {
+		s.emitText(sess, "agent_message_chunk", "Session configuration adjusted: "+notice+"\n")
+	}
 	// Publish TUI-aligned context occupancy (used=estimate, size=cfg limit).
 	s.emitSessionUsage(context.Background(), sess)
 }
@@ -624,12 +639,14 @@ func (s *Server) emitSessionUsage(ctx context.Context, sess *acpSession) {
 			current = loaded
 		}
 	}
+	sess.mu.Lock()
 	maxCtx := int64(0)
 	if sess.cfg.MaxContextTokens > 0 {
 		maxCtx = sess.cfg.MaxContextTokens
 	} else {
 		maxCtx = sess.application.Config.MaxContextTokens
 	}
+	sess.mu.Unlock()
 	if current == nil {
 		// Empty session: still report the window size so clients can render the meter.
 		s.emitUpdate(sess.id, SessionUpdate{
@@ -1064,6 +1081,16 @@ func (sess *acpSession) endPrompt() {
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
 	sess.prompting = false
+	// App.Config/client are read throughout the prompt; reconcile ancillary
+	// state only once the prompt has returned. Main API calls already use the
+	// confirmed live engine configuration.
+	if sess.pendingConfig {
+		if err := sess.application.SwitchModel(sess.cfg); err != nil {
+			log.Printf("acp reconcile session config: %v", err)
+		} else {
+			sess.pendingConfig = false
+		}
+	}
 	sess.promptCtx = nil
 	if sess.cancel != nil {
 		sess.cancel()

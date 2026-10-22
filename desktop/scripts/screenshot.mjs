@@ -75,9 +75,9 @@ try {
     if (snapshot?.status === 'ready' && snapshot?.sessionId) break
     await new Promise(r => setTimeout(r, 500))
   }
-  await cdp.evaluate('window.solcode.prompt("/status")')
+  await cdp.evaluate('window.solcode.getSnapshot().then(s => window.solcode.prompt("/status", s.sessionId))')
   await new Promise(r => setTimeout(r, 4000))
-  await cdp.evaluate('window.solcode.prompt("Explain in two sentences what this project is, then run the bash command `echo hello`. Use a tool.")')
+  await cdp.evaluate('window.solcode.getSnapshot().then(s => window.solcode.prompt("Explain in two sentences what this project is, then run the bash command `echo hello`. Use a tool.", s.sessionId))')
   // Poll until the turn actually finishes; a fixed sleep makes the screenshot
   // race the agent and can capture a half-rendered transcript.
   for (let attempt = 0; attempt < 120; attempt += 1) {

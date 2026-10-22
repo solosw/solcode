@@ -48,6 +48,8 @@ type MessageClient interface {
 }
 
 type Config struct {
+	// ModelKey identifies a provider/model for safe reasoning-history replay.
+	ModelKey string
 	// SubagentSessionDir enables independent child observation archives.
 	SubagentSessionDir string
 	Model              Model
@@ -123,8 +125,13 @@ type Config struct {
 }
 
 type Engine struct {
-	configMu sync.RWMutex
-	// runOwner shares prefix state while each run uses an immutable config snapshot.
+	configMu       sync.RWMutex
+	resetReasoning bool
+	// Revoked opaque blocks stay revoked across main-agent retries that restart
+	// from the original transcript, not just the first call after a switch.
+	staleReasoning map[[32]byte]struct{}
+	// runOwner shares prefix state. Each run owns a private config snapshot;
+	// only the main run refreshes model fields at API-call boundaries.
 	runOwner *Engine
 	config   Config
 
@@ -144,6 +151,9 @@ func NewEngine(config Config) *Engine {
 func (e *Engine) UpdateConfig(config Config) {
 	e.configMu.Lock()
 	defer e.configMu.Unlock()
+	if e.config.ModelKey != config.ModelKey || e.config.ModelName != config.ModelName {
+		e.resetReasoning = true
+	}
 	e.config = config
 }
 
@@ -473,6 +483,9 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 		}
 		drainBackground()
 		drainQueuedPrompts()
+		if isMain && cfg.Model == "" {
+			messages = e.refreshMainModel(messages)
+		}
 		modelName := cfg.Model
 		if modelName == "" {
 			modelName = e.config.ModelName
@@ -650,6 +663,16 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 		}
 		if err := runReq.saveCheckpoint("request", messages, workingSet, runUsage, false); err != nil {
 			return RunResult{AgentResult: agent.AgentResult{Error: err.Error(), NoRetry: true}, Messages: messages}
+		}
+		// Routing/compaction may take time. Capture the confirmed model again
+		// immediately before Create, not just at the start of this tool turn.
+		if isMain && cfg.Model == "" {
+			messages = e.refreshMainModel(messages)
+			modelName = e.config.ModelName
+			buildReq.Model, buildReq.Messages = modelName, messages
+			buildReq.MaxTokens = e.config.MaxTokens
+			buildReq.Thinking, buildReq.ThinkingText = e.config.Thinking, e.config.ThinkingText
+			buildReq.Effort, buildReq.Stream = e.config.Effort, e.config.Stream
 		}
 		req := requestBuilder.Build(buildReq)
 		if isMain {

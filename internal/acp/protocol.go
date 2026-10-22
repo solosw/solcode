@@ -18,6 +18,7 @@ const (
 	MethodSessionPrompt            = "session/prompt"
 	MethodSessionCancel            = "session/cancel"
 	MethodSessionSetMode           = "session/set_mode"
+	MethodSessionSetConfigOption   = "session/set_config_option"
 	MethodSessionUpdate            = "session/update"
 	MethodSessionRequestPermission = "session/request_permission"
 	MethodFSReadTextFile           = "fs/read_text_file"
@@ -207,8 +208,9 @@ func decodeMCPNameValues(data []byte, field string) (map[string]string, error) {
 }
 
 type SessionNewResult struct {
-	SessionID string            `json:"sessionId"`
-	Modes     *SessionModeState `json:"modes,omitempty"`
+	ConfigOptions []SessionConfigOption `json:"configOptions,omitempty"`
+	SessionID     string                `json:"sessionId"`
+	Modes         *SessionModeState     `json:"modes,omitempty"`
 }
 
 type SessionLoadParams struct {
@@ -218,7 +220,8 @@ type SessionLoadParams struct {
 }
 
 type SessionLoadResult struct {
-	Modes *SessionModeState `json:"modes,omitempty"`
+	ConfigOptions []SessionConfigOption `json:"configOptions,omitempty"`
+	Modes         *SessionModeState     `json:"modes,omitempty"`
 }
 
 type SessionPromptParams struct {
@@ -245,6 +248,7 @@ type SessionUpdateParams struct {
 }
 
 type SessionUpdate struct {
+	ConfigOptions     []SessionConfigOption
 	SessionUpdate     string
 	Content           *ContentBlock
 	ToolCallID        string
@@ -319,6 +323,9 @@ func (c ToolCallContent) MarshalJSON() ([]byte, error) {
 
 func (u SessionUpdate) MarshalJSON() ([]byte, error) {
 	payload := map[string]any{"sessionUpdate": u.SessionUpdate}
+	if u.ConfigOptions != nil {
+		payload["configOptions"] = u.ConfigOptions
+	}
 	if u.Content != nil {
 		payload["content"] = u.Content
 	}
@@ -405,6 +412,11 @@ func (u *SessionUpdate) UnmarshalJSON(data []byte) error {
 	}
 	if raw, ok := payload["availableCommands"]; ok {
 		_ = json.Unmarshal(raw, &u.AvailableCommands)
+	}
+	if raw, ok := payload["configOptions"]; ok {
+		if err := json.Unmarshal(raw, &u.ConfigOptions); err != nil {
+			return err
+		}
 	}
 	if raw, ok := payload["currentModeId"]; ok {
 		_ = json.Unmarshal(raw, &u.CurrentModeID)

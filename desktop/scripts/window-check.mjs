@@ -120,7 +120,7 @@ try {
 
   if (ready) {
     // Drive a real turn through the same path the composer uses.
-    await cdp.evaluate('window.solcode.prompt("/status")')
+    await cdp.evaluate('window.solcode.getSnapshot().then(s => window.solcode.prompt("/status", s.sessionId))')
     let answered = false
     for (let attempt = 0; attempt < 60 && !answered; attempt += 1) {
       await new Promise(r => setTimeout(r, 500))

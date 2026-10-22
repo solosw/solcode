@@ -5,6 +5,7 @@ import type { JSX } from 'react'
 import { ArrowUp, FolderOpen, Square, Zap } from 'lucide-react'
 import type { AcpAvailableCommand, SessionSnapshot } from '@shared/protocol'
 import { cn } from '../lib/utils'
+import { ConfigSelectors } from './ConfigSelectors'
 
 /** Commands matching the token currently being typed after a leading slash. */
 function matchingCommands(text: string, commands: AcpAvailableCommand[]): AcpAvailableCommand[] {
@@ -15,14 +16,18 @@ function matchingCommands(text: string, commands: AcpAvailableCommand[]): AcpAva
 }
 
 /** The prompt input row. */
-export function Composer({ snapshot, onPrompt, onCancel, onPickDirectory }: {
+export function Composer({ snapshot, onPrompt, onCancel, onPickDirectory, onConfigChange }: {
   snapshot: SessionSnapshot
-  onPrompt(text: string): void
+  onPrompt(text: string): Promise<void>
+  onConfigChange(configId: string, value: string): Promise<void>
   onCancel(): void
   onPickDirectory(): void
 }): JSX.Element {
   const [text, setText] = useState('')
   const [selected, setSelected] = useState(0)
+  const [sending, setSending] = useState(false)
+  const [submitError, setSubmitError] = useState<string>()
+  const submitting = useRef(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   const busy = snapshot.status === 'prompting'
@@ -39,11 +44,21 @@ export function Composer({ snapshot, onPrompt, onCancel, onPickDirectory }: {
     element.style.height = `${Math.min(element.scrollHeight, 200)}px`
   }, [text])
 
-  const submit = (): void => {
+  const submit = async (): Promise<void> => {
     const value = text.trim()
-    if (value === '' || !ready) return
-    onPrompt(value)
-    setText('')
+    if (value === '' || !ready || busy || submitting.current) return
+    submitting.current = true
+    setSending(true)
+    setSubmitError(undefined)
+    try {
+      await onPrompt(value)
+      setText(previous => previous === text ? '' : previous)
+    } catch (cause) {
+      setSubmitError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      submitting.current = false
+      setSending(false)
+    }
   }
 
   const acceptSuggestion = (command: AcpAvailableCommand): void => {
@@ -53,6 +68,8 @@ export function Composer({ snapshot, onPrompt, onCancel, onPickDirectory }: {
 
   return (
     <div className="mx-auto w-full max-w-3xl px-6 pb-5">
+      <ConfigSelectors snapshot={snapshot} onChange={onConfigChange} />
+      {submitError !== undefined ? <p role="alert" className="mb-2 text-[11.5px] text-removed">{submitError}</p> : null}
       {suggestions.length > 0 ? (
         <div className="mb-2 overflow-hidden rounded-lg border border-border bg-card shadow-lg">
           {suggestions.map((command, index) => (
@@ -99,7 +116,7 @@ export function Composer({ snapshot, onPrompt, onCancel, onPickDirectory }: {
             }
             if (event.key === 'Enter' && !event.shiftKey) {
               event.preventDefault()
-              submit()
+              void submit()
             }
           }}
           placeholder={ready ? 'Ask solcode to build, explain, or fix something…' : 'Waiting for solcode…'}
@@ -137,8 +154,8 @@ export function Composer({ snapshot, onPrompt, onCancel, onPickDirectory }: {
             ) : null}
             <button
               type="button"
-              onClick={submit}
-              disabled={text.trim() === '' || !ready}
+              onClick={() => { void submit() }}
+              disabled={text.trim() === '' || !ready || busy || sending}
               className="flex size-7 items-center justify-center rounded-md bg-primary text-primary-foreground disabled:opacity-40"
               title="Send"
             >

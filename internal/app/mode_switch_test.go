@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -222,6 +223,41 @@ func TestSwitchModePersistsCanonicalUltra(t *testing.T) {
 			}
 			if approvals != 1 || persisted != permission.ModeUltra || application.Permissions.Mode() != permission.ModeUltra || application.Config.PermissionMode != permission.ModeUltra || application.Config.Permissions.Mode != permission.ModeUltra {
 				t.Fatalf("approvals = %d, persisted = %q, mode = %q, config = %+v", approvals, persisted, application.Permissions.Mode(), application.Config)
+			}
+		})
+	}
+}
+
+func TestSwitchModeSessionHandlerOwnsAtomicCommit(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		t.Run(fmt.Sprint(fail), func(t *testing.T) {
+			cfg := config.Default()
+			application := &App{Config: cfg, Permissions: permission.NewService(permission.ModeAuto)}
+			calls := 0
+			application.applyMode = func(next permission.Mode) error {
+				calls++
+				if fail {
+					return fmt.Errorf("session save failed")
+				}
+				application.Permissions.SetMode(next)
+				return nil
+			}
+			application.Permissions.SetAskFunc(func(string, string) bool { return true })
+			err := application.SwitchMode(t.Context(), "plan")
+			if (err != nil) != fail || calls != 1 {
+				t.Fatalf("calls=%d err=%v", calls, err)
+			}
+			want := permission.ModePlan
+			if fail {
+				want = permission.ModeAuto
+			}
+			if application.Permissions.Mode() != want {
+				t.Fatalf("mode=%s", application.Permissions.Mode())
+			}
+			// Session handlers can freeze App.Config until the prompt is idle. The
+			// generic fallback must not perform a second, unsynchronized state write.
+			if application.Config.PermissionMode != cfg.PermissionMode {
+				t.Fatal("fallback mutated session-owned config")
 			}
 		})
 	}

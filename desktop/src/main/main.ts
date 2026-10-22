@@ -24,9 +24,10 @@ const SNAPSHOT_CHANNEL = 'solcode:snapshot'
 /** Request shapes mirrored from the preload bridge. */
 type InvokeRequest =
   | { action: 'snapshot' }
-  | { action: 'prompt'; text: string }
+  | { action: 'prompt'; text: string; sessionId: string }
   | { action: 'cancel' }
-  | { action: 'setMode'; modeId: string }
+  | { action: 'setMode'; modeId: string; sessionId: string }
+  | { action: 'setConfigOption'; configId: string; value: string; sessionId: string }
   | { action: 'newSession'; cwd: string }
   | { action: 'pickDirectory' }
   | { action: 'respondPermission'; requestId: number; optionId: string | null }
@@ -72,13 +73,16 @@ function broadcast(): void {
 
 /** Start the agent and complete the ACP handshake. */
 async function startAgent(cwd: string): Promise<void> {
+  session?.dispose()
   client?.stop()
+  pendingPermissionId = null
   const { command, args } = resolveSolcodeCommand()
   const created = new AcpClient(command, args, cwd, process.env, {
-    onUpdate: (update) => { session?.apply(update) },
-    onRequestPermission: (requestId, params) => { handlePermissionRequest(requestId, params) },
+    onUpdate: (update, sessionId, sequence) => { if (client === created) active.apply(update, sessionId, sequence) },
+    onConfigOptions: (sessionId, options, sequence) => { if (client === created) active.applyConfigSnapshot(sessionId, options, sequence) },
+    onRequestPermission: (requestId, params) => { if (client === created) handlePermissionRequest(requestId, params) },
     onStderr: (line) => { process.stderr.write(`[solcode] ${line}\n`) },
-    onExit: (code) => { session?.markExited(code) },
+    onExit: (code) => { if (client === created) active.markExited(code) },
   })
   const active = new AgentSession(created)
   client = created
@@ -88,10 +92,12 @@ async function startAgent(cwd: string): Promise<void> {
   created.start()
   try {
     const info = await created.initialize()
+    if (client !== created) return
     active.setAgentVersion(info.agentInfo.version)
     const result = await created.newSession(cwd)
-    active.adoptSession(result, cwd)
+    if (client === created) active.adoptSession(result, cwd)
   } catch (cause) {
+    if (client !== created) return
     active.markError(cause instanceof Error ? cause.message : String(cause))
   }
 }
@@ -136,15 +142,18 @@ async function handleInvoke(request: InvokeRequest): Promise<unknown> {
       return session?.snapshot() ?? null
     case 'prompt': {
       if (client === null || session === null) throw new Error('agent is not running')
-      const current = session.snapshot()
-      if (current.sessionId === null) throw new Error('no active session')
-      session.addUserMessage(request.text)
-      // The turn resolves only when the whole agent loop finishes, so the reply
-      // is deliberately not awaited before returning to the renderer.
-      void client.prompt(current.sessionId, request.text)
-        .then(() => { session?.markTurnEnded() })
+      const active = session
+      const transport = client
+      if (active.sessionId !== request.sessionId) throw new Error('Session changed; prompt cancelled')
+      await active.waitForConfiguration()
+      if (session !== active || client !== transport) throw new Error('Session changed; prompt cancelled')
+      const current = active.snapshot()
+      if (current.sessionId === null || current.status !== 'ready') throw new Error('Session is not ready for a new prompt')
+      active.addUserMessage(request.text)
+      void transport.prompt(current.sessionId, request.text)
+        .then(() => { if (session === active) active.markTurnEnded() })
         .catch((cause: unknown) => {
-          session?.markError(cause instanceof Error ? cause.message : String(cause))
+          if (session === active) active.markError(cause instanceof Error ? cause.message : String(cause))
         })
       return null
     }
@@ -154,10 +163,21 @@ async function handleInvoke(request: InvokeRequest): Promise<unknown> {
       if (current.sessionId !== null) await client.cancel(current.sessionId)
       return null
     }
+    case 'setConfigOption': {
+      if (session === null || session.sessionId !== request.sessionId) throw new Error('Session changed; configuration cancelled')
+      await session.setConfigOption(request.configId, request.value)
+      return null
+    }
     case 'setMode': {
-      if (client === null || session === null) return null
+      if (client === null || session === null || session.sessionId !== request.sessionId) throw new Error('Session changed')
       const current = session.snapshot()
-      if (current.sessionId !== null) await client.setMode(current.sessionId, request.modeId)
+      if (current.configOptions !== undefined) {
+        const mode = current.configOptions.find(option => option.category === 'mode')
+        if (mode === undefined) throw new Error('No mode configuration is available')
+        await session.setConfigOption(mode.id, request.modeId)
+      } else {
+        await client.setMode(request.sessionId, request.modeId)
+      }
       return null
     }
     case 'newSession': {
@@ -248,7 +268,7 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
 
-app.on('before-quit', () => { client?.stop() })
+app.on('before-quit', () => { session?.dispose(); client?.stop() })
 
 /** Keeps the snapshot type reachable for the preload's declaration merging. */
 export type { SessionSnapshot }

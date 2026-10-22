@@ -77,6 +77,7 @@ type App struct {
 	onStatus        func(string)
 	onAgentProgress func(tool.AgentProgressEvent)
 	onModeChange    func(permission.Mode) error
+	applyMode       func(permission.Mode) error
 	onAskUser       func(ctx context.Context, params tool.AskUserParams) (map[string]string, error)
 	textFileSystem  tool.TextFileSystem
 	queuedPrompts   func() []string
@@ -94,6 +95,7 @@ type options struct {
 	onStatus        func(string)
 	onAgentProgress func(tool.AgentProgressEvent)
 	onModeChange    func(permission.Mode) error
+	applyMode       func(permission.Mode) error
 	onAskUser       func(ctx context.Context, params tool.AskUserParams) (map[string]string, error)
 	textFileSystem  tool.TextFileSystem
 	queuedPrompts   func() []string
@@ -159,6 +161,13 @@ func WithAgentProgressCallback(onAgentProgress func(tool.AgentProgressEvent)) Op
 	return func(o *options) {
 		o.onAgentProgress = onAgentProgress
 	}
+}
+
+// WithModeChangeHandler delegates an already-authorized transition's entire
+// commit to a session owner. Unlike the persistence callback, the handler owns
+// runtime permission updates and must leave state unchanged on failure.
+func WithModeChangeHandler(handler func(permission.Mode) error) Option {
+	return func(o *options) { o.applyMode = handler }
 }
 
 func WithModeChangeCallback(onModeChange func(permission.Mode) error) Option {
@@ -249,6 +258,7 @@ func New(cfg config.Config, opts ...Option) (*App, error) {
 		onStatus:         options.onStatus,
 		onAgentProgress:  options.onAgentProgress,
 		onModeChange:     options.onModeChange,
+		applyMode:        options.applyMode,
 		onAskUser:        options.onAskUser,
 		textFileSystem:   options.textFileSystem,
 		queuedPrompts:    options.queuedPrompts,
@@ -560,14 +570,20 @@ func (a *App) SwitchMode(ctx context.Context, target string) error {
 			return fmt.Errorf("user denied transition to %s mode", next)
 		}
 	}
-	if a.onModeChange != nil {
-		if err := a.onModeChange(next); err != nil {
-			return fmt.Errorf("persist permission mode: %w", err)
+	if a.applyMode != nil {
+		if err := a.applyMode(next); err != nil {
+			return fmt.Errorf("commit permission mode: %w", err)
 		}
+	} else {
+		if a.onModeChange != nil {
+			if err := a.onModeChange(next); err != nil {
+				return fmt.Errorf("persist permission mode: %w", err)
+			}
+		}
+		a.Permissions.SetMode(next)
+		a.Config.PermissionMode = next
+		a.Config.Permissions.Mode = next
 	}
-	a.Permissions.SetMode(next)
-	a.Config.PermissionMode = next
-	a.Config.Permissions.Mode = next
 	if a.onStatus != nil {
 		a.onStatus("Permission mode: " + string(next))
 	}
@@ -3487,6 +3503,7 @@ func engineConfig(cfg config.Config, client *cpanthropic.Client, runtime *hook.R
 		childSessionDir = cfg.Session.Dir
 	}
 	return engine.Config{
+		ModelKey:               cfg.Provider + "\x00" + cfg.APIFormat + "\x00" + cfg.BaseURL + "\x00" + cfg.Model,
 		SubagentSessionDir:     childSessionDir,
 		Client:                 client,
 		Hooks:                  runtime,
