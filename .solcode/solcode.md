@@ -904,11 +904,11 @@ Organizer: 用户要求使用开源方案进行智能模型路由，并询问是
 
 Organizer: 用户要求使用开源方案进行智能模型路由，并询问是否可将每次路由结果存储到数据库以优化后续任务。 (tags: optional)
 
-## 2026-10-15 20:44:54 · session mid-run · turn -1 · importance 0.50
-- keywords: organizer, archival, retrieval, terms, database
-- memory_ids: mem_38658cf5815a026f
+## 2026-10-23 23:18:43 · session mid-run · turn -1 · importance 0.90
+- keywords: organizer, archival, retrieval, terms, database, plan_mode, codegraph
+- memory_ids: mem_21337d602406a50a, mem_38658cf5815a026f, mem_efc0dbb066a67315
 
-Organizer: 用户要求使用开源方案方式使用 Jev 做智能选择模型路由，如果每次路由的结果都存储到数据库，后续针对这一类任务，对开源方案进行优化。用户已下载 GGUF 模型并放到 models 目录，要求简化本地模型设置：默认从 ~/.solcode/models 查找，只填写模型文件名，固定使用 GPU，移除 CPU 选项和自动 CPU 回退。先检查你下载的模型及现有调用、配置和设置页面，再修改并验证。
+Organizer: 用户要求将 Node 版体积过大的 CodeGraph 集成替换为原生轻量引擎，已完成源码克隆与发行归档下载，但真实运行测试仍阻塞于共享 daemon 验证失败（writer.pid 为空）。新引擎已验证通过，但无法证明增量更新与后台启动机制。需补充真实运行测试以完成验证闭环。
 
 ## 2026-10-15 21:28:18 · session acp-1792052774500238000-1 · turn 7 · importance 0.50
 - keywords: organizer, archival, retrieval, terms, GGUF, turn, todolist, embedding
@@ -1102,3 +1102,71 @@ Turn memory: 可以进行Bash 调用
 - memory_ids: mem_21337d602406a50a
 
 Organizer: 用户要求移除工具目录限制，允许任意目录访问。用户已明确选择实施所有 A→B→C→D 的 SolCode 持久化子代理上下文复用计划，所有任务已完成，最终中文响应已送达。用户要求移除工具目录限制，允许任意目录访问。用户已明确选择实施所有 A→B→C→D 的 SolCode 持久化子代理上下文复用计划，所有任务已完成，最终中文响应已送达。用户要求移除工具目录限制，允许任意目录访问。用户已明确选择实施所有 A→B→C→D 的 SolCode 持久化子代理上下文复用计划，所有任务已确
+
+## 2026-10-23 18:40:58 · session acp-1792684248330142000-1 · turn 4 · importance 0.50
+- keywords: todolist, todo-write, turn, organizer, archival, retrieval, terms, plan_mode
+- files: internal/engine/batch_output_test.go, internal/engine/batch_ptc_test.go, internal/engine/context_builder.go, internal/engine/context_builder_test.go, internal/engine/plan_permissions_test.go, internal/permission/modes.go, internal/permission/plan.go, internal/permission/plan_test.go, internal/permission/service.go, internal/tool/batch.go, internal/tool/batch_ptc_test.go, unit_tests/plan_mode_test.go
+- memory_ids: mem_32f833b690c2a2bd
+
+Organizer: 用户要求将本地 Jev ONNX 推理替换为 in-process GGUF shared-library/DLL 调用，不再使用 llama-server/HTTP，并简化所有本地修改。用户已明确选择实施所有 A→B→C→D 的 SolCode 持久化子代理上下文复用计划，所有任务已完成，最终中文响应已送达。assistant: 已定位 plan 模式相关实现和现有测试，检查模式切换、权限与上下文链路，验证可疑问题。assistant: [tool use: ReadM
+
+## 2026-10-23 19:07:24 · session acp-1792684248330142000-1 · turn 5 · importance 0.50
+- keywords: todolist, todo-write, turn, organizer, archival, codegraph, plan, access, auto, incremental, persistent
+- files: internal/engine/batch_output_test.go, internal/engine/batch_ptc_test.go, internal/engine/context_builder.go, internal/engine/context_builder_test.go, internal/engine/plan_permissions_test.go, internal/permission/modes.go, internal/permission/plan.go, internal/permission/plan_test.go, internal/permission/service.go, internal/tool/batch.go, internal/tool/batch_ptc_test.go, unit_tests/plan_mode_test.go
+- memory_ids: mem_8024fc398a7a4de2
+
+Organizer: 用户最新请求是调查接入 codegraph 的快速方案：“现在调查一下我如何快速接入 codegraph 功能，打开项目时自动创建代码知识图谱，代码更新时自动更新。等等”。调查已完成，并已给出中文方案；用户尚未授权实施 codegraph。预期后续可能要求落地自动建图、持久化、增量更新和 Agent 检索。\n\n前一任务 plan 模式修复已完成，用户随后明确纠正：“可以进行 Bash 调用”“禁止askuser”。这些产品规则已实现并验证，不能恢复成禁止所有 Bash 的
+
+## 2026-10-23 22:42:48 · session acp-1792684248330142000-1 · turn 6 · importance 0.90
+- keywords: todolist, todo-write, turn, organizer, archival, codegraph, runtime, computer-use, index, database
+- files: internal/engine/batch_output_test.go, internal/engine/batch_ptc_test.go, internal/engine/context_builder.go, internal/engine/context_builder_test.go, internal/engine/plan_permissions_test.go, internal/permission/modes.go, internal/permission/plan.go, internal/permission/plan_test.go, internal/permission/service.go, internal/tool/batch.go, internal/tool/batch_ptc_test.go, unit_tests/plan_mode_test.go
+- memory_ids: mem_efc0dbb066a67315
+
+Organizer: 用户要求内置成熟 CodeGraph 运行时：随产品分发，无需用户安装 Node/npm 或配置外部 MCP；打开项目自动后台建图，代码变化自动增量更新，让 Agent 查询图谱。目标是在 SolCode 中像 computer-use 一样内置成熟 CodeGraph 运行时：随产品分发，无需用户安装 Node/npm 或配置外部 MCP；打开项目自动后台建图，代码变化自动增量更新，让 Agent 查询图谱。不要继续扩建自研扫描、监听和图存储方案。当前仅完成集成契约调查，未
+
+## 2026-10-23 22:54:12 · session acp-1792684248330142000-1 · turn 7 · importance 0.90
+- keywords: turn, todolist, organizer, archival, codegraph, runtime, computer-use, index, database
+- files: internal/engine/batch_output_test.go, internal/engine/batch_ptc_test.go, internal/engine/context_builder.go, internal/engine/context_builder_test.go, internal/engine/plan_permissions_test.go, internal/permission/modes.go, internal/permission/plan.go, internal/permission/plan_test.go, internal/permission/service.go, internal/tool/batch.go, internal/tool/batch_ptc_test.go, unit_tests/plan_mode_test.go
+- memory_ids: mem_efc0dbb066a67315
+
+Organizer: 用户要求内置成熟 CodeGraph 运行时：随产品分发，无需用户安装 Node/npm 或配置外部 MCP；打开项目自动后台建图，代码变化自动增量更新，让 Agent 查询图谱。目标是在 SolCode 中像 computer-use 一样内置成熟 CodeGraph 运行时：随产品分发，无需用户安装 Node/npm 或配置外部 MCP；打开项目自动后台建图，代码变化自动增量更新，让 Agent 查询图谱。不要继续扩建自研扫描、监听和图存储方案。当前仅完成集成契约调查，未
+
+## 2026-10-23 22:57:33 · session acp-1792684248330142000-1 · turn 8 · importance 0.90
+- keywords: turn, todolist, organizer, archival, codegraph, runtime, internal, bundle, init
+- files: internal/engine/batch_output_test.go, internal/engine/batch_ptc_test.go, internal/engine/context_builder.go, internal/engine/context_builder_test.go, internal/engine/plan_permissions_test.go, internal/permission/modes.go, internal/permission/plan.go, internal/permission/plan_test.go, internal/permission/service.go, internal/tool/batch.go, internal/tool/batch_ptc_test.go, unit_tests/plan_mode_test.go
+- memory_ids: mem_efc0dbb066a67315
+
+Organizer: 用户要求内置成熟 CodeGraph 运行时：随产品分发，无需用户安装 Node/npm 或配置外部 MCP；打开项目自动后台建图，代码变化自动增量更新，让 Agent 查询图谱。不要继续扩建自研扫描、监听和图存储方案。
+
+## 2026-10-23 23:00:41 · session acp-1792684248330142000-1 · turn 9 · importance 0.40
+- keywords: todolist, todo-write, turn
+- files: internal/engine/batch_output_test.go, internal/engine/batch_ptc_test.go, internal/engine/context_builder.go, internal/engine/context_builder_test.go, internal/engine/plan_permissions_test.go, internal/permission/modes.go, internal/permission/plan.go, internal/permission/plan_test.go, internal/permission/service.go, internal/tool/batch.go, internal/tool/batch_ptc_test.go, unit_tests/plan_mode_test.go
+- todos: light1|核实轻量原生代码图谱候选的能力、许可证和发行体积|in_progress|valid|open; light2|替换 Node 版运行时集成并更新配置和发布流程|pending|valid|open; light3|运行真实引擎及回归测试，测量替换后的体积|pending|valid|open
+
+Turn memory: 换一个更轻量的
+
+## 2026-10-24 00:03:12 · session acp-1792684248330142000-1 · turn 10 · importance 0.90
+- keywords: todolist, todo-write, turn, organizer, archival, retrieval, terms, codegraph
+- files: internal/codegraphruntime/bundle/assets/README.txt, internal/codegraphruntime/bundle/bootstrap.cjs, internal/codegraphruntime/bundle/bundle.go, internal/codegraphruntime/bundle/bundle_test.go, internal/codegraphruntime/bundle/extract.go, internal/codegraphruntime/bundle/notices/README.txt, internal/codegraphruntime/bundle/release.json, internal/config/config.go, internal/engine/batch_output_test.go, internal/engine/batch_ptc_test.go, internal/engine/context_builder.go, internal/engine/context_builder_test.go, internal/engine/plan_permissions_test.go, internal/mcp/codegraph.go, internal/mcp/codegraph_smoke_test.go, internal/mcp/codegraph_test.go, internal/permission/modes.go, internal/permission/plan.go, internal/permission/plan_test.go, internal/permission/service.go, internal/tool/batch.go, internal/tool/batch_ptc_test.go, scripts/collect-codegraph-notices.py, scripts/prepare-codegraph.py, unit_tests/plan_mode_test.go
+
+Organizer: 用户要求替换 Node 版体积过大，要求更轻量，继续替换。已选择替换上游 sunerpy/codegraph-rust v0.55.2，源码 commit e62ccab464ea558f41e88077383b38689605bb14，MIT，原生单二进制，SQLite/tree-sitter 内置，无 Node/Python 运行时。新引擎用 CODEGRAPH_DIR=.solcode-codegraph，对应 codeGraphIndexDir，与旧 Node 引擎.
+
+## 2026-10-24 00:06:14 · session acp-1792684248330142000-1 · turn 11 · importance 0.90
+- keywords: turn, todolist, organizer, archival, retrieval, terms, codegraph
+- files: internal/codegraphruntime/bundle/assets/README.txt, internal/codegraphruntime/bundle/bootstrap.cjs, internal/codegraphruntime/bundle/bundle.go, internal/codegraphruntime/bundle/bundle_test.go, internal/codegraphruntime/bundle/extract.go, internal/codegraphruntime/bundle/notices/README.txt, internal/codegraphruntime/bundle/release.json, internal/config/config.go, internal/engine/batch_output_test.go, internal/engine/batch_ptc_test.go, internal/engine/context_builder.go, internal/engine/context_builder_test.go, internal/engine/plan_permissions_test.go, internal/mcp/codegraph.go, internal/mcp/codegraph_smoke_test.go, internal/mcp/codegraph_test.go, internal/permission/modes.go, internal/permission/plan.go, internal/permission/plan_test.go, internal/permission/service.go, internal/tool/batch.go, internal/tool/batch_ptc_test.go, scripts/collect-codegraph-notices.py, scripts/prepare-codegraph.py, unit_tests/plan_mode_test.go
+
+Organizer: 用户要求替换 Node 版体积过大，要求更轻量，继续替换。已选择替换上游 sunerpy/codegraph-rust v0.55.2，源码 commit e62ccab464ea558f41e88077383b38689605bb14，MIT，原生单二进制，SQLite/tree-sitter 内置，无 Node/Python 运行时。新引擎用 CODEGRAPH_DIR=.solcode-codegraph，对应 codeGraphIndexDir，与旧 Node 引擎.
+
+## 2026-10-24 00:08:55 · session acp-1792684248330142000-1 · turn 12 · importance 0.90
+- keywords: turn, todolist, organizer, archival, retrieval, terms, codegraph
+- files: internal/codegraphruntime/bundle/assets/README.txt, internal/codegraphruntime/bundle/bootstrap.cjs, internal/codegraphruntime/bundle/bundle.go, internal/codegraphruntime/bundle/bundle_test.go, internal/codegraphruntime/bundle/extract.go, internal/codegraphruntime/bundle/notices/README.txt, internal/codegraphruntime/bundle/release.json, internal/config/config.go, internal/engine/batch_output_test.go, internal/engine/batch_ptc_test.go, internal/engine/context_builder.go, internal/engine/context_builder_test.go, internal/engine/plan_permissions_test.go, internal/mcp/codegraph.go, internal/mcp/codegraph_smoke_test.go, internal/mcp/codegraph_test.go, internal/permission/modes.go, internal/permission/plan.go, internal/permission/plan_test.go, internal/permission/service.go, internal/tool/batch.go, internal/tool/batch_ptc_test.go, scripts/collect-codegraph-notices.py, scripts/prepare-codegraph.py, unit_tests/plan_mode_test.go
+- memory_ids: mem_6f9201476e9a81c3
+
+Organizer: 用户要求替换 Node 版体积过大，要求更轻量，继续替换原生轻量引擎。已选择 sunerpy/codegraph-rust v0.55.2，源码 commit e62ccab464ea558f41e88077383b38689605bb14，MIT，原生单二进制，SQLite/tree-sitter 内置，无 Node/Python 运行时。新引擎用 CODEGRAPH_DIR=.solcode-codegraph，对应 codeGraphIndexDir，与旧 Node 的
+
+## 2026-10-24 00:15:15 · session acp-1792684248330142000-1 · turn 13 · importance 0.50
+- keywords: todolist, todo-write, turn, organizer, archival, retrieval, terms, in-process, GGUF, LLaMA, ONNX
+- files: internal/codegraphruntime/bundle/assets/README.txt, internal/codegraphruntime/bundle/bootstrap.cjs, internal/codegraphruntime/bundle/bundle.go, internal/codegraphruntime/bundle/bundle_test.go, internal/codegraphruntime/bundle/extract.go, internal/codegraphruntime/bundle/notices/README.txt, internal/codegraphruntime/bundle/release.json, internal/config/config.go, internal/engine/batch_output_test.go, internal/engine/batch_ptc_test.go, internal/engine/context_builder.go, internal/engine/context_builder_test.go, internal/engine/plan_permissions_test.go, internal/engine/prefix_share_test.go, internal/mcp/codegraph.go, internal/mcp/codegraph_smoke_test.go, internal/mcp/codegraph_test.go, internal/permission/modes.go, internal/permission/plan.go, internal/permission/plan_test.go, internal/permission/service.go, internal/tool/batch.go, internal/tool/batch_ptc_test.go, scripts/collect-codegraph-notices.py, scripts/prepare-codegraph.py, unit_tests/plan_mode_test.go
+- memory_ids: mem_32f833b690c2a2bd
+
+Organizer: 用户要求将本地 Jev ONNX 推理替换为 in-process GGUF shared-library/DLL 调用，不再使用 llama-server/HTTP，并简化所有本地修改。当前任务是把已实现但未提交的 `colbymchenry/codegraph` Node 集成替换成原生轻量引擎，而不是只提供建议。继续保留原始产品目标：随 SolCode 分发、无需用户安装 Node/npm/Python 或外部 MCP 配置；打开项目自动后台建图，不阻塞聊天；代码变化自

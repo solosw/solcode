@@ -49,7 +49,7 @@ func TestNativeComputerUseRegistrationDefersProcessAndKeepsGuardrail(t *testing.
 		t.Fatal(err)
 	}
 	defer mcpRegistry.Close()
-	defer closeComputerUseTool(registry)
+	defer closeBuiltinRuntimes(registry)
 	if lsp != nil {
 		defer lsp.Close()
 	}
@@ -88,6 +88,8 @@ func (c *trackedDesktopClient) Close() error { c.closes++; return nil }
 
 func TestComputerUseReloadAndExitCloseNativeProcess(t *testing.T) {
 	cfg := config.Default()
+	codeGraphDisabled := false
+	cfg.CodeGraph.Enabled = &codeGraphDisabled
 	cfg.WorkDir = t.TempDir()
 	cfg.Memory.Enabled = false
 	cfg.Session.Enabled = false
@@ -134,6 +136,8 @@ func TestComputerUseReloadAndExitCloseNativeProcess(t *testing.T) {
 
 func TestMissingNativeComputerUseBinaryDoesNotBlockAppStartup(t *testing.T) {
 	cfg := config.Default()
+	codeGraphDisabled := false
+	cfg.CodeGraph.Enabled = &codeGraphDisabled
 	cfg.WorkDir = t.TempDir()
 	cfg.Memory.Enabled = false
 	cfg.Session.Enabled = false

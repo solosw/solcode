@@ -84,6 +84,9 @@ func TestMainAndTaskSharePublicPrefix(t *testing.T) {
 	if client.systems[0] != client.systems[1] {
 		t.Fatalf("system prefix diverged\nmain:\n%s\ntask:\n%s", client.systems[0], client.systems[1])
 	}
+	if !strings.Contains(client.systems[0], "When CodeGraph is available and permitted") {
+		t.Fatal("main and task system prompts must share the CodeGraph workflow")
+	}
 	// Full skills catalog stays in system (not narrowed per agent).
 	if !strings.Contains(client.systems[0], "verify") || !strings.Contains(client.systems[0], "explore") {
 		t.Fatalf("full skills catalog missing from system: %s", client.systems[0])

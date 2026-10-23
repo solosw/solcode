@@ -168,6 +168,8 @@ type Config struct {
 	// ComputerUse opts into the embedded native desktop MCP runtime. Legacy
 	// enabled-only robotgo settings no longer activate desktop automation.
 	ComputerUse ComputerUseConfig `json:"computer_use,omitempty"`
+	// CodeGraph runs the embedded semantic index automatically unless disabled.
+	CodeGraph CodeGraphConfig `json:"codegraph,omitempty"`
 	// Jev configures the TypeSafe System One decision layer. Off by default.
 	Jev JevConfig `json:"jev,omitempty"`
 	// ORT only parses deprecated settings; all app-local inference uses GGUF.
@@ -215,6 +217,17 @@ type BatchPTCConfig struct {
 // ComputerUseBackendNative selects the bundled native MCP runtime. The legacy
 // robotgo backend is no longer registered; old enabled-only settings stay off.
 const ComputerUseBackendNative = "open-computer-use"
+
+// CodeGraphConfig defaults to enabled. RuntimeDir is a development-only override
+// for a directory containing the native executable; releases embed it directly.
+type CodeGraphConfig struct {
+	Enabled    *bool  `json:"enabled,omitempty"`
+	RuntimeDir string `json:"runtime_dir,omitempty"`
+}
+
+func (c Config) CodeGraphEnabled() bool {
+	return c.CodeGraph.Enabled == nil || *c.CodeGraph.Enabled
+}
 
 type ComputerUseConfig struct {
 	Enabled bool   `json:"enabled,omitempty"`
@@ -1454,6 +1467,10 @@ func applyJSONConfig(cfg *Config, data []byte) error {
 			}
 		case "image":
 			if err := json.Unmarshal(value, &cfg.Image); err != nil {
+				return err
+			}
+		case "codegraph":
+			if err := json.Unmarshal(value, &cfg.CodeGraph); err != nil {
 				return err
 			}
 		case "computer_use":

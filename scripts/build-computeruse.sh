@@ -38,8 +38,9 @@ export CGO_ENABLED=0
 export GOOS="$GOOS_TARGET"
 export GOARCH="$GOARCH_TARGET"
 if command -v python3 >/dev/null 2>&1; then PYTHON=python3; else PYTHON=python; fi
+trap 'rm -f internal/{computeruse,codegraphruntime}/bundle/assets/{runtime.archive,target.json}' EXIT
 "$PYTHON" scripts/prepare-computer-use.py --os "$GOOS_TARGET" --arch "$GOARCH_TARGET"
-trap 'rm -f internal/computeruse/bundle/assets/runtime.archive internal/computeruse/bundle/assets/target.json' EXIT
+"$PYTHON" scripts/prepare-codegraph.py --os "$GOOS_TARGET" --arch "$GOARCH_TARGET"
 
 BIN_VERSION="${LDFLAGS_VERSION:-$VERSION}"
 LDFLAGS="-s -w -X main.version=${BIN_VERSION}"
@@ -68,10 +69,11 @@ go build -trimpath -ldflags="$LDFLAGS" -o "${stage}/${out_name}" ./cmd/solcode
 
 (
   cp -R "${ROOT}/internal/computeruse/bundle/notices" "${stage}/open-computer-use-notices"
+  cp -R "${ROOT}/internal/codegraphruntime/bundle/notices" "${stage}/codegraph-notices"
   cd "$stage"
   if [[ "$PACK" == "zip" ]]; then
     if command -v zip >/dev/null 2>&1; then
-      zip -qr "${artifact}" "$out_name" open-computer-use-notices
+      zip -qr "${artifact}" "$out_name" open-computer-use-notices codegraph-notices
     else
       # Pass paths via argv (a native python.exe cannot resolve MSYS paths that
       # are interpolated into the script text).
@@ -83,12 +85,13 @@ import zipfile
 artifact, out_name = sys.argv[1], sys.argv[2]
 with zipfile.ZipFile(artifact, "w", zipfile.ZIP_DEFLATED) as z:
     z.write(out_name, arcname=out_name)
-    for notice in Path("open-computer-use-notices").iterdir():
-        z.write(notice, arcname=str(notice))
+    for directory in ("open-computer-use-notices", "codegraph-notices"):
+        for notice in Path(directory).iterdir():
+            z.write(notice, arcname=str(notice))
 PY
     fi
   else
-    tar -czf "${artifact}" "$out_name" open-computer-use-notices
+    tar -czf "${artifact}" "$out_name" open-computer-use-notices codegraph-notices
   fi
 )
 rm -rf "$stage"

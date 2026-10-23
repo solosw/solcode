@@ -18,6 +18,8 @@ import (
 
 type stdioClient struct {
 	server config.MCPServerConfig
+	// workDir is set only by embedded project-scoped runtimes.
+	workDir string
 
 	mu      sync.Mutex
 	client  *sdkmcp.Client
@@ -40,6 +42,10 @@ func (c *stdioClient) Start(ctx context.Context) error {
 	}
 
 	execCmd := exec.CommandContext(ctx, c.server.Command, c.server.Args...)
+	execCmd.Dir = c.workDir
+	if c.workDir != "" {
+		configureCodeGraphProcess(execCmd)
+	}
 	// Config env must override parent process env. On Windows env keys are
 	// case-insensitive and the first occurrence wins, so simple append is wrong.
 	execCmd.Env = mergeProcessEnv(os.Environ(), c.server.Env)

@@ -1,0 +1,31 @@
+{
+  "repository": "sunerpy/codegraph-rust",
+  "version": "v0.55.2",
+  "commit": "e62ccab464ea558f41e88077383b38689605bb14",
+  "assets": {
+    "darwin/arm64": {
+      "name": "codegraph-0.55.2-aarch64-apple-darwin.tar.gz",
+      "sha256": "6267d5305195ce97e6ed056047c029484b00508d987c47615f6864ac42049559"
+    },
+    "darwin/amd64": {
+      "name": "codegraph-0.55.2-x86_64-apple-darwin.tar.gz",
+      "sha256": "61d4c355e5f480a9c0f6407c5115850f98afcf017b0dc3f9e55cd43589cd5ede"
+    },
+    "linux/arm64": {
+      "name": "codegraph-0.55.2-aarch64-unknown-linux-musl.tar.gz",
+      "sha256": "133bcd9b78918841a5df7e0ceecd44a2c1eccbec5807ae61b65bb86af6236b22"
+    },
+    "linux/amd64": {
+      "name": "codegraph-0.55.2-x86_64-unknown-linux-musl.tar.gz",
+      "sha256": "0b123f6010cf3a5831973ec9bb086f39c41536226b29a655a86d34ebc4118592"
+    },
+    "windows/arm64": {
+      "name": "codegraph-0.55.2-aarch64-pc-windows-msvc.zip",
+      "sha256": "5122bb7661d487f182642bb3ccde132a603320fcea61ffb464fe3dcd636ac5fd"
+    },
+    "windows/amd64": {
+      "name": "codegraph-0.55.2-x86_64-pc-windows-msvc.zip",
+      "sha256": "7a1eba4c0c4133727f15372f9994aa4eac509be4283fabbc0c724dd73c8c9f79"
+    }
+  }
+}

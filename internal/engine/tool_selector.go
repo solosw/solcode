@@ -14,9 +14,10 @@ const maxDynamicTools = 4
 // the agent loop and common coding edits. MCP tools and less common builtins
 // stay off the wire until lexical match, sticky use, or ToolSearch enables them.
 var coreToolNames = map[string]bool{
+	tool.CodeGraphToolName:       true,
 	tool.AskUserToolName:         true,
 	tool.BashToolName:            true,
-	tool.BatchToolName:            true,
+	tool.BatchToolName:           true,
 	tool.EditToolName:            true,
 	tool.MultiEditToolName:       true,
 	tool.MultiWriteToolName:      true,
@@ -33,7 +34,7 @@ var coreToolNames = map[string]bool{
 	tool.WriteToolName:           true,
 	tool.WriteMemoryToolName:     true,
 	tool.ReadMemoryToolName:      true,
-	tool.ReadObservationToolName: true,
+	
 	// Session memory is written once at session end and searched later, so it
 	// cannot rely on lexical matching against the current turn's prompt.
 	tool.WriteSessionMemoryToolName: true,

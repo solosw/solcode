@@ -110,6 +110,11 @@ func buildToolState(cfg config.Config, mcpFactory mcp.ClientFactory) (*tool.Regi
 			cfg.ComputerUse.Binary, filepath.Join(config.UserConfigDir(), "computer-use"), mcpFactory)))
 	}
 
+	if cfg.CodeGraphEnabled() {
+		registry.Register(tool.NewCodeGraphTool(mcp.NewCodeGraphClient(
+			cfg.WorkDir, cfg.CodeGraph.RuntimeDir, filepath.Join(config.UserConfigDir(), "codegraph-runtime"), mcpFactory), cfg.WorkDir))
+	}
+
 	skillRegistry := loadSkills(cfg)
 	if defs := skillRegistry.All(); len(defs) > 0 {
 		registry.Register(tool.NewSkillTool(skillRegistry))
@@ -359,6 +364,7 @@ func New(cfg config.Config, opts ...Option) (*App, error) {
 		application.organizer = newOrganizerRuntime(cfg)
 	}
 
+	startCodeGraphTool(registry)
 	return application, nil
 }
 
@@ -517,7 +523,7 @@ func (a *App) Close() error {
 	if a.MCPRegistry != nil {
 		firstErr = a.MCPRegistry.Close()
 	}
-	if err := closeComputerUseTool(a.Tools); firstErr == nil {
+	if err := closeBuiltinRuntimes(a.Tools); firstErr == nil {
 		firstErr = err
 	}
 	if a.ChangeGraph != nil {
@@ -643,13 +649,13 @@ func (a *App) ReloadFeatures(cfg config.Config, mcpFactory mcp.ClientFactory) er
 	graphStore, err := openChangeGraph(cfg)
 	if err != nil {
 		_ = mcpRegistry.Close()
-		_ = closeComputerUseTool(registry)
+		_ = closeBuiltinRuntimes(registry)
 		return err
 	}
 	if a.MCPRegistry != nil {
 		_ = a.MCPRegistry.Close()
 	}
-	_ = closeComputerUseTool(a.Tools)
+	_ = closeBuiltinRuntimes(a.Tools)
 	if a.lspManager != nil {
 		_ = a.lspManager.Close()
 	}
@@ -723,6 +729,7 @@ func (a *App) ReloadFeatures(cfg config.Config, mcpFactory mcp.ClientFactory) er
 	engineCfg.AskUserAutoSelect = a.askUserAutoSelect
 	engineCfg.OnTodosUpdated = a.recordTodoSessionMemory
 	a.Engine.UpdateConfig(engineCfg)
+	startCodeGraphTool(registry)
 	return nil
 }
 
@@ -3969,13 +3976,24 @@ func skillRootsByName(registry *skill.Registry) map[string]string {
 	return out
 }
 
-// closeComputerUseTool also handles a configured-but-never-started sidecar.
-func closeComputerUseTool(registry *tool.Registry) error {
+// closeBuiltinRuntimes also handles configured-but-never-started sidecars.
+func closeBuiltinRuntimes(registry *tool.Registry) error {
 	if registry == nil {
 		return nil
 	}
-	if closer, ok := registry.Find(tool.ComputerUseToolName).(interface{ Close() error }); ok {
-		return closer.Close()
+	var first error
+	for _, name := range []string{tool.ComputerUseToolName, tool.CodeGraphToolName} {
+		if closer, ok := registry.Find(name).(interface{ Close() error }); ok {
+			if err := closer.Close(); err != nil && first == nil {
+				first = err
+			}
+		}
 	}
-	return nil
+	return first
+}
+
+func startCodeGraphTool(registry *tool.Registry) {
+	if starter, ok := registry.Find(tool.CodeGraphToolName).(interface{ Start() }); ok {
+		starter.Start()
+	}
 }

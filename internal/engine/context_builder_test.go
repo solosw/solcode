@@ -154,6 +154,36 @@ func TestSystemPromptOmitsEmptyProjectRules(t *testing.T) {
 	}
 }
 
+func TestSystemPromptDocumentsCodeGraphWorkflow(t *testing.T) {
+	for _, preamble := range []string{"", "Custom preamble."} {
+		t.Run(preamble, func(t *testing.T) {
+			got := (ContextBuilder{SystemPrompt: preamble}).systemPrompt("/tmp/demo")
+			cases := []struct {
+				name    string
+				phrases []string
+			}{
+				{"exploration and query actions", []string{"When CodeGraph is available and permitted", "action=explore with symbol/file names before broad Grep/View loops", "unfamiliar code", "cross-file behavior", "action=search", "action=node", "action=files"}},
+				{"refactoring impact", []string{"Before renaming, changing or removing public/shared symbols", "refactoring across files", "action=impact", "action=callers/action=callees"}},
+				{"verify graph evidence", []string{"incomplete or lag edits", "verify current source with View/LSP", "run relevant tests", "not proof that a symbol has no references"}},
+				{"bounded use and routing", []string{"Reuse relevant results already in context", "small edit at a known location does not require a graph query", "not every turn needs one", "Call CodeGraph directly unless the active BatchTool schema explicitly exposes it"}},
+				{"automatic indexing and fallback", []string{"indexing and incremental updates are automatic", "disabled, absent, initializing, unavailable or denied by permissions", "continue with Grep/View/LSP instead", "do not repeatedly poll action=status", "retry a known-unavailable graph", "install/start a runtime manually", "wait for indexing to finish", "only when diagnosing index health"}},
+			}
+			for _, tc := range cases {
+				t.Run(tc.name, func(t *testing.T) {
+					for _, phrase := range tc.phrases {
+						if !strings.Contains(got, phrase) {
+							t.Errorf("system prompt missing %q", phrase)
+						}
+					}
+				})
+			}
+			if strings.Count(got, "When CodeGraph is available and permitted") != 1 {
+				t.Fatal("CodeGraph workflow must appear exactly once in the stable system prompt")
+			}
+		})
+	}
+}
+
 // Batch execution semantics belong in the stable prompt for main and child
 // agents, rather than relying on hidden primitive tool descriptions.
 func TestSystemPromptDocumentsBatchExecutionContract(t *testing.T) {

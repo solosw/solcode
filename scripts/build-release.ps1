@@ -32,37 +32,49 @@ $targets = @(
     @{ GOOS = "windows"; GOARCH = "arm64"; Pack = "zip" }
 )
 
+$Python = if (Get-Command python3 -ErrorAction SilentlyContinue) { "python3" } else { "python" }
 Write-Host "Building solcode $Version ..."
-foreach ($t in $targets) {
-    $outName = if ($t.GOOS -eq "windows") { "solcode.exe" } else { "solcode" }
-    $stage = Join-Path $Dist ("stage_{0}_{1}" -f $t.GOOS, $t.GOARCH)
-    New-Item -ItemType Directory -Path $stage | Out-Null
-    $binPath = Join-Path $stage $outName
-    $artifact = Join-Path $Dist ("solcode_{0}_{1}_{2}.{3}" -f $Version, $t.GOOS, $t.GOARCH, $t.Pack)
+try {
+    foreach ($t in $targets) {
+        $outName = if ($t.GOOS -eq "windows") { "solcode.exe" } else { "solcode" }
+        $stage = Join-Path $Dist ("stage_{0}_{1}" -f $t.GOOS, $t.GOARCH)
+        New-Item -ItemType Directory -Path $stage | Out-Null
+        $binPath = Join-Path $stage $outName
+        $artifact = Join-Path $Dist ("solcode_{0}_{1}_{2}.{3}" -f $Version, $t.GOOS, $t.GOARCH, $t.Pack)
 
-    Write-Host ("  -> {0}/{1}" -f $t.GOOS, $t.GOARCH)
-    $env:GOOS = $t.GOOS
-    $env:GOARCH = $t.GOARCH
-    go build -trimpath -ldflags $ldflags -o $binPath ./cmd/solcode
-    if ($LASTEXITCODE -ne 0) { throw "go build failed for $($t.GOOS)/$($t.GOARCH)" }
+        Write-Host ("  -> {0}/{1}" -f $t.GOOS, $t.GOARCH)
+        & $Python scripts/prepare-computer-use.py --os $t.GOOS --arch $t.GOARCH
+        if ($LASTEXITCODE -ne 0) { throw "ComputerUse preparation failed" }
+        & $Python scripts/prepare-codegraph.py --os $t.GOOS --arch $t.GOARCH
+        if ($LASTEXITCODE -ne 0) { throw "CodeGraph preparation failed" }
+        Copy-Item -Recurse internal/computeruse/bundle/notices (Join-Path $stage "open-computer-use-notices")
+        Copy-Item -Recurse internal/codegraphruntime/bundle/notices (Join-Path $stage "codegraph-notices")
+        $env:GOOS = $t.GOOS
+        $env:GOARCH = $t.GOARCH
+        go build -trimpath -ldflags $ldflags -o $binPath ./cmd/solcode
+        if ($LASTEXITCODE -ne 0) { throw "go build failed for $($t.GOOS)/$($t.GOARCH)" }
 
-    if ($t.Pack -eq "zip") {
-        Compress-Archive -Path $binPath -DestinationPath $artifact -Force
-    } else {
-        # tar is available on Windows 10+
-        Push-Location $stage
-        try {
-            tar -czf $artifact $outName
-            if ($LASTEXITCODE -ne 0) { throw "tar failed for $artifact" }
-        } finally {
-            Pop-Location
+        if ($t.Pack -eq "zip") {
+            Compress-Archive -Path (Join-Path $stage "*") -DestinationPath $artifact -Force
+        } else {
+            # tar is available on Windows 10+
+            Push-Location $stage
+            try {
+                tar -czf $artifact $outName open-computer-use-notices codegraph-notices
+                if ($LASTEXITCODE -ne 0) { throw "tar failed for $artifact" }
+            } finally {
+                Pop-Location
+            }
         }
+        Remove-Item -Recurse -Force $stage
     }
-    Remove-Item -Recurse -Force $stage
+} finally {
+    Remove-Item Env:GOOS -ErrorAction SilentlyContinue
+    Remove-Item Env:GOARCH -ErrorAction SilentlyContinue
+    foreach ($runtime in @("computeruse", "codegraphruntime")) {
+        Remove-Item "internal/$runtime/bundle/assets/runtime.archive", "internal/$runtime/bundle/assets/target.json" -ErrorAction SilentlyContinue
+    }
 }
-
-Remove-Item Env:GOOS -ErrorAction SilentlyContinue
-Remove-Item Env:GOARCH -ErrorAction SilentlyContinue
 
 # checksums
 $sums = Join-Path $Dist "checksums.txt"

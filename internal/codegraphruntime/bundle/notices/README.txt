@@ -1,0 +1,1 @@
+Native CodeGraph-Rust notices are generated from the pinned source with scripts/collect-codegraph-notices.py (Python 3.11+ at upgrade time only). Keep THIRD_PARTY_NOTICES.txt alongside release archives and the runtime executable. No Node runtime is distributed.

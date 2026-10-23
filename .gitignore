@@ -37,3 +37,9 @@ Thumbs.db
 # Generated, checksum-verified Computer Use runtime embedded by release builds
 /internal/computeruse/bundle/assets/runtime.archive
 /internal/computeruse/bundle/assets/target.json
+
+# Generated, checksum-verified native CodeGraph runtime payloads
+/internal/codegraphruntime/bundle/assets/runtime.archive
+/internal/codegraphruntime/bundle/assets/target.json
+/internal/codegraphruntime/bundle/assets/tmp*
+/internal/codegraphruntime/bundle/.download-*

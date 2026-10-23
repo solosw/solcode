@@ -26,7 +26,7 @@ mkdir -p "$DIST"
 
 export CGO_ENABLED=0
 if command -v python3 >/dev/null 2>&1; then PYTHON=python3; else PYTHON=python; fi
-trap 'rm -f internal/computeruse/bundle/assets/runtime.archive internal/computeruse/bundle/assets/target.json' EXIT
+trap 'rm -f internal/{computeruse,codegraphruntime}/bundle/assets/{runtime.archive,target.json}' EXIT
 # Binary version for -version (can differ from asset tag, e.g. master+abc1234).
 BIN_VERSION="${LDFLAGS_VERSION:-$VERSION}"
 LDFLAGS="-s -w -X main.version=${BIN_VERSION}"
@@ -69,6 +69,8 @@ for spec in "${targets[@]}"; do
 
   echo "  -> ${goos}/${goarch}"
   "$PYTHON" scripts/prepare-computer-use.py --os "$goos" --arch "$goarch"
+  "$PYTHON" scripts/prepare-codegraph.py --os "$goos" --arch "$goarch"
+  cp -R "${ROOT}/internal/codegraphruntime/bundle/notices" "${stage}/codegraph-notices"
   cp -R "${ROOT}/internal/computeruse/bundle/notices" "${stage}/open-computer-use-notices"
   GOOS="$goos" GOARCH="$goarch" go build -trimpath -ldflags="$LDFLAGS" -o "${stage}/${out_name}" ./cmd/solcode
 
@@ -76,11 +78,11 @@ for spec in "${targets[@]}"; do
     cd "$stage"
     if [[ "$pack" == "zip" ]]; then
       if command -v zip >/dev/null 2>&1; then
-        zip -qr "${artifact}" "$out_name" open-computer-use-notices
+        zip -qr "${artifact}" "$out_name" open-computer-use-notices codegraph-notices
       else
         # Fallback: PowerShell on Windows Git Bash, or python
         if command -v powershell.exe >/dev/null 2>&1; then
-          powershell.exe -NoProfile -Command "Compress-Archive -Path '$(native_path "$stage/$out_name")','$(native_path "$stage/open-computer-use-notices")' -DestinationPath '$(native_path "$artifact")' -Force"
+          powershell.exe -NoProfile -Command "Compress-Archive -Path '$(native_path "$stage/$out_name")','$(native_path "$stage/open-computer-use-notices")','$(native_path "$stage/codegraph-notices")' -DestinationPath '$(native_path "$artifact")' -Force"
         else
           "$PYTHON" - "$(native_path "$artifact")" "$out_name" <<'PY'
 import sys
@@ -90,13 +92,14 @@ import zipfile
 artifact, out_name = sys.argv[1], sys.argv[2]
 with zipfile.ZipFile(artifact, "w", zipfile.ZIP_DEFLATED) as z:
     z.write(out_name, arcname=out_name)
-    for notice in Path("open-computer-use-notices").iterdir():
-        z.write(notice, arcname=str(notice))
+    for directory in ("open-computer-use-notices", "codegraph-notices"):
+        for notice in Path(directory).iterdir():
+            z.write(notice, arcname=str(notice))
 PY
         fi
       fi
     else
-      tar -czf "${artifact}" "$out_name" open-computer-use-notices
+      tar -czf "${artifact}" "$out_name" open-computer-use-notices codegraph-notices
     fi
   )
   rm -rf "$stage"

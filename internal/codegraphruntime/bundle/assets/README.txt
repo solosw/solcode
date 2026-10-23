@@ -1,0 +1,1 @@
+Release builds embed a checksum-pinned native CodeGraph-Rust archive and target.json. No Node, npm, Python or runtime downloads. Source builds can set codegraph.runtime_dir to a directory containing the native executable.
