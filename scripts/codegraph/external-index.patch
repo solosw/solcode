@@ -1,0 +1,192 @@
+diff --git a/crates/codegraph-core/src/index_paths.rs b/crates/codegraph-core/src/index_paths.rs
+index 5217b5f..77e528f 100644
+--- a/crates/codegraph-core/src/index_paths.rs
++++ b/crates/codegraph-core/src/index_paths.rs
+@@ -302,6 +302,20 @@ fn configured_directory_name(codegraph_dir: Option<&str>) -> Result<&str, IndexP
+         return Ok(DEFAULT_CURRENT_DIR);
+     };
+     let value = raw_value.trim();
++    // SolCode patch: allow an explicit absolute storage root. Keep relative
++    // overrides project-local and retain physical/owner/symlink validation.
++    if Path::new(value).is_absolute() {
++        if value
++            .split(['/', '\\'])
++            .any(|part| part == "." || part == "..")
++        {
++            return Err(IndexPathsError::RootAlias {
++                path: PathBuf::from(raw_value),
++                reason: "absolute index root contains dot/parent traversal".to_string(),
++            });
++        }
++        return Ok(value);
++    }
+     let invalid = value.is_empty()
+         || value == "."
+         || value.contains("..")
+@@ -716,21 +730,88 @@ mod tests {
+     }
+ 
+     #[test]
+-    fn absolute_codegraph_dir_is_rejected() {
++    fn absolute_codegraph_dir_uses_external_storage() {
+         let project = temp_dir("abs-proj");
+         let cache = temp_dir("abs-cache");
+         let configured = cache.join("cg");
+-        let error = IndexPaths::resolve(&project, Some(configured.to_str().unwrap()))
+-            .expect_err("absolute override must fail closed");
+-        assert!(
+-            matches!(error, IndexPathsError::RootAlias { .. }),
+-            "{error:?}"
+-        );
++        let paths = IndexPaths::resolve(&project, Some(configured.to_str().unwrap()))
++            .expect("external absolute root");
++        assert_eq!(paths.project(), project.canonicalize().unwrap());
++        assert_eq!(paths.current_root(), configured);
++        assert!(!paths.current_root().starts_with(&project));
+ 
+         let _ = std::fs::remove_dir_all(&project);
+         let _ = std::fs::remove_dir_all(&cache);
+     }
+ 
++    #[test]
++    fn external_root_rejects_project_ancestor_root_and_traversal() {
++        let project = temp_dir("external-aliases");
++        let cache = temp_dir("external-traversal");
++        let filesystem_root = project.ancestors().last().unwrap().to_path_buf();
++        for invalid in [
++            project.clone(),
++            project.parent().unwrap().to_path_buf(),
++            filesystem_root,
++            cache.join("child").join("..").join("index"),
++        ] {
++            let error = IndexPaths::resolve(&project, Some(invalid.to_str().unwrap()))
++                .expect_err("unsafe external root must fail closed");
++            assert!(
++                matches!(error, IndexPathsError::RootAlias { .. }),
++                "{error:?}"
++            );
++        }
++        let dotted = format!("{}/./index", cache.display());
++        assert!(IndexPaths::resolve(&project, Some(&dotted)).is_err());
++        std::fs::remove_dir_all(project).unwrap();
++        std::fs::remove_dir_all(cache).unwrap();
++    }
++
++    #[test]
++    fn external_root_preserves_project_identity_and_reserved_roots() {
++        let project = temp_dir("external-identity");
++        let other = temp_dir("external-other");
++        let cache = temp_dir("external-storage");
++        let configured = cache.join("index");
++        let value = configured.to_str().unwrap();
++        let external = IndexPaths::resolve(&project, Some(value)).unwrap();
++        let local = IndexPaths::resolve(&project, None).unwrap();
++        let foreign = IndexPaths::resolve(&other, Some(value)).unwrap();
++        assert_eq!(external.project_identity(), local.project_identity());
++        assert_ne!(external.project_identity(), foreign.project_identity());
++        assert_eq!(external.current_db(), configured.join("codegraph.db"));
++        assert_eq!(external.permanent_lock(), configured.join("index.lock"));
++        let roots = IndexPaths::reserved_index_roots(&project, Some(value));
++        assert!(roots.contains(&configured));
++        assert!(roots.contains(&project.join(DEFAULT_CURRENT_DIR)));
++        assert!(!configured.exists(), "resolution must not create the index");
++        for dir in [project, other, cache] {
++            std::fs::remove_dir_all(dir).unwrap();
++        }
++    }
++
++    #[cfg(unix)]
++    #[test]
++    fn external_root_rejects_symlink_root_and_ancestor() {
++        let project = temp_dir("external-symlink-project");
++        let cache = temp_dir("external-symlink-cache");
++        let real = cache.join("real");
++        std::fs::create_dir_all(real.join("child")).unwrap();
++        let link = cache.join("link");
++        std::os::unix::fs::symlink(&real, &link).unwrap();
++        for invalid in [link.clone(), link.join("child"), link.join("missing")] {
++            let error = IndexPaths::resolve(&project, Some(invalid.to_str().unwrap()))
++                .expect_err("external symlink must fail closed");
++            assert!(
++                matches!(error, IndexPathsError::SymlinkComponent { .. }),
++                "{error:?}"
++            );
++        }
++        std::fs::remove_dir_all(project).unwrap();
++        std::fs::remove_dir_all(cache).unwrap();
++    }
++
+     #[test]
+     fn wsl_windows_drive_projects_default_to_their_own_index_root() {
+         let fresh = temp_dir("wsl-fresh");
+diff --git a/crates/codegraph-store/src/index_lease.rs b/crates/codegraph-store/src/index_lease.rs
+index 6a5c5e3..3c22d97 100644
+--- a/crates/codegraph-store/src/index_lease.rs
++++ b/crates/codegraph-store/src/index_lease.rs
+@@ -266,15 +266,17 @@ impl IndexLease {
+         if Instant::now() >= deadline {
+             return Err(IndexLeaseError::TimedOut { path: lock_path });
+         }
++        // SolCode patch: anchor creation at the validated storage parent, which
++        // may be outside the project. Keep capability-relative no-follow opens.
++        let parent = root_path.parent().expect("validated index storage parent");
+         let project =
+-            cap_std::fs::Dir::from_std_file(open_directory_no_follow(paths.project()).map_err(
++            cap_std::fs::Dir::from_std_file(open_directory_no_follow(parent).map_err(
+                 |source| IndexLeaseError::CreateRoot {
+-                    path: paths.project().to_path_buf(),
++                    path: parent.to_path_buf(),
+                     source,
+                 },
+             )?);
+         checkpoint(AcquireCheckpoint::ProjectRootOpened);
+-        debug_assert_eq!(root_path.parent(), Some(paths.project()));
+         let root_name = root_path
+             .file_name()
+             .expect("IndexPaths current root always has a file name");
+diff --git a/crates/codegraph-store/src/rebuild.rs b/crates/codegraph-store/src/rebuild.rs
+index 7cd86b5..125ef36 100644
+--- a/crates/codegraph-store/src/rebuild.rs
++++ b/crates/codegraph-store/src/rebuild.rs
+@@ -274,7 +274,10 @@ fn begin_full_rebuild_with(
+ ) -> Result<FullRebuild, RebuildError> {
+     let lease = acquire_outer_exclusive(paths, deadline, cancelled)?;
+     checkpoint(fault, RebuildCheckpoint::BeforeWriteAuthorization)?;
+-    if kind == RebuildKind::ExplicitInit {
++    // SolCode: external storage belongs to its original physical project.
++    // Do not reinterpret a collision as a copied in-project index. The ordinary
++    // owner gate below refuses it under this same retained exclusive lease.
++    if kind == RebuildKind::ExplicitInit && paths.current_root().starts_with(paths.project()) {
+         remove_owner_mismatched_state_slots(paths, &lease)?;
+     }
+     // Classification happens through the state gate under the already-held
+@@ -1061,6 +1064,29 @@ mod tests {
+         rebuild.finish().expect("finish the rebuild");
+     }
+ 
++    #[test]
++    fn external_index_never_adopts_another_project_owner() {
++        let project = TempProject::new("external-owner");
++        let other = TempProject::new("external-other");
++        let storage = TempProject::new("external-storage");
++        let root = storage.0.canonicalize().unwrap().join("index");
++        let paths = IndexPaths::resolve(&project.0, Some(root.to_str().unwrap())).unwrap();
++        run_successful_rebuild(&paths, RebuildKind::ExplicitInit);
++        let before = std::fs::read(paths.current_db()).unwrap();
++        let slots = paths.state_slots().map(|path| std::fs::read(path).ok());
++        let foreign = IndexPaths::resolve(&other.0, Some(root.to_str().unwrap())).unwrap();
++        assert!(
++            begin_full_rebuild(&foreign, RebuildKind::ExplicitInit, deadline(), || false).is_err()
++        );
++        assert_eq!(std::fs::read(paths.current_db()).unwrap(), before);
++        assert_eq!(
++            paths.state_slots().map(|path| std::fs::read(path).ok()),
++            slots
++        );
++        assert_eq!(Store::extraction_status(&paths), ExtractionStatus::Current);
++        Store::open_for_read(&paths, deadline(), || false).expect("original owner still reads");
++    }
++
+     #[test]
+     fn successful_rebuild_publishes_readable_current_after_every_finalization_step() {
+         let project = TempProject::new("happy");

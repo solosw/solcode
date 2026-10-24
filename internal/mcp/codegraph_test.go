@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -49,10 +51,14 @@ func graphTestClient(t *testing.T, f *graphFakeClient) *CodeGraphClient {
 		if server.Command != "native-codegraph" || !strings.Contains(strings.Join(server.Args, " "), "serve --mcp --path") {
 			t.Error("incorrect launch", server)
 		}
-		for k, v := range map[string]string{"CODEGRAPH_TELEMETRY": "0", "DO_NOT_TRACK": "1", "CODEGRAPH_DIR": codeGraphIndexDir, "CODEGRAPH_NO_PROMPT_HOOK": "1", "CODEGRAPH_NO_DAEMON": "0", "CODEGRAPH_NO_WATCH": "0"} {
+		for k, v := range map[string]string{"CODEGRAPH_TELEMETRY": "0", "DO_NOT_TRACK": "1", "CODEGRAPH_NO_PROMPT_HOOK": "1", "CODEGRAPH_NO_DAEMON": "0", "CODEGRAPH_NO_WATCH": "0"} {
 			if server.Env[k] != v {
 				t.Errorf("env %s=%s", k, server.Env[k])
 			}
+		}
+		root := server.Args[len(server.Args)-1]
+		if server.Env["CODEGRAPH_DIR"] != filepath.Join(config.ProjectStateDir(root), "codegraph") {
+			t.Error("index is not in user project state", server.Env)
 		}
 		return f
 	})
@@ -229,5 +235,29 @@ func TestCodeGraphCloseCancelsLiveServicePreparation(t *testing.T) {
 	_ = c.Close()
 	if f.closed.Load() != 1 {
 		t.Fatal("live-service preparation leaked its proxy")
+	}
+}
+func TestCodeGraphIndexUsesUserProjectState(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	root := t.TempDir()
+	canonical, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := codeGraphEnv(root)["CODEGRAPH_DIR"]
+	want := filepath.Join(config.ProjectStateDir(canonical), "codegraph")
+	if path != want || !filepath.IsAbs(path) {
+		t.Fatalf("index=%q want=%q", path, want)
+	}
+	if rel, err := filepath.Rel(root, path); err == nil && filepath.IsLocal(rel) {
+		t.Fatal("index is inside project")
+	}
+	if codeGraphEnv(t.TempDir())["CODEGRAPH_DIR"] == path {
+		t.Fatal("different projects share an index")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatal("environment resolution created an index")
 	}
 }

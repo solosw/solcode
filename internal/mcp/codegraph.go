@@ -42,13 +42,15 @@ func NewCodeGraphClient(root, runtimeDir, cache string, factory ClientFactory) *
 	return &CodeGraphClient{root: root, runtimeDir: runtimeDir, cache: cache, factory: factory, resolve: bundle.Resolve, initialize: initializeCodeGraph, ctx: ctx, cancel: cancel, done: make(chan struct{})}
 }
 
-// A separate native-engine namespace preserves any previous Node-engine index.
-const codeGraphIndexDir = ".solcode-codegraph"
-
-func codeGraphEnv() map[string]string {
+// Store the index with other user-level project state, never in the source tree.
+// root is canonicalized by connect, so aliases of a project share one daemon.
+func codeGraphEnv(root string) map[string]string {
+	if canonical, err := filepath.EvalSymlinks(root); err == nil {
+		root = canonical
+	}
 	return map[string]string{
 		"DO_NOT_TRACK": "1", "CODEGRAPH_TELEMETRY": "0",
-		"CODEGRAPH_DIR": codeGraphIndexDir, "CODEGRAPH_NO_WATCH": "0",
+		"CODEGRAPH_DIR": filepath.Join(config.ProjectStateDir(root), "codegraph"), "CODEGRAPH_NO_WATCH": "0",
 		"CODEGRAPH_NO_DAEMON": "0", "CODEGRAPH_NO_PROMPT_HOOK": "1",
 	}
 }
@@ -74,7 +76,20 @@ func initializeCodeGraph(ctx context.Context, r bundle.Runtime, root string, env
 	defer cancel()
 	// CLI init treats an unowned directory as explicit permission to rebuild.
 	// Automatic project opening must never grant that permission to a raw DB.
-	dir := filepath.Join(root, codeGraphIndexDir)
+	dir := env["CODEGRAPH_DIR"]
+	if !filepath.IsAbs(dir) {
+		return fmt.Errorf("CodeGraph index must use an absolute user-state path")
+	}
+	// Only prepare the parent: the upstream lease creates the index directory.
+	if err := os.MkdirAll(filepath.Dir(dir), 0700); err != nil {
+		return err
+	}
+	parent, err := filepath.EvalSymlinks(filepath.Dir(dir))
+	if err != nil {
+		return err
+	}
+	dir = filepath.Join(parent, filepath.Base(dir))
+	env["CODEGRAPH_DIR"] = dir
 	if info, err := os.Lstat(dir); err == nil && info.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("refusing a symlinked CodeGraph index")
 	}
@@ -138,7 +153,10 @@ func (c *CodeGraphClient) connect() error {
 	if err != nil {
 		return err
 	}
-	home, _ := os.UserHomeDir()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("CodeGraph user state: %w", err)
+	}
 	home, _ = filepath.EvalSymlinks(home)
 	if root == filepath.Dir(root) || root == home {
 		return fmt.Errorf("CodeGraph refuses filesystem root or home directory")
@@ -154,7 +172,7 @@ func (c *CodeGraphClient) connect() error {
 	if err != nil {
 		return err
 	}
-	env := codeGraphEnv()
+	env := codeGraphEnv(root)
 	if err := c.initialize(c.ctx, r, root, env); err != nil {
 		return err
 	}

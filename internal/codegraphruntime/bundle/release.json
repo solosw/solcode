@@ -27,5 +27,10 @@
       "name": "codegraph-0.55.2-x86_64-pc-windows-msvc.zip",
       "sha256": "7a1eba4c0c4133727f15372f9994aa4eac509be4283fabbc0c724dd73c8c9f79"
     }
+  },
+  "patch": {
+    "revision": "solcode-external-index-v1",
+    "sha256": "b50c1bfa1d0d0cedef9c53065a23be4734566b781eba4caa14312ebcb6339499",
+    "rust": "1.98.0"
   }
 }

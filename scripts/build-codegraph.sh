@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Build a source checkout with the complete CodeGraph runtime embedded.
+# Build with patched CodeGraph embedded (Python, Git, Rust >=1.98, C toolchain).
+# Non-native GOOS/GOARCH also need the Rust target stdlib and C linker.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"

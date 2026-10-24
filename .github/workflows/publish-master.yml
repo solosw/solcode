@@ -20,7 +20,7 @@ permissions:
 jobs:
   build-computeruse:
     # Host builds are pure Go. Retain the existing platform matrix and asset
-    # names while embedding checksum-pinned native runtime archives.
+    # names while embedding pinned native runtimes (CodeGraph is built from patched source).
     strategy:
       fail-fast: false
       matrix:
@@ -28,28 +28,34 @@ jobs:
           - runner: ubuntu-latest
             goos: linux
             goarch: amd64
+            codegraph_target: x86_64-unknown-linux-musl
             pack: tar.gz
           - runner: windows-latest
             goos: windows
             goarch: amd64
+            codegraph_target: x86_64-pc-windows-msvc
             pack: zip
           - runner: macos-14
             goos: darwin
             goarch: arm64
+            codegraph_target: aarch64-apple-darwin
             pack: tar.gz
           - runner: ubuntu-24.04-arm
             goos: linux
             goarch: arm64
+            codegraph_target: aarch64-unknown-linux-musl
             pack: tar.gz
             experimental: true
           - runner: windows-11-arm
             goos: windows
             goarch: arm64
+            codegraph_target: aarch64-pc-windows-msvc
             pack: zip
             experimental: true
           - runner: macos-15-intel
             goos: darwin
             goarch: amd64
+            codegraph_target: x86_64-apple-darwin
             pack: tar.gz
             experimental: true
     runs-on: ${{ matrix.runner }}
@@ -71,6 +77,35 @@ jobs:
       - name: Resolve version label
         shell: bash
         run: echo "LDFLAGS_VERSION=master+$(echo "${GITHUB_SHA}" | cut -c1-7)" >> "$GITHUB_ENV"
+
+      - name: Setup Rust for patched CodeGraph
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.98.0
+          targets: ${{ matrix.codegraph_target }}
+
+      - name: Install Linux native build prerequisites
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools build-essential
+
+      - name: Cache CodeGraph build dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cache/solcode-codegraph-build
+          key: codegraph-${{ runner.os }}-${{ matrix.goarch }}-1.98.0-${{ hashFiles('internal/codegraphruntime/bundle/release.json', 'scripts/codegraph/external-index.patch') }}
+
+      - name: Verify patched CodeGraph runtime
+        shell: bash
+        env:
+          CGO_ENABLED: '0'
+          SOLCODE_CODEGRAPH_SMOKE: '1'
+        run: |
+          python -m unittest discover -s scripts -p test_prepare_codegraph.py -v
+          python scripts/prepare-codegraph.py --os "${{ matrix.goos }}" --arch "${{ matrix.goarch }}"
+          go test ./internal/codegraphruntime/... ./internal/mcp -run 'TestCodeGraph.*Smoke$|TestPatchedPayload|TestPreparedPayload' -v -count=1
 
       - name: Build computer-use asset
         shell: bash
@@ -128,8 +163,9 @@ jobs:
             - Install (Linux/macOS): `curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/master/scripts/install.sh | bash`
             - Install (Windows): `irm https://raw.githubusercontent.com/${{ github.repository }}/master/scripts/install.ps1 | iex`
 
-            Published assets are the CGO + `-tags computeruse` (robotgo) builds
-            (`*_computeruse`). There is no separate pure-Go release channel.
+            Published assets use a pure-Go host with embedded native ComputerUse and
+            patched CodeGraph runtimes. The historical `*_computeruse` suffix is
+            retained for installer compatibility; no system Node/Python is needed.
 
             Assets are overwritten on each push to master/main.
           files: |

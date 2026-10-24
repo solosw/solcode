@@ -22,10 +22,34 @@ var installMu sync.Mutex
 
 type release struct {
 	Version string `json:"version"`
-	Assets  map[string]struct {
+	Commit  string `json:"commit"`
+	Patch   struct {
+		Revision string `json:"revision"`
+		SHA256   string `json:"sha256"`
+	} `json:"patch"`
+	Assets map[string]struct {
 		Name   string `json:"name"`
 		SHA256 string `json:"sha256"`
 	} `json:"assets"`
+}
+
+type payload struct {
+	Target       string `json:"target"`
+	SHA256       string `json:"sha256"`
+	SourceCommit string `json:"sourceCommit"`
+	PatchSHA256  string `json:"patchSHA256"`
+}
+
+// Build-time provenance and payload are embedded together, not downloaded at runtime.
+func validatePayload(lock release, target payload, raw []byte) error {
+	if target.SourceCommit != lock.Commit || target.PatchSHA256 != lock.Patch.SHA256 || lock.Patch.Revision == "" {
+		return fmt.Errorf("CodeGraph embedded source/patch mismatch; rebuild the patched runtime")
+	}
+	sum := sha256.Sum256(raw)
+	if hex.EncodeToString(sum[:]) != target.SHA256 {
+		return fmt.Errorf("CodeGraph archive SHA256 mismatch")
+	}
+	return nil
 }
 
 type Runtime struct{ Binary string }
@@ -58,9 +82,7 @@ func Resolve(ctx context.Context, override, cache string) (Runtime, error) {
 	if err != nil {
 		return Runtime{}, fmt.Errorf("CodeGraph native runtime not embedded; build with scripts/build-codegraph.sh or configure codegraph.runtime_dir; use Grep/LSP in the meantime")
 	}
-	var target struct {
-		Target string `json:"target"`
-	}
+	var target payload
 	meta, err := files.ReadFile("assets/target.json")
 	if err != nil || json.Unmarshal(meta, &target) != nil || target.Target != runtime.GOOS+"/"+runtime.GOARCH {
 		return Runtime{}, fmt.Errorf("CodeGraph embedded platform mismatch")
@@ -74,16 +96,18 @@ func Resolve(ctx context.Context, override, cache string) (Runtime, error) {
 	if !ok {
 		return Runtime{}, fmt.Errorf("unsupported CodeGraph platform %s", target.Target)
 	}
-	sum := sha256.Sum256(raw)
-	if hex.EncodeToString(sum[:]) != asset.SHA256 {
-		return Runtime{}, fmt.Errorf("CodeGraph archive SHA256 mismatch")
+	if err := validatePayload(lock, target, raw); err != nil {
+		return Runtime{}, err
 	}
 	notices, err := files.ReadFile("notices/THIRD_PARTY_NOTICES.txt")
 	if err != nil {
 		return Runtime{}, fmt.Errorf("CodeGraph notices missing: %w", err)
 	}
 	noticeHash := sha256.Sum256(notices)
-	dir := filepath.Join(cache, lock.Version, runtime.GOOS+"-"+runtime.GOARCH, asset.SHA256+"-"+hex.EncodeToString(noticeHash[:8]))
+	// The archive digest is generated at build time after source/patch pinning,
+	// then embedded with the payload. Official unpatched archives are rejected.
+	asset.SHA256 = target.SHA256
+	dir := filepath.Join(cache, lock.Version+"-"+lock.Patch.Revision, runtime.GOOS+"-"+runtime.GOARCH, asset.SHA256+"-"+hex.EncodeToString(noticeHash[:8]))
 	installMu.Lock()
 	defer installMu.Unlock()
 	if marker, err := os.ReadFile(filepath.Join(dir, ".complete")); err == nil && string(marker) == asset.SHA256 {

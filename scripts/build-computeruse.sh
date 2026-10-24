@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Build ONE release archive embedding the pinned open-computer-use runtime.
-# Pure Go host build: no robotgo, CGO, GUI SDK or native cross compiler needed.
+# Pure Go host build; patched CodeGraph needs Rust/Cargo, Git and a C toolchain.
+# Cross builds also need the Rust target stdlib and its C linker; prefer native CI.
 # The historical _computeruse asset suffix is retained for installer compatibility.
 #
 # Usage:

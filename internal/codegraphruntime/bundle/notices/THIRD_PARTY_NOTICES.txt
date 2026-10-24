@@ -1,6 +1,8 @@
 CodeGraph-Rust v0.55.2 (e62ccab464ea558f41e88077383b38689605bb14)
 https://github.com/sunerpy/codegraph-rust
 Native runtime with bundled SQLite and tree-sitter; no Node/Python runtime.
+SolCode modification: solcode-external-index-v1 (external index storage and owner protection).
+Patch source: scripts/codegraph/external-index.patch in the SolCode source distribution.
 All production dependencies across supported platforms, including build-only crates, are retained as a superset.
 
 MIT License

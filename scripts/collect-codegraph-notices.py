@@ -183,6 +183,8 @@ def main():
         sections += list(pool.map(npm_notice, frontend))
     header = f"CodeGraph-Rust {lock['version']} ({commit})\nhttps://github.com/{lock['repository']}\n"
     header += "Native runtime with bundled SQLite and tree-sitter; no Node/Python runtime.\n"
+    header += f"SolCode modification: {lock['patch']['revision']} (external index storage and owner protection).\n"
+    header += "Patch source: scripts/codegraph/external-index.patch in the SolCode source distribution.\n"
     header += "All production dependencies across supported platforms, including build-only crates, are retained as a superset.\n\n"
     header += (args.source / "LICENSE-MIT").read_text()
     header += "\n=== Embedded browser viewer ===\n" + (args.source / "ui/LICENSE").read_text()

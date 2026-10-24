@@ -19,6 +19,9 @@ func smokeRuntime(t *testing.T) (bundle.Runtime, string) {
 	if os.Getenv("SOLCODE_CODEGRAPH_SMOKE") != "1" {
 		t.Skip("opt-in actual native runtime test")
 	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	cache := t.TempDir()
 	r, err := bundle.Resolve(context.Background(), os.Getenv("SOLCODE_CODEGRAPH_RUNTIME_DIR"), cache)
 	if err != nil {
@@ -29,6 +32,15 @@ func smokeRuntime(t *testing.T) (bundle.Runtime, string) {
 		t.Fatalf("native version: %s %v", version, err)
 	}
 	return r, cache
+}
+
+func smokeIndexDir(t *testing.T, root string) string {
+	t.Helper()
+	canonical, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return codeGraphEnv(canonical)["CODEGRAPH_DIR"]
 }
 
 func smokeQuery(t *testing.T, c *CodeGraphClient, name, raw string) string {
@@ -60,8 +72,8 @@ func waitSmokeDaemonExit(t *testing.T, root string) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for {
-		_, err := os.Stat(filepath.Join(root, codeGraphIndexDir, "daemon.pid"))
-		_, writerErr := os.Stat(filepath.Join(root, codeGraphIndexDir, "writer.json"))
+		_, err := os.Stat(filepath.Join(smokeIndexDir(t, root), "daemon.pid"))
+		_, writerErr := os.Stat(filepath.Join(smokeIndexDir(t, root), "writer.json"))
 		if os.IsNotExist(err) && os.IsNotExist(writerErr) {
 			return
 		}
@@ -81,7 +93,7 @@ func TestCodeGraphRuntimeSmoke(t *testing.T) {
 	if err := exec.Command("git", "init", "-q", root).Run(); err != nil {
 		t.Fatal(err)
 	}
-	ignore := []byte(codeGraphIndexDir + "/\n")
+	ignore := []byte("# existing ignore rules\n")
 	if err := os.WriteFile(filepath.Join(root, ".gitignore"), ignore, 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -97,6 +109,14 @@ func TestCodeGraphRuntimeSmoke(t *testing.T) {
 	if err := os.WriteFile(old, []byte("previous Node engine index"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	legacyNative := filepath.Join(root, ".solcode-codegraph")
+	if err := os.Mkdir(legacyNative, 0700); err != nil {
+		t.Fatal(err)
+	}
+	nativeSentinel := filepath.Join(legacyNative, "codegraph.db")
+	if err := os.WriteFile(nativeSentinel, []byte("previous native engine index"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	code := filepath.Join(root, "main.ts")
 	if err := os.WriteFile(code, []byte("export function smokeLeaf() { return 1; }\nexport function smokeCaller() { return smokeLeaf(); }\n"), 0600); err != nil {
 		t.Fatal(err)
@@ -107,7 +127,7 @@ func TestCodeGraphRuntimeSmoke(t *testing.T) {
 	b.Start()
 	t.Cleanup(func() {
 		if t.Failed() {
-			log, _ := os.ReadFile(filepath.Join(root, codeGraphIndexDir, "daemon.log"))
+			log, _ := os.ReadFile(filepath.Join(smokeIndexDir(t, root), "daemon.log"))
 			t.Logf("daemon diagnostics: %s", log)
 		}
 		_ = a.Close()
@@ -134,7 +154,7 @@ func TestCodeGraphRuntimeSmoke(t *testing.T) {
 		smokeQuery(t, a, q.name, q.raw)
 	}
 	// writer.pid is the intentionally empty kernel lock; diagnostics are separate.
-	writerRaw, err := os.ReadFile(filepath.Join(root, codeGraphIndexDir, "writer.json"))
+	writerRaw, err := os.ReadFile(filepath.Join(smokeIndexDir(t, root), "writer.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +172,7 @@ func TestCodeGraphRuntimeSmoke(t *testing.T) {
 	if !strings.Contains(result, "return 1") {
 		t.Fatal("close affected another session:", result)
 	}
-	still, err := os.ReadFile(filepath.Join(root, codeGraphIndexDir, "writer.json"))
+	still, err := os.ReadFile(filepath.Join(smokeIndexDir(t, root), "writer.json"))
 	if err != nil || string(still) != string(writerRaw) {
 		t.Fatal("shared writer changed")
 	}
@@ -220,6 +240,14 @@ func TestCodeGraphRuntimeSmoke(t *testing.T) {
 	if err != nil || string(got) != "previous Node engine index" {
 		t.Fatal("modified legacy index")
 	}
+	got, err = os.ReadFile(nativeSentinel)
+	if err != nil || string(got) != "previous native engine index" {
+		t.Fatal("modified legacy native index")
+	}
+	entries, err := os.ReadDir(legacyNative)
+	if err != nil || len(entries) != 1 {
+		t.Fatal("wrote new data to legacy native index")
+	}
 	for _, name := range []string{".mcp.json", "AGENTS.md", "CLAUDE.md"} {
 		if _, err := os.Stat(filepath.Join(root, name)); !os.IsNotExist(err) {
 			t.Fatal("installed agent configuration", name)
@@ -241,12 +269,12 @@ func TestCodeGraphInitializationRecoverySmoke(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- initializeCodeGraph(ctx, r, root, codeGraphEnv()) }()
+	go func() { done <- initializeCodeGraph(ctx, r, root, codeGraphEnv(root)) }()
 	deadline := time.Now().Add(15 * time.Second)
 	for {
 		building := false
 		for _, name := range []string{"index-state.0.json", "index-state.1.json"} {
-			raw, _ := os.ReadFile(filepath.Join(root, codeGraphIndexDir, name))
+			raw, _ := os.ReadFile(filepath.Join(smokeIndexDir(t, root), name))
 			if strings.Contains(string(raw), "building") {
 				building = true
 			}
@@ -270,7 +298,7 @@ func TestCodeGraphInitializationRecoverySmoke(t *testing.T) {
 	if err := <-done; err == nil {
 		t.Fatal("initial scan was not interrupted")
 	}
-	if err := initializeCodeGraph(context.Background(), r, root, codeGraphEnv()); err != nil {
+	if err := initializeCodeGraph(context.Background(), r, root, codeGraphEnv(root)); err != nil {
 		t.Fatal("interrupted initial scan recovery:", err)
 	}
 	t.Log("native init recovered its own interrupted building state")
@@ -280,8 +308,8 @@ func TestCodeGraphBootstrapSafetySmoke(t *testing.T) {
 	r, _ := smokeRuntime(t)
 	t.Run("foreign database", func(t *testing.T) {
 		root := t.TempDir()
-		dir := filepath.Join(root, codeGraphIndexDir)
-		if err := os.Mkdir(dir, 0700); err != nil {
+		dir := smokeIndexDir(t, root)
+		if err := os.MkdirAll(dir, 0700); err != nil {
 			t.Fatal(err)
 		}
 		db := filepath.Join(dir, "codegraph.db")
@@ -289,7 +317,7 @@ func TestCodeGraphBootstrapSafetySmoke(t *testing.T) {
 		if err := os.WriteFile(db, original, 0600); err != nil {
 			t.Fatal(err)
 		}
-		if err := initializeCodeGraph(context.Background(), r, root, codeGraphEnv()); err == nil {
+		if err := initializeCodeGraph(context.Background(), r, root, codeGraphEnv(root)); err == nil {
 			t.Fatal("accepted foreign database")
 		}
 		got, err := os.ReadFile(db)
@@ -297,12 +325,34 @@ func TestCodeGraphBootstrapSafetySmoke(t *testing.T) {
 			t.Fatal("modified foreign database")
 		}
 	})
+	t.Run("different project owner", func(t *testing.T) {
+		root, other := t.TempDir(), t.TempDir()
+		env := codeGraphEnv(root)
+		if err := initializeCodeGraph(context.Background(), r, root, env); err != nil {
+			t.Fatal(err)
+		}
+		db := filepath.Join(env["CODEGRAPH_DIR"], "codegraph.db")
+		before, err := os.ReadFile(db)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := initializeCodeGraph(context.Background(), r, other, env); err == nil {
+			t.Fatal("accepted another project's external index")
+		}
+		after, err := os.ReadFile(db)
+		if err != nil || string(before) != string(after) {
+			t.Fatal("modified another project's database")
+		}
+	})
 	t.Run("symlinked index", func(t *testing.T) {
 		root, out := t.TempDir(), t.TempDir()
-		if err := os.Symlink(out, filepath.Join(root, codeGraphIndexDir)); err != nil {
+		if err := os.MkdirAll(filepath.Dir(smokeIndexDir(t, root)), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(out, smokeIndexDir(t, root)); err != nil {
 			t.Skip(err)
 		}
-		if err := initializeCodeGraph(context.Background(), r, root, codeGraphEnv()); err == nil {
+		if err := initializeCodeGraph(context.Background(), r, root, codeGraphEnv(root)); err == nil {
 			t.Fatal("accepted symlinked index")
 		}
 		entries, err := os.ReadDir(out)

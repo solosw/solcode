@@ -1,4 +1,6 @@
 # Build multi-platform release archives for GitHub Releases (Windows host).
+# Requires Python, Git, Rust >=1.98 and target stdlibs/C linkers for ALL targets.
+# Prefer native per-platform scripts/build-computeruse.sh builds (as CI does).
 #
 # Usage:
 #   .\scripts\build-release.ps1 -Version v0.1.0

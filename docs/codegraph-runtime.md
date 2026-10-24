@@ -1,6 +1,7 @@
 # Embedded CodeGraph
 
-SolCode release builds embed **sunerpy/codegraph-rust v0.55.2**, a single native
+SolCode release builds embed **sunerpy/codegraph-rust v0.55.2** with the pinned
+`solcode-external-index-v1` storage patch, a single native
 executable with bundled SQLite, tree-sitter grammars and a precompiled browser
 viewer. No Node/npm/Python runtime, external MCP configuration or Git hooks are
 required. The upstream project is MIT-licensed; dependency notices ship alongside
@@ -14,11 +15,18 @@ the release and are also embedded.
   this version, these options initialize only the index, without installing
   hooks, Agent files or MCP configuration. Home/filesystem roots, symlinked index
   directories and unrecognized raw databases are rejected.
-- Native indexes live in **`.solcode-codegraph/`**, using upstream `CODEGRAPH_DIR`.
-  Previous Node-engine `.codegraph/` indexes are left untouched, not migrated or
-  deleted. Upstream creates an internal ignore file; SolCode does not change the
-  project root ignore file. Add `.solcode-codegraph/` to your own ignore rules if
-  desired. This is not the changegraph edit-history database.
+- Native indexes live in **`~/.solcode/projects/<project-id>/codegraph/`**. The
+  project identifier follows the existing SolCode project-state convention,
+  derived from the canonical absolute project path. Project aliases share one
+  index and daemon. SolCode passes the absolute path through `CODEGRAPH_DIR`.
+  The patch accepts external storage and anchors lease creation there; upstream
+  still owns scanning, SQLite, daemon and watcher behavior. External indexes
+  with a different physical project owner are refused, not adopted or rebuilt.
+- Previous `.solcode-codegraph/` and Node-engine `.codegraph/` indexes are left
+  untouched: no migration, deletion or stopping their existing daemons. A new
+  index is built in user state when the updated application opens the project.
+  No new project-local index or root ignore entry is needed. This is not the
+  changegraph edit-history database.
 - Upstream owns scan leases, index-state records and interrupted-scan recovery.
   SolCode does not implement another scanner, graph store or watcher. Unknown,
   future-format or corrupt indexes are not silently replaced.
@@ -58,8 +66,12 @@ Disable explicitly in settings:
 
 A plain `go build` of a clean source checkout has no large runtime payload. Use
 `bash scripts/build-codegraph.sh -o /tmp/solcode` to prepare the current Go
-target's SHA256-pinned archive and embed it. Python is needed **at build time
-only**. On Windows hosts:
+target's patched native archive and embed it. **Build-time requirements:**
+Python 3.8+, Git, Rust/Cargo 1.98+ and a C toolchain (Linux musl targets also need
+`musl-tools`; Windows targets use MSVC). CI pins Rust 1.98.0. The builder fetches
+the exact source commit, checks/applies the SHA256-pinned patch, runs path/lease/
+rebuild tests, and compiles with Cargo `--locked`. End users need none of these
+toolchains. On Windows hosts:
 
 ```powershell
 python scripts/prepare-codegraph.py --os windows --arch amd64
@@ -68,20 +80,35 @@ go build ./cmd/solcode
 
 `build-release.sh`, `build-release.ps1` and the historical `build-computeruse.sh`
 assets used by master publishing prepare both runtimes for each target, include
-notices and clean generated payloads on exit. Do not build different targets
-concurrently in one checkout: each replaces its target-specific embed payload.
+notices and clean generated payloads on exit. The manual multi-platform scripts
+require Rust target standard libraries and native/cross C linkers for **every**
+target; Go cross-compilation alone is no longer sufficient. Prefer one native
+`build-computeruse.sh <version> <os> <arch> <pack>` build per host, as the release
+workflows do. Semver releases retain both historical archive names for each
+native build. Do not build different targets concurrently in one checkout:
+each replaces its target-specific embed payload.
+
+`release.json` pins the source commit and patch digest; its asset digests record
+the original upstream archives, not the patched build output. The builder
+records source/patch provenance and the actual archive SHA256 in `target.json`,
+which is embedded with the payload. Runtime resolution checks all three,
+rejecting stale official/unpatched payloads. This trusts the local build
+environment and cache, not an upstream signature for the modified binary.
+Build caches use `SOLCODE_CODEGRAPH_BUILD_CACHE` or
+`~/.cache/solcode-codegraph-build/`; these are build artifacts, not project indexes.
 
 At runtime, the verified archive is extracted atomically to
-`~/.solcode/codegraph-runtime/<version>/<platform>/<payload-and-notice-hash>/`.
+`~/.solcode/codegraph-runtime/<version>-<patch-revision>/<platform>/<payload-and-notice-hash>/`.
 Extraction rejects escaping paths/links and enforces size/entry limits. There is
 no fallback to a system CodeGraph. For development only, `codegraph.runtime_dir`
 may point to a directory containing the unpacked `codegraph` (`codegraph.exe` on
 Windows). This explicit override is trusted like a configured MCP command and
 is not checksum-verified; never point it at an untrusted directory.
 
-## Measured size (macOS arm64)
+## Historical size comparison (macOS arm64, unpatched upstream archive)
 
-These measurements embed CodeGraph only, without the optional ComputerUse
+These pre-patch measurements are retained for context, **not as size claims for
+the current patched-source build**. They embed CodeGraph only, without the optional ComputerUse
 runtime. The default `go build` comparison uses the same settings for both
 engines (CGO enabled, debug information retained); the tarballs contain only the
 SolCode executable.
@@ -100,7 +127,8 @@ for a full release that also embeds ComputerUse, or for other platforms.
 ## Verification and upgrades
 
 ```sh
-go test -race ./internal/codegraphruntime/... ./internal/mcp ./internal/tool ./internal/config ./internal/app -run 'TestCodeGraph|TestExtract|TestRuntimeOverride|TestSourceBuild|TestPinnedRelease'
+python3 -m unittest discover -s scripts -p test_prepare_codegraph.py -v
+go test -race ./internal/codegraphruntime/... ./internal/mcp ./internal/tool ./internal/config ./internal/app -run 'TestCodeGraph|TestExtract|TestRuntimeOverride|TestSourceBuild|TestPinnedRelease|TestPatchedPayload|TestPreparedPayload'
 python3 scripts/prepare-codegraph.py --os darwin --arch arm64
 SOLCODE_CODEGRAPH_SMOKE=1 go test -race ./internal/mcp -run '^TestCodeGraph.*Smoke$' -v -count=1
 ```
@@ -108,12 +136,13 @@ SOLCODE_CODEGRAPH_SMOKE=1 go test -race ./internal/mcp -run '^TestCodeGraph.*Smo
 The opt-in tests exercise real cold initialization, all eight queries,
 simultaneous sessions sharing one daemon, live edits, file deletion, offline
 catch-up, interrupted-scan recovery, legacy-index preservation, and rejection of
-foreign databases/symlinked indexes. They check that hooks, root ignore rules
+foreign databases, different project owners and symlinked indexes. They check that hooks, root ignore rules
 and Agent/MCP configuration are not installed. Only temporary projects are used.
 
 To upgrade, review the native CLI/MCP contracts and installer side effects,
 update `bundle/release.json` with all six official digests and the source commit,
-and regenerate checked-in notices with **Python 3.11+**:
+review/rebase `scripts/codegraph/external-index.patch`, update its SHA256 and
+revision in the release lock, and regenerate checked-in notices with **Python 3.11+**:
 
 ```sh
 python3 scripts/collect-codegraph-notices.py --source <pinned-checkout>
