@@ -256,6 +256,45 @@ func TestCodeGraphRuntimeSmoke(t *testing.T) {
 	t.Log("native runtime: initial index, eight queries, shared daemon, edits/removals, offline catch-up and no installer side effects verified")
 }
 
+// Several cold clients must not mistake a concurrent init's temporary DB gap
+// for a permanently unindexed project while they acquire live service leases.
+func TestCodeGraphConcurrentColdStartSmoke(t *testing.T) {
+	_, cache := smokeRuntime(t)
+	t.Setenv("CODEGRAPH_DAEMON_IDLE_TIMEOUT_MS", "1000")
+	root := t.TempDir()
+	var source strings.Builder
+	for i := 0; i < 1000; i++ {
+		fmt.Fprintf(&source, "export function concurrentSymbol%d() { return %d; }\n", i, i)
+	}
+	if err := os.WriteFile(filepath.Join(root, "concurrent.ts"), []byte(source.String()), 0600); err != nil {
+		t.Fatal(err)
+	}
+	clients := make([]*CodeGraphClient, 6)
+	t.Cleanup(func() {
+		if t.Failed() {
+			log, _ := os.ReadFile(filepath.Join(smokeIndexDir(t, root), "daemon.log"))
+			t.Logf("daemon diagnostics: %s", log)
+		}
+		for _, c := range clients {
+			if c != nil {
+				_ = c.Close()
+			}
+		}
+		waitSmokeDaemonExit(t, root)
+	})
+	for i := range clients {
+		clients[i] = NewCodeGraphClient(root, os.Getenv("SOLCODE_CODEGRAPH_RUNTIME_DIR"), cache, nil)
+		clients[i].Start()
+	}
+	for _, c := range clients {
+		smokeStart(t, c)
+		result := smokeQuery(t, c, "codegraph_search", `{"query":"concurrentSymbol999"}`)
+		if !strings.Contains(result, "concurrent.ts") {
+			t.Fatal("missing concurrent index:", result)
+		}
+	}
+}
+
 func TestCodeGraphInitializationRecoverySmoke(t *testing.T) {
 	r, _ := smokeRuntime(t)
 	root := t.TempDir()

@@ -201,10 +201,30 @@ func (c *CodeGraphClient) connect() error {
 	primeCtx, primeCancel := context.WithTimeout(c.ctx, 2*time.Minute)
 	primeArgs, _ := json.Marshal(map[string]string{"projectPath": root})
 	var primed *tool.ContentBlock
-	if stdio, ok := client.(*stdioClient); ok {
-		primed, err = stdio.callTool(primeCtx, "codegraph_status", primeArgs)
-	} else {
-		primed, err = client.CallTool(primeCtx, "codegraph_status", primeArgs)
+	missing := fmt.Sprintf("No indexed project found for projectPath %q.", root)
+	for {
+		if err = primeCtx.Err(); err != nil {
+			break
+		}
+		if stdio, ok := client.(*stdioClient); ok {
+			primed, err = stdio.callTool(primeCtx, "codegraph_status", primeArgs)
+		} else {
+			primed, err = client.CallTool(primeCtx, "codegraph_status", primeArgs)
+		}
+		// Concurrent CLI init can briefly remove the DB before rebuilding it.
+		// Only retry that exact miss for our successfully initialized project,
+		// on this same proxy and within the startup deadline. Never rerun init,
+		// replay a user query, or hide transport/ownership/corruption failures.
+		if err != nil || primed == nil || !primed.IsError || !strings.HasPrefix(strings.TrimPrefix(primed.Text, "Error: "), missing) {
+			break
+		}
+		select {
+		case <-primeCtx.Done():
+			err = primeCtx.Err()
+		case <-time.After(200 * time.Millisecond):
+			continue
+		}
+		break
 	}
 	primeCancel()
 	if err != nil || primed == nil || primed.IsError {

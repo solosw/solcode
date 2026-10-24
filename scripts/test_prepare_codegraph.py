@@ -28,6 +28,27 @@ class CheckedInManifestTests(unittest.TestCase):
         self.assertEqual(digest, lock["patch"]["sha256"])
         self.assertTrue(lock["patch"]["revision"])
 
+    def test_windows_style_checkout_preserves_patch_bytes(self):
+        root = Path(__file__).resolve().parent.parent
+        relative = Path("scripts/codegraph/external-index.patch")
+        expected = (root / relative).read_bytes()
+        self.assertNotIn(b"\r\n", expected)
+        with tempfile.TemporaryDirectory() as temporary:
+            repo = Path(temporary) / "repo"
+            checkout = Path(temporary) / "checkout"
+            repo.mkdir()
+            checkout.mkdir()
+            (repo / ".gitattributes").write_bytes((root / ".gitattributes").read_bytes())
+            (repo / relative).parent.mkdir(parents=True)
+            (repo / relative).write_bytes(expected)
+            subprocess.run(["git", "init", "-q", str(repo)], check=True)
+            subprocess.run(["git", "-C", str(repo), "-c", "core.autocrlf=true", "-c", "core.eol=crlf", "add", "."], check=True)
+            subprocess.run(["git", "-C", str(repo), "-c", "core.autocrlf=true", "-c", "core.eol=crlf",
+                            "checkout-index", "--all", "--prefix=" + checkout.as_posix() + "/"], check=True)
+            self.assertEqual((checkout / relative).read_bytes(), expected)
+            lock = json.loads((root / "internal/codegraphruntime/bundle/release.json").read_text())
+            self.assertEqual(hashlib.sha256((checkout / relative).read_bytes()).hexdigest(), lock["patch"]["sha256"])
+
 
 class PrepareCodeGraphTests(unittest.TestCase):
     def setUp(self):
@@ -86,6 +107,14 @@ class PrepareCodeGraphTests(unittest.TestCase):
             if command[0] == "cargo":
                 self.assertIn("--locked", command)
         self.assertTrue(any("rebuild::tests" in command for command in self.commands))
+
+    def test_upstream_checkout_pins_lf_before_checkout_and_apply(self):
+        self.prepare()
+        checkout = self.commands.index(["git", "checkout", "--detach", "FETCH_HEAD"])
+        apply = self.commands.index(["git", "apply", "--check", str(self.source_patch)])
+        for command in (["git", "config", "core.autocrlf", "false"], ["git", "config", "core.eol", "lf"]):
+            self.assertLess(self.commands.index(command), checkout)
+        self.assertLess(checkout, apply)
 
     def test_matching_payload_is_reused_without_subprocesses(self):
         self.prepare()

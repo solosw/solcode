@@ -58,6 +58,10 @@ def main():
     with tempfile.TemporaryDirectory(prefix="source-", dir=cache) as temporary:
         source = Path(temporary)
         run(["git", "init", "-q", str(source)])
+        # Keep upstream source bytes compatible with the LF-pinned patch even
+        # when the host Git configuration enables Windows CRLF conversion.
+        run(["git", "config", "core.autocrlf", "false"], source)
+        run(["git", "config", "core.eol", "lf"], source)
         run(["git", "remote", "add", "origin", f"https://github.com/{lock['repository']}.git"], source)
         run(["git", "fetch", "--depth", "1", "origin", lock["commit"]], source)
         run(["git", "checkout", "--detach", "FETCH_HEAD"], source)

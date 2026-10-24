@@ -1199,3 +1199,28 @@ Turn memory: 已完成，CodeGraph 新索引改为存放在：
 - 发布构建、校验、测试和文档已更新。Rust/C 工具链仅构建时需要，终端用户无需安装。
 **验证通过：**内嵌引擎完整 smoke、共享服务连续 10 次回归、相关 Go race 测试与 vet、Rust 路径/锁/重建测试及 8 项构建脚本测试。
 本机 macOS arm64 已验证并成功构建；其他平台的真实测试已加入发布流程，尚未运行远程 CI。需重新构建并启动新版后生效；改动尚未提交。
+
+## 2026-10-24 11:37:07 · session acp-1792684248330142000-1 · turn 17 · importance 0.40
+- keywords: todolist, todo-write, turn
+- files: .github/workflows/publish-master.yml, .github/workflows/release.yml, internal/codegraphruntime/bundle/assets/README.txt, internal/codegraphruntime/bundle/bootstrap.cjs, internal/codegraphruntime/bundle/bundle.go, internal/codegraphruntime/bundle/bundle_test.go, internal/codegraphruntime/bundle/extract.go, internal/codegraphruntime/bundle/notices/README.txt, internal/codegraphruntime/bundle/release.json, internal/config/config.go, internal/engine/batch_output_test.go, internal/engine/batch_ptc_test.go, internal/engine/context_builder.go, internal/engine/context_builder_test.go, internal/engine/plan_permissions_test.go, internal/engine/prefix_share_test.go, internal/mcp/codegraph.go, internal/mcp/codegraph_smoke_test.go, internal/mcp/codegraph_test.go, internal/permission/modes.go, internal/permission/plan.go, internal/permission/plan_test.go, internal/permission/service.go, internal/tool/batch.go, internal/tool/batch_ptc_test.go, scripts/codegraph/external-index.patch, scripts/collect-codegraph-notices.py, scripts/prepare-codegraph.py, scripts/test_prepare_codegraph.py, unit_tests/plan_mode_test.go
+
+Turn memory: 已修复，根因是 **Windows 检出时将补丁的 LF 转成了 CRLF**。本地转成 CRLF 后，得到的哈希与日志里的 `fc40492a…` 完全一致。
+修改如下：
+- 新增 `.gitattributes`，强制 `scripts/codegraph/*.patch` 使用 LF。
+- 构建脚本固定临时上游仓库的 LF 检出，避免后续 `git apply` 换行不匹配；不修改用户的全局 Git 配置。
+- 新增跨平台换行回归测试，**原 SHA256 保持不变，未放宽校验**。
+验证：10 项 Python 测试通过；模拟 `core.autocrlf=true`、`core.eol=crlf` 后，补丁哈希保持一致，真实上游源码的补丁检查及应用也通过。
+改动尚未提交。提交时需包含新增的 `.gitattributes`，然后触发新构建；直接重跑旧 workflow 仍会使用旧提交。
+
+## 2026-10-24 11:51:52 · session acp-1792684248330142000-1 · turn 18 · importance 0.40
+- keywords: todolist, todo-write, turn
+- files: .github/workflows/publish-master.yml, .github/workflows/release.yml, docs/codegraph-runtime.md, internal/codegraphruntime/bundle/assets/README.txt, internal/codegraphruntime/bundle/bootstrap.cjs, internal/codegraphruntime/bundle/bundle.go, internal/codegraphruntime/bundle/bundle_test.go, internal/codegraphruntime/bundle/extract.go, internal/codegraphruntime/bundle/notices/README.txt, internal/codegraphruntime/bundle/release.json, internal/config/config.go, internal/engine/batch_output_test.go, internal/engine/batch_ptc_test.go, internal/engine/context_builder.go, internal/engine/context_builder_test.go, internal/engine/plan_permissions_test.go, internal/engine/prefix_share_test.go, internal/mcp/codegraph.go, internal/mcp/codegraph_smoke_test.go, internal/mcp/codegraph_test.go, internal/permission/modes.go, internal/permission/plan.go, internal/permission/plan_test.go, internal/permission/service.go, internal/tool/batch.go, internal/tool/batch_ptc_test.go, scripts/codegraph/external-index.patch, scripts/collect-codegraph-notices.py, scripts/prepare-codegraph.py, scripts/test_prepare_codegraph.py, unit_tests/plan_mode_test.go
+
+Turn memory: 已修复启动逻辑对这类并发竞争的处理：**数据库短暂不可见，被误判成了永久“未建索引”**。
+源码路径显示，并发 `init` 可能在重建期间暂时移除数据库；另一个已完成握手的会话此时准备实时同步，就会收到日志中的错误。`daemon already running` 表示另一启动者已抢先运行，本身不代表共享 daemon 启动失败。
+本次修改：
+- 仅在后台启动准备阶段，对**当前工程的这条特定错误**每 200ms 重试，受现有两分钟超时约束。
+- 关闭会话立即取消等待；不重新执行 `init`，不重放用户查询。
+- 归属冲突、损坏、其他工程及传输错误仍立即失败。
+验证通过：定向测试连续 20 轮，双会话增量更新及 6 会话冷启动各连续 5 轮，相关 race/vet，以及与 CI 相同的 `CGO_ENABLED=0` 验证命令。
+**本机验证为 macOS arm64，Linux arm64 仍需新 CI 确认。** 改动尚未提交，包含前一次 Windows 换行修复。

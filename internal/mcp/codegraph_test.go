@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -198,6 +199,112 @@ func TestCodeGraphTransportFailureDegradesWithoutReplay(t *testing.T) {
 	}
 	if f.calls.Load() != 1 || f.closed.Load() != 1 {
 		t.Fatal("replayed query or leaked transport")
+	}
+}
+
+func TestCodeGraphLivePreparationWaitsForConcurrentInit(t *testing.T) {
+	f := &graphFakeClient{}
+	c := graphTestClient(t, f)
+	entered, release := make(chan struct{}), make(chan struct{})
+	f.call = func(ctx context.Context, name string, raw json.RawMessage) (*tool.ContentBlock, error) {
+		var args map[string]string
+		if err := json.Unmarshal(raw, &args); err != nil || args["projectPath"] == "" || name != "codegraph_status" {
+			t.Errorf("unexpected bootstrap: %s %s", name, raw)
+		}
+		if f.calls.Load() <= 2 {
+			return tool.ErrorResult(fmt.Sprintf("Error: No indexed project found for projectPath %q. Pass an absolute path to an indexed project, or run `codegraph init` there.", args["projectPath"])), nil
+		}
+		if f.calls.Load() == 3 {
+			close(entered)
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		return tool.Result("live service prepared"), nil
+	}
+	c.Start()
+	select {
+	case <-entered:
+	case <-c.done:
+		t.Fatalf("transient startup failure was not retried: %v", c.err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("live preparation hung")
+	}
+	select {
+	case <-c.done:
+		t.Fatal("reported ready before live catch-up")
+	default:
+	}
+	close(release)
+	waitGraph(t, c)
+	if c.err != nil || f.started.Load() != 1 || f.closed.Load() != 0 || f.calls.Load() != 3 {
+		t.Fatalf("startup did not recover on the same proxy: %v", c.err)
+	}
+}
+
+func TestCodeGraphCloseCancelsConcurrentInitWait(t *testing.T) {
+	f := &graphFakeClient{}
+	c := graphTestClient(t, f)
+	entered := make(chan struct{})
+	f.call = func(_ context.Context, _ string, raw json.RawMessage) (*tool.ContentBlock, error) {
+		var args map[string]string
+		_ = json.Unmarshal(raw, &args)
+		if f.calls.Load() == 1 {
+			close(entered)
+		}
+		return tool.ErrorResult(fmt.Sprintf("No indexed project found for projectPath %q.", args["projectPath"])), nil
+	}
+	c.Start()
+	<-entered
+	_ = c.Close()
+	if c.err == nil || f.closed.Load() != 1 || f.calls.Load() != 1 {
+		t.Fatalf("startup retry ignored cancellation or leaked proxy: %v", c.err)
+	}
+}
+
+func TestCodeGraphLivePreparationDeadline(t *testing.T) {
+	f := &graphFakeClient{}
+	c := graphTestClient(t, f)
+	ctx, cancel := context.WithTimeout(c.ctx, 50*time.Millisecond)
+	defer cancel()
+	c.ctx = ctx
+	f.call = func(_ context.Context, _ string, raw json.RawMessage) (*tool.ContentBlock, error) {
+		var args map[string]string
+		_ = json.Unmarshal(raw, &args)
+		return tool.ErrorResult(fmt.Sprintf("No indexed project found for projectPath %q.", args["projectPath"])), nil
+	}
+	c.Start()
+	waitGraph(t, c)
+	if !errors.Is(c.err, context.DeadlineExceeded) || f.closed.Load() != 1 || f.calls.Load() != 1 {
+		t.Fatalf("startup retry was not deadline bounded: %v", c.err)
+	}
+}
+
+func TestCodeGraphLivePreparationDoesNotRetryPermanentFailures(t *testing.T) {
+	for _, failure := range []struct {
+		name   string
+		result *tool.ContentBlock
+		err    error
+	}{
+		{"other project", tool.ErrorResult(`No indexed project found for projectPath "/another/project".`), nil},
+		{"owner mismatch", tool.ErrorResult("index owner mismatch"), nil},
+		{"corrupt index", tool.ErrorResult("corrupt index state"), nil},
+		{"transport", nil, errors.New("transport lost")},
+		{"empty response", nil, nil},
+	} {
+		t.Run(failure.name, func(t *testing.T) {
+			f := &graphFakeClient{call: func(context.Context, string, json.RawMessage) (*tool.ContentBlock, error) {
+				return failure.result, failure.err
+			}}
+			c := graphTestClient(t, f)
+			c.Start()
+			waitGraph(t, c)
+			if c.err == nil || f.calls.Load() != 1 || f.closed.Load() != 1 {
+				t.Fatal("retried a permanent failure or leaked proxy", c.err)
+			}
+		})
 	}
 }
 

@@ -38,6 +38,13 @@ the release and are also embedded.
   complete one catch-up. This also covers concurrent warm-start read-only
   fallbacks; model-supplied project overrides remain forbidden. Later watcher
   updates are **asynchronous**. Verify source before editing.
+- Concurrent upstream initialization can briefly remove the DB while rebuilding.
+  Only during live-service preparation, SolCode retries the exact "No indexed
+  project found" error for its own already-initialized canonical project on the
+  same proxy (200 ms between attempts, within the existing two-minute startup
+  deadline). Closing the session cancels the wait. It never reruns initialization
+  or replays user queries; other-project, ownership, corruption and transport
+  errors still fail immediately.
 - Telemetry is disabled. Runtime resolution never downloads anything and has no
   PATH fallback. Missing payloads, unsupported platforms or startup failures
   leave Grep/View/LSP and the existing projectindex fallback usable. The existing
