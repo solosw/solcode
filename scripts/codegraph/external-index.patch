@@ -1,5 +1,5 @@
 diff --git a/crates/codegraph-core/src/index_paths.rs b/crates/codegraph-core/src/index_paths.rs
-index 5217b5f..77e528f 100644
+index 5217b5f..7b71f82 100644
 --- a/crates/codegraph-core/src/index_paths.rs
 +++ b/crates/codegraph-core/src/index_paths.rs
 @@ -302,6 +302,20 @@ fn configured_directory_name(codegraph_dir: Option<&str>) -> Result<&str, IndexP
@@ -23,7 +23,7 @@ index 5217b5f..77e528f 100644
      let invalid = value.is_empty()
          || value == "."
          || value.contains("..")
-@@ -716,21 +730,88 @@ mod tests {
+@@ -716,21 +730,90 @@ mod tests {
      }
  
      #[test]
@@ -57,7 +57,9 @@ index 5217b5f..77e528f 100644
 +            project.clone(),
 +            project.parent().unwrap().to_path_buf(),
 +            filesystem_root,
-+            cache.join("child").join("..").join("index"),
++            // PathBuf::join normalizes `..` on Windows verbatim paths. Keep
++            // the raw traversal in the input so the validator actually sees it.
++            PathBuf::from(format!("{}/child/../index", cache.display())),
 +        ] {
 +            let error = IndexPaths::resolve(&project, Some(invalid.to_str().unwrap()))
 +                .expect_err("unsafe external root must fail closed");

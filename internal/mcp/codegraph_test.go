@@ -211,8 +211,12 @@ func TestCodeGraphLivePreparationWaitsForConcurrentInit(t *testing.T) {
 		if err := json.Unmarshal(raw, &args); err != nil || args["projectPath"] == "" || name != "codegraph_status" {
 			t.Errorf("unexpected bootstrap: %s %s", name, raw)
 		}
-		if f.calls.Load() <= 2 {
+		if f.calls.Load() == 1 {
 			return tool.ErrorResult(fmt.Sprintf("Error: No indexed project found for projectPath %q. Pass an absolute path to an indexed project, or run `codegraph init` there.", args["projectPath"])), nil
+		}
+		if f.calls.Load() == 2 {
+			root := args["projectPath"]
+			return tool.ErrorResult(fmt.Sprintf("Error: Failed to prepare live synchronization for %s: refusing live services for unindexed project %s; run `codegraph init %s` first", root, root, root)), nil
 		}
 		if f.calls.Load() == 3 {
 			close(entered)
@@ -245,40 +249,56 @@ func TestCodeGraphLivePreparationWaitsForConcurrentInit(t *testing.T) {
 }
 
 func TestCodeGraphCloseCancelsConcurrentInitWait(t *testing.T) {
-	f := &graphFakeClient{}
-	c := graphTestClient(t, f)
-	entered := make(chan struct{})
-	f.call = func(_ context.Context, _ string, raw json.RawMessage) (*tool.ContentBlock, error) {
-		var args map[string]string
-		_ = json.Unmarshal(raw, &args)
-		if f.calls.Load() == 1 {
-			close(entered)
-		}
-		return tool.ErrorResult(fmt.Sprintf("No indexed project found for projectPath %q.", args["projectPath"])), nil
-	}
-	c.Start()
-	<-entered
-	_ = c.Close()
-	if c.err == nil || f.closed.Load() != 1 || f.calls.Load() != 1 {
-		t.Fatalf("startup retry ignored cancellation or leaked proxy: %v", c.err)
+	for _, source := range []string{"resolver", "live broker"} {
+		t.Run(source, func(t *testing.T) {
+			f := &graphFakeClient{}
+			c := graphTestClient(t, f)
+			entered := make(chan struct{})
+			f.call = func(_ context.Context, _ string, raw json.RawMessage) (*tool.ContentBlock, error) {
+				var args map[string]string
+				_ = json.Unmarshal(raw, &args)
+				if f.calls.Load() == 1 {
+					close(entered)
+				}
+				root := args["projectPath"]
+				if source == "live broker" {
+					return tool.ErrorResult(fmt.Sprintf("Failed to prepare live synchronization for %s: refusing live services for unindexed project %s; run `codegraph init %s` first", root, root, root)), nil
+				}
+				return tool.ErrorResult(fmt.Sprintf("No indexed project found for projectPath %q.", root)), nil
+			}
+			c.Start()
+			<-entered
+			_ = c.Close()
+			if !errors.Is(c.err, context.Canceled) || f.closed.Load() != 1 || f.calls.Load() != 1 {
+				t.Fatalf("startup retry ignored cancellation or leaked proxy: %v", c.err)
+			}
+		})
 	}
 }
 
 func TestCodeGraphLivePreparationDeadline(t *testing.T) {
-	f := &graphFakeClient{}
-	c := graphTestClient(t, f)
-	ctx, cancel := context.WithTimeout(c.ctx, 50*time.Millisecond)
-	defer cancel()
-	c.ctx = ctx
-	f.call = func(_ context.Context, _ string, raw json.RawMessage) (*tool.ContentBlock, error) {
-		var args map[string]string
-		_ = json.Unmarshal(raw, &args)
-		return tool.ErrorResult(fmt.Sprintf("No indexed project found for projectPath %q.", args["projectPath"])), nil
-	}
-	c.Start()
-	waitGraph(t, c)
-	if !errors.Is(c.err, context.DeadlineExceeded) || f.closed.Load() != 1 || f.calls.Load() != 1 {
-		t.Fatalf("startup retry was not deadline bounded: %v", c.err)
+	for _, source := range []string{"resolver", "live broker"} {
+		t.Run(source, func(t *testing.T) {
+			f := &graphFakeClient{}
+			c := graphTestClient(t, f)
+			ctx, cancel := context.WithTimeout(c.ctx, 50*time.Millisecond)
+			defer cancel()
+			c.ctx = ctx
+			f.call = func(_ context.Context, _ string, raw json.RawMessage) (*tool.ContentBlock, error) {
+				var args map[string]string
+				_ = json.Unmarshal(raw, &args)
+				root := args["projectPath"]
+				if source == "live broker" {
+					return tool.ErrorResult(fmt.Sprintf("Failed to prepare live synchronization for %s: refusing live services for unindexed project %s; run `codegraph init %s` first", root, root, root)), nil
+				}
+				return tool.ErrorResult(fmt.Sprintf("No indexed project found for projectPath %q.", root)), nil
+			}
+			c.Start()
+			waitGraph(t, c)
+			if !errors.Is(c.err, context.DeadlineExceeded) || f.closed.Load() != 1 || f.calls.Load() != 1 {
+				t.Fatalf("startup retry was not deadline bounded: %v", c.err)
+			}
+		})
 	}
 }
 
@@ -289,6 +309,7 @@ func TestCodeGraphLivePreparationDoesNotRetryPermanentFailures(t *testing.T) {
 		err    error
 	}{
 		{"other project", tool.ErrorResult(`No indexed project found for projectPath "/another/project".`), nil},
+		{"other live project", tool.ErrorResult("Failed to prepare live synchronization for /another/project: refusing live services for unindexed project /another/project; run `codegraph init /another/project` first"), nil},
 		{"owner mismatch", tool.ErrorResult("index owner mismatch"), nil},
 		{"corrupt index", tool.ErrorResult("corrupt index state"), nil},
 		{"transport", nil, errors.New("transport lost")},

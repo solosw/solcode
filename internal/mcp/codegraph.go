@@ -202,6 +202,7 @@ func (c *CodeGraphClient) connect() error {
 	primeArgs, _ := json.Marshal(map[string]string{"projectPath": root})
 	var primed *tool.ContentBlock
 	missing := fmt.Sprintf("No indexed project found for projectPath %q.", root)
+	unindexed := fmt.Sprintf("Failed to prepare live synchronization for %s: refusing live services for unindexed project %s; run `codegraph init %s` first", root, root, root)
 	for {
 		if err = primeCtx.Err(); err != nil {
 			break
@@ -212,10 +213,15 @@ func (c *CodeGraphClient) connect() error {
 			primed, err = client.CallTool(primeCtx, "codegraph_status", primeArgs)
 		}
 		// Concurrent CLI init can briefly remove the DB before rebuilding it.
-		// Only retry that exact miss for our successfully initialized project,
+		// The roots resolver and live-service broker check the DB separately.
+		// Only retry these exact misses for our successfully initialized project,
 		// on this same proxy and within the startup deadline. Never rerun init,
 		// replay a user query, or hide transport/ownership/corruption failures.
-		if err != nil || primed == nil || !primed.IsError || !strings.HasPrefix(strings.TrimPrefix(primed.Text, "Error: "), missing) {
+		if err != nil || primed == nil || !primed.IsError {
+			break
+		}
+		message := strings.TrimPrefix(primed.Text, "Error: ")
+		if !strings.HasPrefix(message, missing) && message != unindexed {
 			break
 		}
 		select {

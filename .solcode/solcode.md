@@ -904,11 +904,11 @@ Organizer: 用户要求使用开源方案进行智能模型路由，并询问是
 
 Organizer: 用户要求使用开源方案进行智能模型路由，并询问是否可将每次路由结果存储到数据库以优化后续任务。 (tags: optional)
 
-## 2026-10-24 01:00:23 · session mid-run · turn -1 · importance 1.00
-- keywords: organizer, archival, retrieval, terms, database, plan_mode, codegraph
-- memory_ids: mem_21337d602406a50a, mem_38658cf5815a026f, mem_efc0dbb066a67315
+## 2026-10-24 13:14:38 · session mid-run · turn -1 · importance 0.90
+- keywords: organizer, archival, retrieval, terms, database, plan_mode, codegraph, external-index, external_root
+- memory_ids: mem_21337d602406a50a, mem_38658cf5815a026f, mem_7c8798afa97850c5, mem_af37d2a653873c59, mem_efc0dbb066a67315
 
-Organizer: ## Active Request and Intent\n用户要求将项目内 `.solcode-codegraph/` 移到用户目录的工程数据目录下。已澄清实际 SolCode 目录为 **`~/.solcode/projects/\u003c工程标识\u003e/codegraph/`**，不是另建 `.solo`。\n\n用户已通过 AskUser 明确选择 **“采用最小补丁”**：修改上游路径支持和发布构建，扫描、数据库、daemon/watcher 继续使用上游；
+Organizer: 用户要求构建有问题：构建失败，多个平台失败于 Verify patched CodeGraph runtime，Windows amd64 精确失败已读到 Rust core 测试 18 项中 17 PASS、1 FAIL，外部根拒绝测试失败，需要修复外部根路径校验和创建锚点。源码该测试用 `cache.join("child").join("..").join("index")` 构造非法输入；Windows canonical temp 为 verbatim `\\?C:
 
 ## 2026-10-15 21:28:18 · session acp-1792052774500238000-1 · turn 7 · importance 0.50
 - keywords: organizer, archival, retrieval, terms, GGUF, turn, todolist, embedding
@@ -1224,3 +1224,10 @@ Turn memory: 已修复启动逻辑对这类并发竞争的处理：**数据库�
 - 归属冲突、损坏、其他工程及传输错误仍立即失败。
 验证通过：定向测试连续 20 轮，双会话增量更新及 6 会话冷启动各连续 5 轮，相关 race/vet，以及与 CI 相同的 `CGO_ENABLED=0` 验证命令。
 **本机验证为 macOS arm64，Linux arm64 仍需新 CI 确认。** 改动尚未提交，包含前一次 Windows 换行修复。
+
+## 2026-10-24 13:24:52 · session acp-1792684248330142000-1 · turn 19 · importance 0.90
+- keywords: todolist, todo-write, turn, organizer, archival, bug, fix, smoke, platform, macos
+- files: .github/workflows/publish-master.yml, .github/workflows/release.yml, docs/codegraph-runtime.md, internal/codegraphruntime/bundle/assets/README.txt, internal/codegraphruntime/bundle/bootstrap.cjs, internal/codegraphruntime/bundle/bundle.go, internal/codegraphruntime/bundle/bundle_test.go, internal/codegraphruntime/bundle/extract.go, internal/codegraphruntime/bundle/notices/README.txt, internal/codegraphruntime/bundle/release.json, internal/config/config.go, internal/engine/batch_output_test.go, internal/engine/batch_ptc_test.go, internal/engine/context_builder.go, internal/engine/context_builder_test.go, internal/engine/plan_permissions_test.go, internal/engine/prefix_share_test.go, internal/mcp/codegraph.go, internal/mcp/codegraph_smoke_test.go, internal/mcp/codegraph_test.go, internal/permission/modes.go, internal/permission/plan.go, internal/permission/plan_test.go, internal/permission/service.go, internal/tool/batch.go, internal/tool/batch_ptc_test.go, scripts/codegraph/external-index.patch, scripts/collect-codegraph-notices.py, scripts/prepare-codegraph.py, scripts/test_prepare_codegraph.py, unit_tests/plan_mode_test.go
+- memory_ids: mem_81781f9b8d40459b
+
+Organizer: 用户要求构建 `solosw/solcode` 最新 GitHub Actions 发布失败，保留真实 smoke 和安全校验，明确未验证平台，不能将 macOS 本机通过视为六平台通过。调查对象：Publish master #108，run `40061745028`，attempt 1，completed/failure，HEAD `76c2549e6388b3a388b41e8260fe25d8ba0a9bb0`（`修复codegraph失败`）。原功能目标不变：代码
