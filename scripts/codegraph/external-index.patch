@@ -25,7 +25,7 @@ index 5217b5f..7b71f82 100644
          || value.contains("..")
 @@ -716,21 +730,90 @@ mod tests {
      }
- 
+
      #[test]
 -    fn absolute_codegraph_dir_is_rejected() {
 +    fn absolute_codegraph_dir_uses_external_storage() {
@@ -43,11 +43,11 @@ index 5217b5f..7b71f82 100644
 +        assert_eq!(paths.project(), project.canonicalize().unwrap());
 +        assert_eq!(paths.current_root(), configured);
 +        assert!(!paths.current_root().starts_with(&project));
- 
+
          let _ = std::fs::remove_dir_all(&project);
          let _ = std::fs::remove_dir_all(&cache);
      }
- 
+
 +    #[test]
 +    fn external_root_rejects_project_ancestor_root_and_traversal() {
 +        let project = temp_dir("external-aliases");
@@ -121,6 +121,102 @@ index 5217b5f..7b71f82 100644
      #[test]
      fn wsl_windows_drive_projects_default_to_their_own_index_root() {
          let fresh = temp_dir("wsl-fresh");
+diff --git a/crates/codegraph-daemon/src/process.rs b/crates/codegraph-daemon/src/process.rs
+index 861a99e..7aa2e9d 100644
+--- a/crates/codegraph-daemon/src/process.rs
++++ b/crates/codegraph-daemon/src/process.rs
+@@ -35,7 +35,9 @@ where
+             state.original_ppid, state.current_ppid
+         ));
+     }
+-    if let Some(host_pid) = state.host_pid
++    // current_ppid() reports 0 when Windows cannot identify the parent. That
++    // sentinel is not a dead host; keep EOF and real-pid supervision intact.
++    if let Some(host_pid) = state.host_pid.filter(|&pid| pid != 0)
+         && !is_alive(host_pid)
+     {
+         return Some(format!("host pid {host_pid} exited"));
+@@ -189,6 +191,20 @@ mod tests {
+         assert_eq!(supervision_lost_reason(&state, |_| true), None);
+     }
+
++    #[test]
++    fn supervision_ignores_unknown_host_pid() {
++        let state = SupervisionState {
++            original_ppid: 10,
++            current_ppid: 10,
++            host_pid: Some(0),
++            session_leader: false,
++        };
++        assert_eq!(
++            supervision_lost_reason(&state, |_| panic!("unknown pid must not be probed")),
++            None
++        );
++    }
++
+     #[test]
+     fn supervision_detects_dead_host() {
+         let state = SupervisionState {
+diff --git a/crates/codegraph-daemon/src/proxy.rs b/crates/codegraph-daemon/src/proxy.rs
+index 328c516..8d7f2ed 100644
+--- a/crates/codegraph-daemon/src/proxy.rs
++++ b/crates/codegraph-daemon/src/proxy.rs
+@@ -142,6 +142,16 @@ pub fn verify_daemon_hello(hello: &Value) -> Option<ProxyOutcome> {
+     }
+ }
+
++/// Announce a real process that owns this connection. Windows has no stable
++/// parent pid (0 means unknown), so use this proxy's lifetime in that case;
++/// announcing 0 would make the daemon's dead-client sweep reap a live session.
++fn client_host_pid(host_pid: Option<u32>, parent_pid: u32) -> u32 {
++    host_pid
++        .filter(|&pid| pid != 0)
++        .or_else(|| (parent_pid != 0).then_some(parent_pid))
++        .unwrap_or_else(std::process::id)
++}
++
+ /// Run the local-handshake proxy: connect to the daemon at `socket_path`,
+ /// verify+discard its hello, then bridge `host_in`/`host_out` to the daemon
+ /// using JSON-RPC newline framing, answering `initialize`+`tools/list` locally.
+@@ -190,8 +200,8 @@ pub fn run_proxy<R: BufRead, W: Write + Send + 'static>(
+     // session if the host dies. The daemon reads it from its ONE long-lived
+     // recv reader; a daemon that does not understand it simply ignores a
+     // non-JSON-RPC first line. Use the served host pid when known, else our own
+-    // parent pid.
+-    let host_pid = host_ppid.unwrap_or_else(current_ppid);
++    // parent pid, or the proxy itself when the parent is unknown.
++    let host_pid = client_host_pid(host_ppid, current_ppid());
+     let client_hello = json!({ "hostPid": host_pid }).to_string();
+     forward_to_daemon(&mut send, &client_hello).context("sending client hello")?;
+
+@@ -710,6 +720,27 @@ mod tests {
+     use super::*;
+     use std::time::Instant;
+
++    #[test]
++    fn client_hello_announces_a_live_owner_not_zero() {
++        assert_eq!(client_host_pid(Some(12), 34), 12);
++        assert_eq!(client_host_pid(None, 34), 34);
++        assert_eq!(client_host_pid(Some(0), 34), 34);
++        assert_eq!(client_host_pid(None, 0), std::process::id());
++        assert_eq!(client_host_pid(Some(0), 0), std::process::id());
++    }
++
++    #[test]
++    fn unknown_host_pid_does_not_stop_proxy_watchdog() {
++        let wake = Arc::new(Shutdown::new());
++        let shutdown = Arc::new(AtomicBool::new(false));
++        let watchdog = spawn_ppid_watchdog(Some(0), Arc::clone(&wake), Arc::clone(&shutdown));
++        let stopped = wake.wait_timeout(PPID_POLL_INTERVAL * 2);
++        wake.signal();
++        drop(watchdog);
++        assert!(!stopped, "unknown Windows parent pid stopped a live proxy");
++        assert!(!shutdown.load(Ordering::SeqCst));
++    }
++
+     /// A watchdog still needs to wake every poll interval to run the supervision
+     /// check (host-death detection is a poll, not an event), but the *shutdown*
+     /// signal must wake it immediately. With a plain `thread::sleep`, a signal
 diff --git a/crates/codegraph-store/src/index_lease.rs b/crates/codegraph-store/src/index_lease.rs
 index 6a5c5e3..3c22d97 100644
 --- a/crates/codegraph-store/src/index_lease.rs
@@ -165,7 +261,7 @@ index 7cd86b5..125ef36 100644
 @@ -1061,6 +1064,29 @@ mod tests {
          rebuild.finish().expect("finish the rebuild");
      }
- 
+
 +    #[test]
 +    fn external_index_never_adopts_another_project_owner() {
 +        let project = TempProject::new("external-owner");

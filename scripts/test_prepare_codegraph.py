@@ -107,6 +107,9 @@ class PrepareCodeGraphTests(unittest.TestCase):
             if command[0] == "cargo":
                 self.assertIn("--locked", command)
         self.assertTrue(any("rebuild::tests" in command for command in self.commands))
+        for tests in ("process::tests", "proxy::tests"):
+            self.assertTrue(any(command[:7] == ["cargo", "test", "--locked", "-p", "codegraph-daemon", "--lib", tests]
+                                for command in self.commands))
 
     def test_upstream_checkout_pins_lf_before_checkout_and_apply(self):
         self.prepare()

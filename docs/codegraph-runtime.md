@@ -1,7 +1,7 @@
 # Embedded CodeGraph
 
 SolCode release builds embed **sunerpy/codegraph-rust v0.55.2** with the pinned
-`solcode-external-index-v1` storage patch, a single native
+`solcode-external-index-v1` storage/lifecycle patch, a single native
 executable with bundled SQLite, tree-sitter grammars and a precompiled browser
 viewer. No Node/npm/Python runtime, external MCP configuration or Git hooks are
 required. The upstream project is MIT-licensed; dependency notices ship alongside
@@ -33,6 +33,9 @@ the release and are also embedded.
 - MCP sessions share the upstream daemon, which owns file watching and
   incremental reconciliation. Closing/reloading one session releases only its
   proxy, not other sessions or their daemon. Idle shutdown is upstream-managed.
+  The pinned patch treats Windows parent PID 0 as unknown, not a dead host.
+  When the parent is unknown, a warm proxy announces its own real PID to the
+  daemon, preserving dead-client cleanup without disconnecting live sessions.
 - Before reporting ready, a background status query pinned internally to this
   project asks the upstream service broker to retain a shared-daemon lease and
   complete one catch-up. This also covers concurrent warm-start read-only
@@ -77,8 +80,8 @@ target's patched native archive and embed it. **Build-time requirements:**
 Python 3.8+, Git, Rust/Cargo 1.98+ and a C toolchain (Linux musl targets also need
 `musl-tools`; Windows targets use MSVC). CI pins Rust 1.98.0. The builder fetches
 the exact source commit, checks/applies the SHA256-pinned patch, runs path/lease/
-rebuild tests, and compiles with Cargo `--locked`. End users need none of these
-toolchains. On Windows hosts:
+rebuild and daemon process/proxy tests, and compiles with Cargo `--locked`. End
+users need none of these toolchains. On Windows hosts:
 
 ```powershell
 python scripts/prepare-codegraph.py --os windows --arch amd64

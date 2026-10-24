@@ -261,6 +261,7 @@ func TestCodeGraphRuntimeSmoke(t *testing.T) {
 func TestCodeGraphConcurrentColdStartSmoke(t *testing.T) {
 	_, cache := smokeRuntime(t)
 	t.Setenv("CODEGRAPH_DAEMON_IDLE_TIMEOUT_MS", "1000")
+	t.Setenv("CODEGRAPH_DAEMON_CLIENT_SWEEP_MS", "50")
 	root := t.TempDir()
 	var source strings.Builder
 	for i := 0; i < 1000; i++ {
@@ -288,6 +289,16 @@ func TestCodeGraphConcurrentColdStartSmoke(t *testing.T) {
 	}
 	for _, c := range clients {
 		smokeStart(t, c)
+	}
+	// Force a warm proxy as well: six simultaneous launches can all take the
+	// direct cold path. Keep it idle beyond the 500 ms proxy watchdog tick; a
+	// Windows unknown parent PID (0) must not close it on the next request,
+	// nor may a PID-0 client hello let the daemon sweep a live connection.
+	warm := NewCodeGraphClient(root, os.Getenv("SOLCODE_CODEGRAPH_RUNTIME_DIR"), cache, nil)
+	clients = append(clients, warm)
+	smokeStart(t, warm)
+	time.Sleep(time.Second)
+	for _, c := range clients {
 		result := smokeQuery(t, c, "codegraph_search", `{"query":"concurrentSymbol999"}`)
 		if !strings.Contains(result, "concurrent.ts") {
 			t.Fatal("missing concurrent index:", result)

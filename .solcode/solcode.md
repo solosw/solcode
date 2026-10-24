@@ -1231,3 +1231,10 @@ Turn memory: 已修复启动逻辑对这类并发竞争的处理：**数据库�
 - memory_ids: mem_81781f9b8d40459b
 
 Organizer: 用户要求构建 `solosw/solcode` 最新 GitHub Actions 发布失败，保留真实 smoke 和安全校验，明确未验证平台，不能将 macOS 本机通过视为六平台通过。调查对象：Publish master #108，run `40061745028`，attempt 1，completed/failure，HEAD `76c2549e6388b3a388b41e8260fe25d8ba0a9bb0`（`修复codegraph失败`）。原功能目标不变：代码
+
+## 2026-10-24 14:17:41 · session acp-1792684248330142000-1 · turn 20 · importance 0.90
+- keywords: todolist, todo-write, turn, organizer, archival, bug, fix, smoke, platform, macos, github
+- files: .github/workflows/publish-master.yml, .github/workflows/release.yml, docs/codegraph-runtime.md, internal/codegraphruntime/bundle/assets/README.txt, internal/codegraphruntime/bundle/assets/target.json, internal/codegraphruntime/bundle/bootstrap.cjs, internal/codegraphruntime/bundle/bundle.go, internal/codegraphruntime/bundle/bundle_test.go, internal/codegraphruntime/bundle/extract.go, internal/codegraphruntime/bundle/notices/README.txt, internal/codegraphruntime/bundle/release.json, internal/config/config.go, internal/engine/batch_output_test.go, internal/engine/batch_ptc_test.go, internal/engine/context_builder.go, internal/engine/context_builder_test.go, internal/engine/plan_permissions_test.go, internal/engine/prefix_share_test.go, internal/mcp/codegraph.go, internal/mcp/codegraph_smoke_test.go, internal/mcp/codegraph_test.go, internal/permission/modes.go, internal/permission/plan.go, internal/permission/plan_test.go, internal/permission/service.go, internal/tool/batch.go, internal/tool/batch_ptc_test.go, scripts/codegraph/external-index.patch, scripts/collect-codegraph-notices.py, scripts/prepare-codegraph.py, scripts/test_prepare_codegraph.py, unit_tests/plan_mode_test.go
+- memory_ids: mem_81781f9b8d40459b
+
+Organizer: 用户要求构建 `solosw/solcode` 最新 GitHub Actions 发布失败，保留真实 smoke 和安全校验，明确未验证平台，不能将 macOS 本机通过视为六平台通过。调查对象：Publish master #108，run `40061745028`，attempt 1，completed/failure，HEAD `76c2549e6388b3a388b41e8260fe25d8ba0a9bb0`（`修复codegraph失败`）。原功能目标不变：代码

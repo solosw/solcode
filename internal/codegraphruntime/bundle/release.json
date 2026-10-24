@@ -30,7 +30,7 @@
   },
   "patch": {
     "revision": "solcode-external-index-v1",
-    "sha256": "9d39843fd2fc4ffabee72d2d5a7470d80a291acfb54a01a73e0f7ca58e7feef2",
+    "sha256": "31acd52422c0ffdb3658ae64a842696cbf5efa943ce97cea0fbdc8ebb54d4636",
     "rust": "1.98.0"
   }
 }

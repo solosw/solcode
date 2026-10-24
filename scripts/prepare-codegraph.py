@@ -74,6 +74,8 @@ def main():
         run(["cargo", "test", "--locked", "-p", "codegraph-core", "index_paths", "--target-dir", str(cargo_target)], source)
         run(["cargo", "test", "--locked", "-p", "codegraph-store", "index_lease", "--target-dir", str(cargo_target)], source)
         run(["cargo", "test", "--locked", "-p", "codegraph-store", "rebuild::tests", "--target-dir", str(cargo_target)], source)
+        for tests in ("process::tests", "proxy::tests"):
+            run(["cargo", "test", "--locked", "-p", "codegraph-daemon", "--lib", tests, "--target-dir", str(cargo_target)], source)
         triple = TARGETS[target]
         run(["cargo", "build", "--locked", "--release", "-p", "codegraph-rs", "--target", triple, "--target-dir", str(cargo_target)], source)
         name = "codegraph.exe" if args.os == "windows" else "codegraph"
