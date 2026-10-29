@@ -76,6 +76,10 @@ type acpSession struct {
 	agentToolCalls map[string]string
 	// agentProgressLines accumulates process lines keyed by subagent toolCallId.
 	agentProgressLines map[string][]string
+	// Serialize child announcements and updates so no content precedes discovery.
+	subagentMu       sync.Mutex
+	subagentsEnabled bool
+	subagents        map[string]*acpSubagent
 }
 
 func NewServer(cfg config.Config, timeout time.Duration, maxTurns int, version string, newApp AppFactory) *Server {
@@ -197,8 +201,9 @@ func (s *Server) handleInitialize(msg jsonrpcMessage) error {
 			Version: s.version,
 		},
 		AgentCapabilities: AgentCapabilities{
-			LoadSession:     true,
-			MCPCapabilities: MCPCapabilities{HTTP: true},
+			LoadSession:         true,
+			SessionCapabilities: SessionCapabilities{Subagents: &SubagentCapabilities{}},
+			MCPCapabilities:     MCPCapabilities{HTTP: true},
 			PromptCapabilities: PromptCapabilities{
 				Image:           true,
 				EmbeddedContext: true,
@@ -480,6 +485,7 @@ func (s *Server) createSession(ctx context.Context, id, cwd string, mcpServers [
 	}
 
 	s.mu.Lock()
+	subagentsEnabled := supportsSubagents(s.clientCapabilities.Subagents)
 	fsCapabilities := FSClientCapabilities{}
 	if s.clientCapabilities.FS != nil {
 		fsCapabilities = *s.clientCapabilities.FS
@@ -498,6 +504,8 @@ func (s *Server) createSession(ctx context.Context, id, cwd string, mcpServers [
 		baseMCPServers:     baseMCPServers,
 		agentToolCalls:     make(map[string]string),
 		agentProgressLines: make(map[string][]string),
+		subagentsEnabled:   subagentsEnabled,
+		subagents:          make(map[string]*acpSubagent),
 	}
 
 	cfg = cfg.WithModelEffort(cfg.Effort)
@@ -754,12 +762,30 @@ func (s *Server) emitAgentProgress(sess *acpSession, event tool.AgentProgressEve
 	if sess == nil {
 		return
 	}
+	if sess.subagentsEnabled {
+		s.emitSubagentProgress(sess, event)
+		return
+	}
+	// Streaming child text must never leak into the legacy parent tool card.
+	if event.Kind == "text_delta" || event.Kind == "thinking_delta" {
+		return
+	}
 	agentKey := strings.TrimSpace(event.AgentID)
 	if agentKey == "" {
 		agentKey = strings.TrimSpace(event.TaskID)
 	}
 	if agentKey == "" {
 		agentKey = "subagent"
+	}
+	// The legacy card is created by the provisional tool event; the
+	// coordinator confirmation must not append a second "started" line.
+	if event.Kind == "started" && !event.Pending {
+		sess.mu.Lock()
+		exists := sess.agentToolCalls[agentKey] != ""
+		sess.mu.Unlock()
+		if exists {
+			return
+		}
 	}
 	label := strings.TrimSpace(event.Description)
 	if label == "" {

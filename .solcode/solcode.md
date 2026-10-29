@@ -904,11 +904,11 @@ Organizer: 用户要求使用开源方案进行智能模型路由，并询问是
 
 Organizer: 用户要求使用开源方案进行智能模型路由，并询问是否可将每次路由结果存储到数据库以优化后续任务。 (tags: optional)
 
-## 2026-10-24 13:14:38 · session mid-run · turn -1 · importance 0.90
-- keywords: organizer, archival, retrieval, terms, database, plan_mode, codegraph, external-index, external_root
-- memory_ids: mem_21337d602406a50a, mem_38658cf5815a026f, mem_7c8798afa97850c5, mem_af37d2a653873c59, mem_efc0dbb066a67315
+## 2026-10-29 15:32:08 · session mid-run · turn -1 · importance 1.00
+- keywords: organizer, archival, retrieval, terms, database, plan_mode, codegraph, external-index, external_root, solosw/solcode, GitHub Actions, macOS
+- memory_ids: mem_21337d602406a50a, mem_38658cf5815a026f, mem_7c8798afa97850c5, mem_af37d2a653873c59, mem_efc0dbb066a67315, mem_f77b0aab13fe6028
 
-Organizer: 用户要求构建有问题：构建失败，多个平台失败于 Verify patched CodeGraph runtime，Windows amd64 精确失败已读到 Rust core 测试 18 项中 17 PASS、1 FAIL，外部根拒绝测试失败，需要修复外部根路径校验和创建锚点。源码该测试用 `cache.join("child").join("..").join("index")` 构造非法输入；Windows canonical temp 为 verbatim `\\?C:
+Organizer: ## Active Request and Intent\n用户最新要求：**“构建有问题”**。需要定位并修复 `solosw/solcode` 最新 GitHub Actions 发布失败，保留真实 smoke 和安全校验，明确未验证平台，不能将 macOS 本机通过视为六平台通过。\n\n调查对象：**Publish master #108，run `40061745028`，attempt 1，completed/failure**，HEAD `76c2549e638
 
 ## 2026-10-15 21:28:18 · session acp-1792052774500238000-1 · turn 7 · importance 0.50
 - keywords: organizer, archival, retrieval, terms, GGUF, turn, todolist, embedding
@@ -1238,3 +1238,36 @@ Organizer: 用户要求构建 `solosw/solcode` 最新 GitHub Actions 发布失�
 - memory_ids: mem_81781f9b8d40459b
 
 Organizer: 用户要求构建 `solosw/solcode` 最新 GitHub Actions 发布失败，保留真实 smoke 和安全校验，明确未验证平台，不能将 macOS 本机通过视为六平台通过。调查对象：Publish master #108，run `40061745028`，attempt 1，completed/failure，HEAD `76c2549e6388b3a388b41e8260fe25d8ba0a9bb0`（`修复codegraph失败`）。原功能目标不变：代码
+
+## 2026-10-26 13:19:42 · session acp-1792684248330142000-1 · turn 21 · importance 0.90
+- keywords: turn, todolist, organizer, archival, bug, fix, smoke, platform, macos, github
+- files: .github/workflows/publish-master.yml, .github/workflows/release.yml, docs/codegraph-runtime.md, internal/codegraphruntime/bundle/assets/README.txt, internal/codegraphruntime/bundle/assets/target.json, internal/codegraphruntime/bundle/bootstrap.cjs, internal/codegraphruntime/bundle/bundle.go, internal/codegraphruntime/bundle/bundle_test.go, internal/codegraphruntime/bundle/extract.go, internal/codegraphruntime/bundle/notices/README.txt, internal/codegraphruntime/bundle/release.json, internal/config/config.go, internal/engine/batch_output_test.go, internal/engine/batch_ptc_test.go, internal/engine/context_builder.go, internal/engine/context_builder_test.go, internal/engine/plan_permissions_test.go, internal/engine/prefix_share_test.go, internal/mcp/codegraph.go, internal/mcp/codegraph_smoke_test.go, internal/mcp/codegraph_test.go, internal/permission/modes.go, internal/permission/plan.go, internal/permission/plan_test.go, internal/permission/service.go, internal/tool/batch.go, internal/tool/batch_ptc_test.go, scripts/codegraph/external-index.patch, scripts/collect-codegraph-notices.py, scripts/prepare-codegraph.py, scripts/test_prepare_codegraph.py, unit_tests/plan_mode_test.go
+- memory_ids: mem_81781f9b8d40459b
+
+Organizer: 用户要求构建 `solosw/solcode` 最新 GitHub Actions 发布失败，保留真实 smoke 和安全校验，明确未验证平台，不能将 macOS 本机通过视为六平台通过。调查对象：Publish master #108，run `40061745028`，attempt 1，completed/failure，HEAD `76c2549e6388b3a388b41e8260fe25d8ba0a9bb0`（`修复codegraph失败`）。原功能目标不变：代码
+
+## 2026-10-27 22:02:43 · session acp-1792684248330142000-1 · turn 22 · importance 0.90
+- keywords: todolist, todo-write, turn, organizer, archival, bug, fix, smoke, platform, macos, github
+- files: .github/workflows/publish-master.yml, .github/workflows/release.yml, docs/codegraph-runtime.md, internal/codegraphruntime/bundle/assets/README.txt, internal/codegraphruntime/bundle/assets/target.json, internal/codegraphruntime/bundle/bootstrap.cjs, internal/codegraphruntime/bundle/bundle.go, internal/codegraphruntime/bundle/bundle_test.go, internal/codegraphruntime/bundle/extract.go, internal/codegraphruntime/bundle/notices/README.txt, internal/codegraphruntime/bundle/release.json, internal/config/config.go, internal/engine/batch_output_test.go, internal/engine/batch_ptc_test.go, internal/engine/context_builder.go, internal/engine/context_builder_test.go, internal/engine/plan_permissions_test.go, internal/engine/prefix_share_test.go, internal/mcp/codegraph.go, internal/mcp/codegraph_smoke_test.go, internal/mcp/codegraph_test.go, internal/permission/modes.go, internal/permission/plan.go, internal/permission/plan_test.go, internal/permission/service.go, internal/tool/batch.go, internal/tool/batch_ptc_test.go, scripts/codegraph/external-index.patch, scripts/collect-codegraph-notices.py, scripts/prepare-codegraph.py, scripts/test_prepare_codegraph.py, unit_tests/plan_mode_test.go
+- memory_ids: mem_81781f9b8d40459b
+
+Organizer: 用户要求构建 `solosw/solcode` 最新 GitHub Actions 发布失败，保留真实 smoke 和安全校验，明确未验证平台，不能将 macOS 本机通过视为六平台通过。调查对象：Publish master #108，run `40061745028`，attempt 1，completed/failure，HEAD `76c2549e6388b3a388b41e8260fe25d8ba0a9bb0`（`修复codegraph失败`）。原功能目标不变：代码
+
+## 2026-10-29 15:58:27 · session acp-1792684248330142000-1 · turn 23 · importance 0.40
+- keywords: todolist, todo-write, turn
+- files: .github/workflows/publish-master.yml, .github/workflows/release.yml, docs/codegraph-runtime.md, internal/codegraphruntime/bundle/assets/README.txt, internal/codegraphruntime/bundle/assets/target.json, internal/codegraphruntime/bundle/bootstrap.cjs, internal/codegraphruntime/bundle/bundle.go, internal/codegraphruntime/bundle/bundle_test.go, internal/codegraphruntime/bundle/extract.go, internal/codegraphruntime/bundle/notices/README.txt, internal/codegraphruntime/bundle/release.json, internal/config/config.go, internal/engine/batch_output_test.go, internal/engine/batch_ptc_test.go, internal/engine/context_builder.go, internal/engine/context_builder_test.go, internal/engine/plan_permissions_test.go, internal/engine/prefix_share_test.go, internal/mcp/codegraph.go, internal/mcp/codegraph_smoke_test.go, internal/mcp/codegraph_test.go, internal/permission/modes.go, internal/permission/plan.go, internal/permission/plan_test.go, internal/permission/service.go, internal/tool/batch.go, internal/tool/batch_ptc_test.go, scripts/codegraph/external-index.patch, scripts/collect-codegraph-notices.py, scripts/prepare-codegraph.py, scripts/test_prepare_codegraph.py, unit_tests/plan_mode_test.go
+
+Turn memory: 已参考 `@agentclientprotocol/codex-acp`，添加 **ACP v1 标准子代理事件传递**。
+### 已实现
+- 客户端通过 `clientCapabilities.subagents: {}` 启用。
+- 先在父会话发送 `subagent_update` 公告，再将文本、思考、工具调用与结果路由到独立子会话。
+- 传递 `running/idle` 状态及完成、失败、取消原因。
+- 恢复执行复用子会话 ID，通过 RunID 隔离迟到事件；后台代理可在主 prompt 返回后继续发送更新。
+- 旧客户端保留原有聚合工具卡，不会混入子代理文本。
+实现主要位于 `internal/acp/subagents.go`，并补齐 engine、工具层和 App 的事件来源。协议说明见 [docs/acp-subagents.md](docs/acp-subagents.md)。
+### 验证
+- ACP、engine 全量 `-race` 测试通过。
+- tool、app 排除两个无关失败项后，全量 `-race` 通过：缺少 `python` 命令、现有测试创建目录的权限问题。
+- 委派相关 unit tests 排除一个事件时序不稳定测试后通过；该问题已用 HEAD 基线复现。
+- 全仓编译检查、相关包 `go vet`、`git diff --check` 通过。
+**当前范围**：子会话仅提供事件通知，未实现独立 prompt/cancel/close 或历史子会话重放；未升级 ACP v2，也未添加 AIR 私有协议。桌面端尚未启用新能力，继续使用旧工具卡。

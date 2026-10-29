@@ -284,14 +284,16 @@ func New(cfg config.Config, opts ...Option) (*App, error) {
 	}
 	coordinator := agent.NewCoordinator(eng, childStore)
 	coordinator.SetEventHandler(func(event agent.Event) {
-		if !event.Detached || event.Kind == agent.EventStarted || options.onAgentProgress == nil {
+		// Confirm accepted starts before the runner can emit child content.
+		// Synchronous completions are still delivered by the calling tool.
+		if options.onAgentProgress == nil || (!event.Detached && event.Kind != agent.EventStarted) {
 			return
 		}
 		output := event.Result.Output
 		if event.Result.Error != "" {
 			output = event.Result.Error
 		}
-		options.onAgentProgress(tool.AgentProgressEvent{Kind: string(event.Kind), AgentID: string(event.Status.ID), ParentAgentID: string(event.Status.ParentID), ParentToolUseID: event.ParentToolUseID, TaskID: event.TaskID, Description: event.Description, Output: output, IsError: event.Result.Error != ""})
+		options.onAgentProgress(tool.AgentProgressEvent{Kind: string(event.Kind), RunID: event.Status.RunID, AgentID: string(event.Status.ID), ParentAgentID: string(event.Status.ParentID), ParentToolUseID: event.ParentToolUseID, TaskID: event.TaskID, Description: event.Description, Output: output, IsError: event.Result.Error != ""})
 	})
 	subagent := tool.NewSubagentTool(coordinator)
 	registry.Register(subagent, tool.NewTaskToolWithSubagent(subagent), tool.NewBatchToolWithPTC(tool.BatchLimits{

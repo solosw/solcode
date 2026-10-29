@@ -164,6 +164,8 @@ func (t *subagentTool) runWithRetry(ctx context.Context, uctx *UseContext, param
 		retry := attempt + 1
 		emitAgentProgress(uctx, AgentProgressEvent{
 			Kind:            "retry",
+			AgentID:         params.AgentID,
+			RunID:           params.runID,
 			ParentAgentID:   parentAgentID(uctx),
 			ParentToolUseID: parentToolUseID(uctx),
 			TaskID:          params.TaskID,
@@ -191,7 +193,9 @@ func (t *subagentTool) startAttempt(ctx context.Context, uctx *UseContext, param
 	id := agent.AgentID(params.AgentID)
 	emitAgentProgress(uctx, AgentProgressEvent{
 		Kind:            "started",
+		Pending:         true,
 		AgentID:         string(id),
+		RunID:           params.runID,
 		ParentAgentID:   parentID,
 		ParentToolUseID: parentTool,
 		TaskID:          params.TaskID,
@@ -229,6 +233,7 @@ func (t *subagentTool) startAttempt(ctx context.Context, uctx *UseContext, param
 		emitAgentProgress(uctx, AgentProgressEvent{
 			Kind:            "failed",
 			AgentID:         string(id),
+			RunID:           params.runID,
 			ParentAgentID:   parentID,
 			ParentToolUseID: parentTool,
 			TaskID:          params.TaskID,
@@ -250,9 +255,14 @@ func (t *subagentTool) runAttempt(ctx context.Context, uctx *UseContext, params 
 	parentID, parentTool := parentAgentID(uctx), parentToolUseID(uctx)
 	result, err := t.coordinator.WaitRun(ctx, id, params.runID)
 	if err != nil {
+		kind := "failed"
+		if ctx.Err() != nil {
+			kind = "cancelled"
+		}
 		emitAgentProgress(uctx, AgentProgressEvent{
-			Kind:            "failed",
+			Kind:            kind,
 			AgentID:         string(id),
+			RunID:           params.runID,
 			ParentAgentID:   parentID,
 			ParentToolUseID: parentTool,
 			TaskID:          params.TaskID,
@@ -263,9 +273,14 @@ func (t *subagentTool) runAttempt(ctx context.Context, uctx *UseContext, params 
 		return "", fmt.Errorf("wait task %s: %w", label, err)
 	}
 	if result.Error != "" {
+		kind := "failed"
+		if ctx.Err() != nil {
+			kind = "cancelled"
+		}
 		emitAgentProgress(uctx, AgentProgressEvent{
-			Kind:            "failed",
+			Kind:            kind,
 			AgentID:         string(id),
+			RunID:           params.runID,
 			ParentAgentID:   parentID,
 			ParentToolUseID: parentTool,
 			TaskID:          params.TaskID,
@@ -283,6 +298,7 @@ func (t *subagentTool) runAttempt(ctx context.Context, uctx *UseContext, params 
 		emitAgentProgress(uctx, AgentProgressEvent{
 			Kind:            "cancelled",
 			AgentID:         string(id),
+			RunID:           params.runID,
 			ParentAgentID:   parentID,
 			ParentToolUseID: parentTool,
 			TaskID:          params.TaskID,
@@ -295,6 +311,7 @@ func (t *subagentTool) runAttempt(ctx context.Context, uctx *UseContext, params 
 	emitAgentProgress(uctx, AgentProgressEvent{
 		Kind:            "completed",
 		AgentID:         string(id),
+		RunID:           params.runID,
 		ParentAgentID:   parentID,
 		ParentToolUseID: parentTool,
 		TaskID:          params.TaskID,

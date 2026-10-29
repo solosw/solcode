@@ -460,12 +460,14 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 		}
 		return count
 	}
-	emitProgress := func(kind, toolName, toolInput, output string, isError bool) {
+	emitProgress := func(kind, toolUseID, toolName, toolInput, output string, isError bool) {
 		if !isTask || e.config.OnAgentProgress == nil {
 			return
 		}
 		e.config.OnAgentProgress(tool.AgentProgressEvent{
 			Kind:            kind,
+			RunID:           cfg.RunID,
+			ToolUseID:       toolUseID,
 			AgentID:         string(cfg.ID),
 			ParentAgentID:   string(cfg.ParentID),
 			ParentToolUseID: cfg.ParentToolUseID,
@@ -675,13 +677,43 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 			buildReq.Effort, buildReq.Stream = e.config.Effort, e.config.Stream
 		}
 		req := requestBuilder.Build(buildReq)
+		textStreamed, thinkingStreamed := false, false
 		if isMain {
 			req.OnTextDelta = e.config.OnTextDelta
 			req.OnThinkingDelta = e.config.OnThinkingDelta
+		} else if isTask && e.config.OnAgentProgress != nil {
+			req.OnTextDelta = func(text string) {
+				if text != "" {
+					textStreamed = true
+					emitProgress("text_delta", "", "", "", text, false)
+				}
+			}
+			req.OnThinkingDelta = func(text string) {
+				if text != "" {
+					thinkingStreamed = true
+					emitProgress("thinking_delta", "", "", "", text, false)
+				}
+			}
 		}
 		message, err := e.config.Client.Create(ctx, req)
 		if err != nil {
 			return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: err.Error()}, Messages: messages}
+		}
+		// Non-streaming providers still expose child messages, without replaying
+		// blocks already delivered by streaming callbacks.
+		if isTask {
+			for _, block := range message.Content {
+				switch block.Type {
+				case "text":
+					if !textStreamed {
+						emitProgress("text_delta", "", "", "", block.Text, false)
+					}
+				case "thinking":
+					if !thinkingStreamed {
+						emitProgress("thinking_delta", "", "", "", block.Thinking, false)
+					}
+				}
+			}
 		}
 		runUsage.Add(agent.TokenUsage{InputTokens: message.Usage.InputTokens, OutputTokens: message.Usage.OutputTokens, CacheCreationInputTokens: message.Usage.CacheCreationInputTokens, CacheReadInputTokens: message.Usage.CacheReadInputTokens})
 		estimatedContextTokens := requestBuilder.EstimateContextTokens(buildReq)
@@ -758,7 +790,7 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 			if isMain && e.config.OnToolStart != nil {
 				e.config.OnToolStart(use.Name, input, use.ID)
 			}
-			emitProgress("tool_start", use.Name, string(input), "", false)
+			emitProgress("tool_start", use.ID, use.Name, string(input), "", false)
 			callSkillRoots := orderedSkillRoots(activeSkillRoot, e.config.SkillRoots)
 			currentMode := permission.ModeAuto
 			if e.config.Permissions != nil {
@@ -867,7 +899,7 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 				// UI gets caption text only — never dump base64 image payloads.
 				e.config.OnToolDone(use.Name, text, isError, use.ID)
 			}
-			emitProgress("tool_done", use.Name, "", text, isError)
+			emitProgress("tool_done", use.ID, use.Name, "", text, isError)
 			// Tool failures/timeouts (and Task tool errors) must not abort the agent
 			// loop — especially Task sub-agents, which should keep running and recover
 			// from is_error tool_results. Only context cancel / model errors stop the run.

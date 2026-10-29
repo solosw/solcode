@@ -246,7 +246,8 @@ func TestTaskRetryKeepsOneAgentAndRecordsAttempts(t *testing.T) {
 	runner := &reusableRunner{failFirst: true}
 	c := agent.NewCoordinator(runner)
 	task := tool.NewTaskTool(c)
-	uctx := &tool.UseContext{AgentID: "main", SessionID: "session", TaskRetryDelay: time.Millisecond}
+	var events []tool.AgentProgressEvent
+	uctx := &tool.UseContext{AgentID: "main", SessionID: "session", TaskRetryDelay: time.Millisecond, OnAgentProgress: func(event tool.AgentProgressEvent) { events = append(events, event) }}
 	result := invokeTask(t, task, uctx, map[string]any{"description": "retry", "prompt": "inspect"})
 	requireTask(t, result)
 	if len(c.List()) != 1 || len(runner.configs) != 2 {
@@ -255,6 +256,18 @@ func TestTaskRetryKeepsOneAgentAndRecordsAttempts(t *testing.T) {
 	one, two := runner.configs[0], runner.configs[1]
 	if one.ID != two.ID || one.RunID == two.RunID || one.ExecutionID != two.ExecutionID || one.Attempt != 1 || two.Attempt != 2 {
 		t.Fatalf("attempt correlation: %+v %+v", one, two)
+	}
+	if len(events) != 5 {
+		t.Fatalf("progress events: %+v", events)
+	}
+	for i, event := range events {
+		wantRun := one.RunID
+		if i >= 3 {
+			wantRun = two.RunID
+		}
+		if event.AgentID != string(one.ID) || event.RunID != wantRun {
+			t.Fatalf("progress lost run correlation: %+v", events)
+		}
 	}
 }
 

@@ -76,7 +76,11 @@ type UseContext struct {
 
 // AgentProgressEvent describes a Task/Subagent progress update for interactive UIs.
 type AgentProgressEvent struct {
-	Kind            string // started | completed | failed | cancelled | retry | tool_start | tool_done
+	Kind  string // started | completed | failed | cancelled | retry | tool_start | tool_done | text_delta | thinking_delta
+	RunID string
+	// Pending marks a start request not yet accepted by the coordinator.
+	Pending         bool
+	ToolUseID       string
 	AgentID         string
 	ParentAgentID   string
 	ParentToolUseID string

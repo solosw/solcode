@@ -83,6 +83,8 @@ type ImplementationInfo struct {
 type ClientCapabilities struct {
 	FS       *FSClientCapabilities `json:"fs,omitempty"`
 	Terminal bool                  `json:"terminal,omitempty"`
+	// ACP v1 opts into standard child-session updates with an object, not a boolean.
+	Subagents json.RawMessage `json:"subagents,omitempty"`
 }
 
 type FSClientCapabilities struct {
@@ -133,6 +135,18 @@ type MCPCapabilities struct {
 }
 
 type SessionCapabilities struct {
+	Subagents *SubagentCapabilities `json:"subagents,omitempty"`
+}
+
+// SubagentCapabilities deliberately advertises no prompt/cancel/close operations.
+// Child sessions currently expose notifications only.
+type SubagentCapabilities struct{}
+
+// SubagentState reports foreground work separately from the reusable child session.
+type SubagentState struct {
+	State      string        `json:"state"`
+	StopReason string        `json:"stopReason,omitempty"`
+	Error      *jsonrpcError `json:"error,omitempty"`
 }
 
 type AuthMethod struct {
@@ -248,6 +262,10 @@ type SessionUpdateParams struct {
 }
 
 type SessionUpdate struct {
+	SessionID         string
+	Description       string
+	Capabilities      *SubagentCapabilities
+	State             *SubagentState
 	ConfigOptions     []SessionConfigOption
 	SessionUpdate     string
 	Content           *ContentBlock
@@ -323,6 +341,18 @@ func (c ToolCallContent) MarshalJSON() ([]byte, error) {
 
 func (u SessionUpdate) MarshalJSON() ([]byte, error) {
 	payload := map[string]any{"sessionUpdate": u.SessionUpdate}
+	if u.SessionID != "" {
+		payload["sessionId"] = u.SessionID
+	}
+	if u.Description != "" {
+		payload["description"] = u.Description
+	}
+	if u.Capabilities != nil {
+		payload["capabilities"] = u.Capabilities
+	}
+	if u.State != nil {
+		payload["state"] = u.State
+	}
 	if u.ConfigOptions != nil {
 		payload["configOptions"] = u.ConfigOptions
 	}
@@ -382,6 +412,16 @@ func (u *SessionUpdate) UnmarshalJSON(data []byte) error {
 	var payload map[string]json.RawMessage
 	if err := json.Unmarshal(data, &payload); err != nil {
 		return err
+	}
+	for key, target := range map[string]any{
+		"sessionId": &u.SessionID, "description": &u.Description,
+		"capabilities": &u.Capabilities, "state": &u.State,
+	} {
+		if raw, ok := payload[key]; ok {
+			if err := json.Unmarshal(raw, target); err != nil {
+				return err
+			}
+		}
 	}
 	if raw, ok := payload["sessionUpdate"]; ok {
 		_ = json.Unmarshal(raw, &u.SessionUpdate)
