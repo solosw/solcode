@@ -76,6 +76,7 @@ func (s *Server) emitSubagentProgress(root *acpSession, event tool.AgentProgress
 		child.session.toolCalls = make(map[string]string)
 		child.session.toolCallsByID = make(map[string]string)
 		child.session.lastToolInput = make(map[string]json.RawMessage)
+		child.session.toolTerminals = nil
 	} else if (child.finished && kind != "retry") || (event.RunID != "" && child.runID != "" && event.RunID != child.runID) {
 		return
 	}

@@ -1271,3 +1271,71 @@ Turn memory: 已参考 `@agentclientprotocol/codex-acp`，添加 **ACP v1 标准
 - 委派相关 unit tests 排除一个事件时序不稳定测试后通过；该问题已用 HEAD 基线复现。
 - 全仓编译检查、相关包 `go vet`、`git diff --check` 通过。
 **当前范围**：子会话仅提供事件通知，未实现独立 prompt/cancel/close 或历史子会话重放；未升级 ACP v2，也未添加 AIR 私有协议。桌面端尚未启用新能力，继续使用旧工具卡。
+
+## 2026-10-29 19:27:56 · session acp-1792684248330142000-1 · turn 24 · importance 0.40
+- keywords: todolist, todo-write, turn
+- files: .github/workflows/publish-master.yml, .github/workflows/release.yml, docs/codegraph-runtime.md, internal/codegraphruntime/bundle/assets/README.txt, internal/codegraphruntime/bundle/assets/target.json, internal/codegraphruntime/bundle/bootstrap.cjs, internal/codegraphruntime/bundle/bundle.go, internal/codegraphruntime/bundle/bundle_test.go, internal/codegraphruntime/bundle/extract.go, internal/codegraphruntime/bundle/notices/README.txt, internal/codegraphruntime/bundle/release.json, internal/config/config.go, internal/engine/batch_output_test.go, internal/engine/batch_ptc_test.go, internal/engine/context_builder.go, internal/engine/context_builder_test.go, internal/engine/plan_permissions_test.go, internal/engine/prefix_share_test.go, internal/mcp/codegraph.go, internal/mcp/codegraph_smoke_test.go, internal/mcp/codegraph_test.go, internal/permission/modes.go, internal/permission/plan.go, internal/permission/plan_test.go, internal/permission/service.go, internal/tool/batch.go, internal/tool/batch_ptc_test.go, scripts/codegraph/external-index.patch, scripts/collect-codegraph-notices.py, scripts/prepare-codegraph.py, scripts/test_prepare_codegraph.py, unit_tests/plan_mode_test.go
+- todos: term1|核对 ACP v1 terminal 协议及 Bash 执行和后台链路|in_progress|valid|open; term2|实现能力协商后的客户端终端执行及回退并补回归测试|pending|valid|open; term3|运行验证并更新标准终端使用说明|pending|valid|open
+
+Turn memory: [Pasted text #1 +60 lines]
+[Pasted text #1 +60 lines]
+````
+**支持。ACP V1 标准已经支持异步执行 Shell/Bash，并提供输出查询、等待结束和终止接口。** 我上一条把“标准终端能力”和“Codex 的后台任务扩展”混在一起了，需要纠正。
+### ACP V1 的标准支持
+客户端在初始化时声明：
+```json
+{
+"clientCapabilities": {
+"terminal": true
+}
+}
+```
+之后 Agent 可以调用客户端实现的这些方法：
+| 方法 | 用途 |
+|---|---|
+| `terminal/create` | 启动命令，立即返回 `terminalId`，不等待完成 |
+| `terminal/output` | 获取当前输出及退出状态 |
+| `terminal/wait_for_exit` | 等待进程退出 |
+| `terminal/kill` | 终止进程，但保留终端供查询 |
+| `terminal/release` | 释放资源；如果进程仍在运行，会将其终止 |
+官方文档明确说明：
+> This allows the command to run in the background while the Agent performs other operations.
+工具调用还可以关联终端：
+```json
+{
+"sessionUpdate": "tool_call",
+"toolCallId": "call_002",
+"title": "Running tests",
+"kind": "execute",
+"status": "in_progress",
+"content": [
+{
+"type": "terminal",
+"terminalId" … ，额外上报任务生命周期。
+- 标准终端接口本身不等于通用的“把任意已有前台工具调用转到后台”，也不承诺进程在断连后继续存在。
+### BaoCode 当前缺口
+`1.6.2` **没有声明 `terminal: true`，也没有实现上述 `terminal/*` 请求**，所以目前只是展示 Agent 上报的命令工具调用，尚未接入 V1 的标准终端能力。
+**因此，通用支持应优先实现 ACP V1 `terminal/*`；Agent 自管的后台任务，再按后端能力兼容扩展。**
+参考：[ACP V1 Terminals](https://agentclientprotocol.com/protocol/v1/terminals.md) · [能力协商](https://agentclientprotocol.com/protocol/v1/initialization.md)
+````
+
+## 2026-10-29 19:52:47 · session acp-1792684248330142000-1 · turn 25 · importance 0.40
+- keywords: todolist, todo-write, turn
+- files: .github/workflows/publish-master.yml, .github/workflows/release.yml, README.md, docs/acp-subagents.md, docs/acp-terminals.md, docs/codegraph-runtime.md, internal/acp/protocol.go, internal/acp/server.go, internal/acp/server_test.go, internal/acp/subagents.go, internal/acp/terminal.go, internal/acp/terminal_test.go, internal/app/app.go, internal/codegraphruntime/bundle/assets/README.txt, internal/codegraphruntime/bundle/assets/target.json, internal/codegraphruntime/bundle/bootstrap.cjs, internal/codegraphruntime/bundle/bundle.go, internal/codegraphruntime/bundle/bundle_test.go, internal/codegraphruntime/bundle/extract.go, internal/codegraphruntime/bundle/notices/README.txt, internal/codegraphruntime/bundle/release.json, internal/config/config.go, internal/engine/batch_output_test.go, internal/engine/batch_ptc_test.go, internal/engine/context_builder.go, internal/engine/context_builder_test.go, internal/engine/engine.go, internal/engine/plan_permissions_test.go, internal/engine/prefix_share_test.go, internal/engine/terminal_test.go, internal/mcp/codegraph.go, internal/mcp/codegraph_smoke_test.go, internal/mcp/codegraph_test.go, internal/permission/modes.go, internal/permission/plan.go, internal/permission/plan_test.go, internal/permission/service.go, internal/tool/bash.go, internal/tool/bash_terminal_test.go, internal/tool/batch.go
+
+Turn memory: 已补齐 **Agent 侧 ACP v1 标准终端支持**，没有引入 Codex 私有 `asyncTasks` 扩展。
+### 实现内容
+- 客户端声明 `terminal: true` 后，Bash 使用标准的 `terminal/create`、`output`、`wait_for_exit`、`kill`、`release`。
+- 工具卡关联 `terminalId`，完成后保留终端引用；支持 BatchTool 多终端和子代理工具卡。
+- 沿用现有后台调度，`timeout` 仍是命令的硬截止时间。
+- 取消、超时和等待失败时清理终端；取消发生在 create 返回之前，也会处理迟到的终端 ID。
+- 客户端调用失败不会自动转成本地重跑，避免重复执行。
+- 未声明能力时保持本地执行；启用本地沙箱时也不委托客户端，避免丢失沙箱约束。
+主要实现：`internal/acp/terminal.go`
+协议说明：[docs/acp-terminals.md](docs/acp-terminals.md)
+### 验证
+- ACP、engine 全量 `-race` 通过，取消和迟到回复测试重复运行通过。
+- tool/app 排除两个既有失败项后 `-race` 通过。
+- 全仓编译检查、相关包 `go vet`、差异检查通过。
+- 扩大回归仍受缺少 `python`、既有目录权限问题及此前确认的事件时序测试影响，未改动这些无关问题。
+**范围说明：SolCode 桌面客户端尚未实现终端管理器，仍走本地执行。** 本次已让 Agent 能与实现了标准 `terminal/*` 的客户端对接。

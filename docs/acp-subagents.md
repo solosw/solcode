@@ -49,7 +49,9 @@ Duplicate terminal events and events from superseded runs are ignored.
 
 - Child sessions are notification-only. Empty child capabilities intentionally
   advertise no independent prompt, cancel, or close support.
-- Permission and client filesystem requests remain attached to the root session.
+- Permission, client filesystem, and [client terminal](acp-terminals.md) requests
+  remain attached to the root session. Terminal content references are routed
+  to the owning child tool card.
 - Child associations are live, in-process state; `session/load` does not replay
   historical child sessions or restore their ACP IDs across agent restarts.
 - Delegation policy is unchanged: this does not enable nested subagent creation.

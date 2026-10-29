@@ -186,6 +186,18 @@ func (b *bashTool) Invoke(ctx context.Context, uctx *UseContext, input json.RawM
 	}
 	timeout := time.Duration(params.Timeout) * time.Millisecond
 
+	// A client terminal is already asynchronous; the engine scheduler still
+	// decides whether this invocation yields. Never bypass a local sandbox.
+	if uctx != nil && uctx.TerminalRunner != nil && !b.sandboxPolicy.Enabled {
+		execCtx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		if err := execCtx.Err(); err != nil {
+			return ErrorResult(err.Error()), nil
+		}
+		program, args := shellCommand(b.shell, params.Command)
+		return uctx.TerminalRunner.Run(execCtx, uctx, program, args)
+	}
+
 	// Long timeouts (and legacy run_in_background) track the process as a
 	// background job and block this tool call for the same duration — Wait is
 	// not model-visible; Bash itself suspends until the job finishes.

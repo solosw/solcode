@@ -23,6 +23,11 @@ const (
 	MethodSessionRequestPermission = "session/request_permission"
 	MethodFSReadTextFile           = "fs/read_text_file"
 	MethodFSWriteTextFile          = "fs/write_text_file"
+	MethodTerminalCreate           = "terminal/create"
+	MethodTerminalOutput           = "terminal/output"
+	MethodTerminalWaitForExit      = "terminal/wait_for_exit"
+	MethodTerminalKill             = "terminal/kill"
+	MethodTerminalRelease          = "terminal/release"
 
 	StopReasonEndTurn   = "end_turn"
 	StopReasonCancelled = "cancelled"

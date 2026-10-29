@@ -20,6 +20,12 @@ type TextFileSystem interface {
 	WriteTextFile(ctx context.Context, path, content string) error
 }
 
+// TerminalRunner executes a shell command in a client-owned terminal. The
+// context carries the command deadline; implementations must clean up on exit.
+type TerminalRunner interface {
+	Run(ctx context.Context, uctx *UseContext, command string, args []string) (*ContentBlock, error)
+}
+
 type UseContext struct {
 	// Delegation inherits this runtime ceiling, never the parent snapshot.
 	AllowedTools   []string
@@ -30,6 +36,7 @@ type UseContext struct {
 	BatchLookup   func(name string) Tool
 
 	SessionID string
+	RunID     string
 	MessageID string
 	WorkDir   string
 	// SkillRoots are absolute skill package directories (Agent Skills roots).
@@ -46,6 +53,7 @@ type UseContext struct {
 	Status           func(string)
 	TaskRetryDelay   time.Duration
 	TextFileSystem   TextFileSystem
+	TerminalRunner   TerminalRunner
 	RecordFileChange func(ctx context.Context, change FileChange)
 	// CaptureCheckpoint records turn-start file content for code-only rewind.
 	// content == nil means the file did not exist.

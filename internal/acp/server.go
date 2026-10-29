@@ -66,6 +66,8 @@ type acpSession struct {
 	toolCalls     map[string]string
 	// toolCallsByID maps model tool_use ids (and generated ACP ids) to ACP toolCallIds.
 	toolCallsByID map[string]string
+	// Retain terminal references when a later tool result replaces card content.
+	toolTerminals map[string][]ToolCallContent
 	// lastToolInput caches the most recent input per tool name for permission diffs.
 	lastToolInput  map[string]json.RawMessage
 	fsCapabilities FSClientCapabilities
@@ -486,6 +488,7 @@ func (s *Server) createSession(ctx context.Context, id, cwd string, mcpServers [
 
 	s.mu.Lock()
 	subagentsEnabled := supportsSubagents(s.clientCapabilities.Subagents)
+	terminalEnabled := s.clientCapabilities.Terminal
 	fsCapabilities := FSClientCapabilities{}
 	if s.clientCapabilities.FS != nil {
 		fsCapabilities = *s.clientCapabilities.FS
@@ -511,6 +514,7 @@ func (s *Server) createSession(ctx context.Context, id, cwd string, mcpServers [
 	cfg = cfg.WithModelEffort(cfg.Effort)
 	application, cfg, err := s.newApp(cfg,
 		app.WithTextFileSystem(s.textFileSystem(id, fsCapabilities)),
+		app.WithTerminalRunner(s.terminalRunner(sess, terminalEnabled)),
 		app.WithStreamCallbacks(
 			func(text string) { s.emitText(sess, "agent_message_chunk", text) },
 			func(text string) { s.emitText(sess, "agent_thought_chunk", text) },
@@ -727,6 +731,8 @@ func (s *Server) emitToolDone(sess *acpSession, name, output string, isError boo
 		id = mapped
 	}
 	input := append(json.RawMessage(nil), sess.lastToolInput[name]...)
+	terminals := append([]ToolCallContent(nil), sess.toolTerminals[id]...)
+	delete(sess.toolTerminals, id)
 	delete(sess.toolCalls, name)
 	delete(sess.lastToolInput, name)
 	delete(sess.toolCallsByID, id)
@@ -743,6 +749,7 @@ func (s *Server) emitToolDone(sess *acpSession, name, output string, isError boo
 	}
 	raw, _ := json.Marshal(map[string]string{"output": output})
 	toolContent, locations := toolOutputContent(name, output, isError)
+	toolContent = append(terminals, toolContent...)
 	s.emitUpdate(sess.id, SessionUpdate{
 		SessionUpdate: "tool_call_update",
 		ToolCallID:    id,
@@ -846,9 +853,11 @@ func (s *Server) emitAgentProgress(sess *acpSession, event tool.AgentProgressEve
 	}
 	sess.agentProgressLines[id] = lines
 	body := strings.Join(lines, "\n")
+	terminals := append([]ToolCallContent(nil), sess.toolTerminals[id]...)
 	if status == ToolCallCompleted || status == ToolCallFailed {
 		delete(sess.agentToolCalls, agentKey)
 		delete(sess.agentProgressLines, id)
+		delete(sess.toolTerminals, id)
 	}
 	sess.mu.Unlock()
 
@@ -860,7 +869,7 @@ func (s *Server) emitAgentProgress(sess *acpSession, event tool.AgentProgressEve
 		Kind:          "think",
 		Status:        status,
 		RawOutput:     raw,
-		ToolContent:   []ToolCallContent{{Type: "content", Content: &ContentBlock{Type: "text", Text: body}}},
+		ToolContent:   append(terminals, ToolCallContent{Type: "content", Content: &ContentBlock{Type: "text", Text: body}}),
 	})
 }
 

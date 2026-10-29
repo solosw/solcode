@@ -79,6 +79,7 @@ type Config struct {
 	Effort          string
 	TodoPath        string
 	TextFileSystem  tool.TextFileSystem
+	TerminalRunner  tool.TerminalRunner
 	OnTextDelta     func(string)
 	OnThinkingDelta func(string)
 	OnToolStart     func(name string, input json.RawMessage, toolUseID string)
@@ -801,6 +802,7 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 					SessionID:      nonEmpty(runReq.SessionID, string(cfg.ID)),
 					ParentContext:  e.forkSource(use.Name, messages, workingSet),
 					MessageID:      use.ID,
+					RunID:          cfg.RunID,
 					WorkDir:        cfg.WorkDir,
 					SkillRoots:     callSkillRoots,
 					AgentID:        string(cfg.ID),
@@ -810,6 +812,7 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 					TodoPath:       e.config.TodoPath,
 					FastModel:      e.config.FastModelName,
 					TextFileSystem: e.config.TextFileSystem,
+					TerminalRunner: e.config.TerminalRunner,
 					Status: func(status string) {
 						if e.config.OnStatus != nil {
 							e.config.OnStatus(status)

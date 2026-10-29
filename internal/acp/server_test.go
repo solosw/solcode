@@ -382,6 +382,7 @@ type harnessClient struct {
 	conn               *Conn
 	permissionOption   string
 	permissionRequests chan jsonrpcMessage
+	terminalRequests   chan jsonrpcMessage
 	mu                 sync.Mutex
 	updates            []SessionUpdateParams
 }
@@ -457,6 +458,15 @@ func (c *harnessClient) readLoop() {
 				c.mu.Lock()
 				c.updates = append(c.updates, params)
 				c.mu.Unlock()
+			}
+		case MethodTerminalCreate, MethodTerminalOutput, MethodTerminalWaitForExit, MethodTerminalKill, MethodTerminalRelease:
+			c.mu.Lock()
+			requests := c.terminalRequests
+			c.mu.Unlock()
+			if requests != nil {
+				requests <- msg
+			} else {
+				_ = c.conn.ReplyError(msg.ID, JSONRPCMethodNotFound, "terminal not supported")
 			}
 		case MethodSessionRequestPermission:
 			c.mu.Lock()
