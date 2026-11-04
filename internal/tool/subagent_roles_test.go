@@ -84,8 +84,8 @@ func TestTaskRoleOverridesAndBypassRestrictions(t *testing.T) {
 	}
 	explicit := invokeTask(t, task, uctx, map[string]any{"description": "explicit", "prompt": "implement", "model": "explicit-model"})
 	requireTask(t, explicit)
-	if runner.configs[1].Model != "explicit-model" {
-		t.Fatal("role model overrode explicit selection")
+	if runner.configs[1].Model != "fast-model" {
+		t.Fatal("AI model argument overrode the configured role model")
 	}
 	for _, name := range []string{"custom", "default", "../worker"} {
 		result := invokeTask(t, task, uctx, map[string]any{"agent_type": name, "description": "invalid", "prompt": "work"})

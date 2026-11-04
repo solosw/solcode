@@ -1,5 +1,5 @@
-// Package organizer implements the local memory-organizer model: a fully local
-// text-generation model that turns a finished session into a structured summary
+// Package organizer implements a configurable memory-organizer model that
+// turns a finished session into a structured summary
 // plus candidate long-term memories.
 //
 // The package splits cleanly into two halves:
@@ -10,9 +10,8 @@
 //   - The runtime subpackage loads llama.cpp in-process via purego FFI and
 //     implements LocalGenerator.
 //
-// Nothing here calls a remote or hosted endpoint, and there is no fallback to
-// the chat provider: when the local model is unavailable the Organizer reports
-// that it is unavailable rather than producing memory from a network model.
+// The API generator is opt-in and uses its own endpoint and credentials.
+// Local inference never falls back to the API or the chat provider.
 package organizer
 
 import (
@@ -43,7 +42,8 @@ type GenerateRequest struct {
 	Temperature float64
 }
 
-// LocalGenerator is the minimal seam over a local text-generation runtime.
+// LocalGenerator is the historical runtime seam, implemented by GGUF and API
+// generators.
 //
 // Implementations are expected to load lazily and report readiness through
 // Ready, because loading a GGUF model can take seconds to tens of seconds and
@@ -109,13 +109,13 @@ type Input struct {
 
 // Candidate is one proposed long-term memory.
 type Candidate struct {
-	Kind       CandidateKind  `json:"kind"`
-	Scope      string         `json:"scope"`
+	Kind       CandidateKind `json:"kind"`
+	Scope      string        `json:"scope"`
 	Tier       CandidateTier `json:"suggested_tier"`
-	Confidence float64        `json:"confidence"`
-	Text       string         `json:"canonical_text"`
-	Tags       []string       `json:"tags"`
-	Reason     string         `json:"reason"`
+	Confidence float64       `json:"confidence"`
+	Text       string        `json:"canonical_text"`
+	Tags       []string      `json:"tags"`
+	Reason     string        `json:"reason"`
 	// Status is an optional governance hint (active|superseded|expired|contradicted).
 	// Empty/unknown normalizes to active at parse time.
 	Status string `json:"status,omitempty"`

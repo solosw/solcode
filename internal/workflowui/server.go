@@ -315,7 +315,8 @@ func (s *Server) handleSave(w http.ResponseWriter, r *http.Request) {
 
 type settingsResponse struct {
 	// BypassSubagentsEnabled opts bypass into built-in sub-agents (default off).
-	BypassSubagentsEnabled bool `json:"bypass_subagents_enabled"`
+	BypassSubagentsEnabled bool   `json:"bypass_subagents_enabled"`
+	SubagentModel          string `json:"subagent_model"`
 
 	Provider   string                   `json:"provider"`
 	Model      string                   `json:"model"`
@@ -334,7 +335,7 @@ type settingsResponse struct {
 	ORT ortSettings `json:"-"`
 	// Embedding configures optional vector embeddings (memory.embedding).
 	Embedding embeddingSettings `json:"embedding"`
-	// MemoryOrganizer configures the fully local memory-organizer model.
+	// MemoryOrganizer selects a local or independently configured API model.
 	MemoryOrganizer memoryOrganizerSettings `json:"memory_organizer"`
 }
 
@@ -399,17 +400,20 @@ type embeddingSettings struct {
 
 // memoryOrganizerSettings is the UI-facing view of the local memory organizer.
 //
-// The organizer has no API mode: memory work never leaves the machine, so unlike
-// Jev/embedding there is no key or base URL to display. ModelPresent and
-// LibraryPresent are probed server-side so the browser can show whether the
-// configured paths actually resolve without exposing filesystem details.
+// API credentials are write-only; only APIKeySet is returned to the browser.
+// Filesystem probes apply only to the local backend.
 type memoryOrganizerSettings struct {
-	Model     string `json:"model"`
-	Enabled   bool   `json:"enabled"`
-	Runtime   string `json:"runtime"`
-	ModelPath string `json:"model_path"`
-	LibDir    string `json:"lib_dir"`
-	Processor string `json:"processor"`
+	BaseURL    string `json:"base_url"`
+	BaseURLEnv string `json:"base_url_env"`
+	APIKeyEnv  string `json:"api_key_env"`
+	APIKeySet  bool   `json:"api_key_set"`
+	APIFormat  string `json:"api_format"`
+	Model      string `json:"model"`
+	Enabled    bool   `json:"enabled"`
+	Runtime    string `json:"runtime"`
+	ModelPath  string `json:"model_path"`
+	LibDir     string `json:"lib_dir"`
+	Processor  string `json:"processor"`
 	// ModelPresent reports whether model_path names an existing file.
 	ModelPresent bool `json:"model_present"`
 	// LibraryPresent reports whether the llama.cpp library exists in lib_dir.
@@ -663,6 +667,7 @@ func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
 			TimeoutSec:    cfg.Memory.Embedding.TimeoutSec,
 			Dimensions:    cfg.Memory.Embedding.Dimensions,
 		},
+		SubagentModel:   strings.TrimSpace(cfg.Subagents.Model),
 		MemoryOrganizer: buildMemoryOrganizerSettings(cfg),
 	}
 	for _, p := range cfg.Providers {
@@ -689,16 +694,23 @@ func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
 func buildMemoryOrganizerSettings(cfg config.Config) memoryOrganizerSettings {
 	org := cfg.Memory.Organizer
 	libDir := cfg.OrganizerLibDir()
+	local := cfg.OrganizerType() != config.OrganizerRuntimeAPI
+	version := ""
+	if local {
+		version = memoryOrganizerLibraryVersion(libDir)
+	}
 	return memoryOrganizerSettings{
+		BaseURL: org.BaseURL, BaseURLEnv: org.BaseURLEnv, APIKeyEnv: org.APIKeyEnv,
+		APIKeySet: strings.TrimSpace(org.APIKey) != "", APIFormat: org.APIFormat,
 		Enabled:         org.Enabled,
 		Runtime:         cfg.OrganizerType(),
 		Model:           org.Model,
 		ModelPath:       org.ModelPath,
 		LibDir:          org.LibDir,
 		Processor:       org.Processor,
-		ModelPresent:    memoryOrganizerModelPresent(org.ModelPath),
-		LibraryPresent:  memoryOrganizerLibraryPresent(libDir),
-		LibraryVersion:  memoryOrganizerLibraryVersion(libDir),
+		ModelPresent:    local && memoryOrganizerModelPresent(org.ModelPath),
+		LibraryPresent:  local && memoryOrganizerLibraryPresent(libDir),
+		LibraryVersion:  version,
 		ContextSize:     org.ContextSize,
 		Threads:         org.Threads,
 		GPULayers:       org.GPULayers,
@@ -779,7 +791,13 @@ func settingsModelName(cfg config.Config) string {
 }
 
 type settingsUpdate struct {
-	BypassSubagentsEnabled *bool `json:"bypass_subagents_enabled,omitempty"`
+	SubagentModel             *string `json:"subagent_model,omitempty"`
+	MemoryOrganizerBaseURL    *string `json:"memory_organizer_base_url,omitempty"`
+	MemoryOrganizerBaseURLEnv *string `json:"memory_organizer_base_url_env,omitempty"`
+	MemoryOrganizerAPIKey     *string `json:"memory_organizer_api_key,omitempty"`
+	MemoryOrganizerAPIKeyEnv  *string `json:"memory_organizer_api_key_env,omitempty"`
+	MemoryOrganizerAPIFormat  *string `json:"memory_organizer_api_format,omitempty"`
+	BypassSubagentsEnabled    *bool   `json:"bypass_subagents_enabled,omitempty"`
 
 	Provider   *string `json:"provider,omitempty"`
 	Model      *string `json:"model,omitempty"`
@@ -879,6 +897,9 @@ func (s *Server) postSettings(w http.ResponseWriter, r *http.Request) {
 	applyActiveModelSettings(&next, req)
 	if req.BypassSubagentsEnabled != nil {
 		next.Permissions.BypassSubagents = *req.BypassSubagentsEnabled
+	}
+	if req.SubagentModel != nil {
+		next.Subagents.Model = strings.TrimSpace(*req.SubagentModel)
 	}
 	applyComputerUseSettings(&next, req)
 	applyJevSettings(&next, req)
@@ -1063,14 +1084,28 @@ func applyEmbeddingSettings(cfg *config.Config, req settingsUpdate) {
 // applyMemoryOrganizerSettings applies the local memory-organizer fields that
 // were provided.
 //
-// Each field is optional so a partial update cannot silently reset the rest of
-// the organizer configuration. Unlike Jev/embedding there is no API key or base
-// URL to resolve: the organizer is local-only by construction.
+// Each field is optional so partial updates preserve unrelated settings and
+// stored API credentials.
 func applyMemoryOrganizerSettings(cfg *config.Config, req settingsUpdate) {
 	if cfg == nil {
 		return
 	}
 	org := &cfg.Memory.Organizer
+	if req.MemoryOrganizerBaseURL != nil {
+		org.BaseURL = strings.TrimSpace(*req.MemoryOrganizerBaseURL)
+	}
+	if req.MemoryOrganizerBaseURLEnv != nil {
+		org.BaseURLEnv = strings.TrimSpace(*req.MemoryOrganizerBaseURLEnv)
+	}
+	if req.MemoryOrganizerAPIKey != nil {
+		org.APIKey = strings.TrimSpace(*req.MemoryOrganizerAPIKey)
+	}
+	if req.MemoryOrganizerAPIKeyEnv != nil {
+		org.APIKeyEnv = strings.TrimSpace(*req.MemoryOrganizerAPIKeyEnv)
+	}
+	if req.MemoryOrganizerAPIFormat != nil {
+		org.APIFormat = strings.TrimSpace(*req.MemoryOrganizerAPIFormat)
+	}
 	if req.MemoryOrganizerEnabled != nil {
 		org.Enabled = *req.MemoryOrganizerEnabled
 	}

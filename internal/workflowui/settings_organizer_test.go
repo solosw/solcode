@@ -8,8 +8,7 @@ import (
 	"github.com/solosw/solcode/internal/config"
 )
 
-// The organizer block must be exposed to the UI. Unlike Jev/embedding it has no
-// API mode, so the payload reports filesystem probes instead of keys.
+// The local organizer block reports filesystem readiness to the UI.
 func TestSettingsExposeMemoryOrganizerBlock(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)

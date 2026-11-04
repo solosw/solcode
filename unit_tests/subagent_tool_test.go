@@ -92,7 +92,8 @@ func TestSubagentTool_RetriesAndReportsStatus(t *testing.T) {
 	}
 }
 
-func TestSubagentTool_UsesFastModelForEasy(t *testing.T) {
+func TestSubagentTool_IgnoresAIDifficulty(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	runner := &capturingAgentRunner{}
 	coordinator := agent.NewCoordinator(runner)
 	sub := tool.NewSubagentTool(coordinator)
@@ -105,8 +106,8 @@ func TestSubagentTool_UsesFastModelForEasy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("invoke: %v", err)
 	}
-	if len(runner.cfgs) != 1 || runner.cfgs[0].Model != "fast-model" {
-		t.Fatalf("expected fast model, got %#v", runner.cfgs)
+	if len(runner.cfgs) != 1 || runner.cfgs[0].Model != "" {
+		t.Fatalf("expected inherited model regardless of AI difficulty, got %#v", runner.cfgs)
 	}
 }
 

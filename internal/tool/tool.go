@@ -49,6 +49,7 @@ type UseContext struct {
 	// dialog for nested agents and let Jev choose instead.
 	AgentRole        string
 	TodoPath         string
+	SubagentModel    string
 	FastModel        string
 	Status           func(string)
 	TaskRetryDelay   time.Duration

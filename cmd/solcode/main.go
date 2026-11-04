@@ -801,6 +801,7 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 				next.NormalizeLocalModels()
 				updates := map[string]any{
 					"permissions":        map[string]any{"bypass_subagents": next.Permissions.BypassSubagents},
+					"subagents":          next.Subagents,
 					"provider":           next.Provider,
 					"model":              next.Model,
 					"providers":          next.Providers,
@@ -830,6 +831,12 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 					"memory": map[string]any{
 						"organizer": map[string]any{
 							"enabled":           next.Memory.Organizer.Enabled,
+							"runtime":           next.Memory.Organizer.Runtime,
+							"base_url":          next.Memory.Organizer.BaseURL,
+							"base_url_env":      next.Memory.Organizer.BaseURLEnv,
+							"api_key":           next.Memory.Organizer.APIKey,
+							"api_key_env":       next.Memory.Organizer.APIKeyEnv,
+							"api_format":        next.Memory.Organizer.APIFormat,
 							"model":             next.Memory.Organizer.Model,
 							"context_size":      next.Memory.Organizer.ContextSize,
 							"max_output_tokens": next.Memory.Organizer.MaxOutputTokens,

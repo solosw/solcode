@@ -45,8 +45,8 @@ func (t *subagentTool) applyRole(ctx context.Context, uctx *UseContext, params *
 	}
 	params.roleInstructions = role.Instructions
 	params.AllowedTools = agent.IntersectTools(params.AllowedTools, role.AllowedTools)
-	if params.Model == "" {
-		params.Model = role.Model
+	if strings.TrimSpace(role.Model) != "" {
+		params.Model = strings.TrimSpace(role.Model)
 	}
 	return nil
 }

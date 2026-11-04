@@ -91,6 +91,7 @@ GOAL_STATUS: INCOMPLETE`, goalPath)
 	result, err := tool.NewTaskTool(a.Coordinator).Invoke(ctx, &tool.UseContext{
 		AgentID:        "goal",
 		WorkDir:        workDir,
+		SubagentModel:  a.Config.Subagents.Model,
 		FastModel:      a.Config.FastModel,
 		Status:         a.onStatus,
 		TaskRetryDelay: 0,

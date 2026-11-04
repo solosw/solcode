@@ -75,9 +75,7 @@ func (t *subagentTool) InputSchema() map[string]any {
 					"Does not change the shared tools schema prefix (core tools stay on the wire for prompt cache). " +
 					"Empty means no additional restriction beyond the role and parent ceilings (subject to permission mode).",
 			},
-			"model":      map[string]any{"type": "string", "description": "Optional explicit model or 'fast'"},
-			"difficulty": map[string]any{"type": "string", "enum": []string{"easy", "medium", "hard"}, "description": "Use easy for the configured fast model"},
-			"task_id":    map[string]any{"type": "string", "description": "Optional orchestration id from Task"},
+			"task_id": map[string]any{"type": "string", "description": "Optional orchestration id from Task"},
 		}),
 		"required": []string{"prompt"},
 	}
@@ -114,7 +112,11 @@ func (t *subagentTool) prepare(ctx context.Context, uctx *UseContext, params *Su
 	if (params.Description == "" && strings.TrimSpace(params.AgentID) == "") || params.Prompt == "" {
 		return fmt.Errorf("description and prompt are required")
 	}
-	if params.FastModel == "" && uctx != nil {
+	// Model selection is host configuration only. Ignore legacy model-facing
+	// fields even when callers send them outside the current schema.
+	params.Model, params.FastModel, params.Difficulty = "", "", ""
+	if uctx != nil {
+		params.Model = strings.TrimSpace(uctx.SubagentModel)
 		params.FastModel = uctx.FastModel
 	}
 	if t.coordinator == nil {
@@ -387,9 +389,6 @@ func subagentModel(params SubagentParams) string {
 	}
 	if model != "" {
 		return model
-	}
-	if strings.EqualFold(params.Difficulty, "easy") || strings.EqualFold(params.Difficulty, "fast") {
-		return strings.TrimSpace(params.FastModel)
 	}
 	return ""
 }

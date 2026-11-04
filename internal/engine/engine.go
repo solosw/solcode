@@ -58,6 +58,7 @@ type Config struct {
 	Tools              *tool.Registry
 	Permissions        *permission.Service
 	ModelName          string
+	SubagentModelName  string
 	FastModelName      string
 	MaxContextTokens   int64
 	MaxTokens          int64
@@ -810,6 +811,7 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 					AllowedTools:   cfg.AllowedTools,
 					PermissionMode: string(currentMode),
 					TodoPath:       e.config.TodoPath,
+					SubagentModel:  e.config.SubagentModelName,
 					FastModel:      e.config.FastModelName,
 					TextFileSystem: e.config.TextFileSystem,
 					TerminalRunner: e.config.TerminalRunner,

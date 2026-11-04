@@ -118,9 +118,13 @@ allowed_tools = ["View", "Grep", "Glob", "LS", "LSP"]
 Supported keys are description, instructions, model, and allowed_tools. Unknown
 keys and malformed TOML fail explicitly. Custom filenames define additional roles
 in Ultra only. New roles cannot be registered for Bypass via configuration.
-Explicit Task model selection overrides the role model; otherwise the current
-role model (including fast) or the host's current default is used. Overrides are
-reloaded on each invocation, including Resume. Role instructions are durable
+Model selection is user-controlled: role TOML `model` > `subagents.model` in
+settings > inherited main model. Set `subagents.model` in Settings → Features or
+settings.json; use an API model ID accepted by the active chat provider, or
+`"fast"` to resolve the configured fast model. Task/Subagent no longer expose
+`model`, `difficulty` or `fast_model`; legacy arguments are ignored and cannot
+override configuration. Role settings are reloaded on every invocation,
+including Resume. Role instructions are durable
 dynamic context, not changes to the shared system/tools cache prefix.
 
 The effective tool ceiling is the intersection of the parent's allowed_tools,
@@ -241,8 +245,8 @@ can atomically commit an arbitrary shell command or remote API operation.
 Stored history never restores a revoked grant. Every tool still passes the
 current executor, permission service, hooks, BatchTool/PTC child checks and
 guardrails. A resume may narrow the original allowed_tools ceiling but cannot
-implicitly broaden it. Model configuration is resolved from the current host;
-an explicit model override still works.
+implicitly broaden it. Model configuration is resolved only from the current
+host settings and user/project role TOML; AI arguments cannot override it.
 
 Tests cover project-wide cross-session/cross-restart continuation and listing,
 foreign-project isolation, explicit spawn/resume validation, model-free management,

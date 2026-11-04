@@ -136,6 +136,7 @@ type Config struct {
 	APIFormat        string                `json:"api_format,omitempty"`
 	Model            string                `json:"model"`
 	FastModel        string                `json:"fast_model,omitempty"`
+	Subagents        SubagentsConfig       `json:"subagents,omitempty"`
 	MaxContextTokens int64                 `json:"max_context_tokens,omitempty"`
 	MaxTokens        int64                 `json:"max_tokens"`
 	SystemPrompt     string                `json:"system_prompt"`
@@ -180,6 +181,12 @@ type Config struct {
 
 	Provider  string           `json:"provider,omitempty"`
 	Providers []ProviderConfig `json:"providers,omitempty"`
+}
+
+// SubagentsConfig selects the default child model. Role TOML model settings override it.
+// Empty inherits the main model; "fast" resolves the configured fast model.
+type SubagentsConfig struct {
+	Model string `json:"model,omitempty"`
 }
 
 // BackgroundTasksConfig controls foreground yielding, not the task's execution
@@ -460,9 +467,8 @@ type MemoryConfig struct {
 	TierM2TTLHours           int     `json:"tier_m2_ttl_hours,omitempty"`
 	PromotionAccessThreshold int     `json:"promotion_access_threshold,omitempty"`
 	PromotionConfidence      float64 `json:"promotion_confidence,omitempty"`
-	// Organizer configures the fully local memory-organizer model. When it is
-	// enabled, the model's own memory-writing tools are disabled and memory is
-	// produced asynchronously by this local model instead.
+	// Organizer configures asynchronous memory summarization and extraction.
+	// When enabled, it owns memory writes instead of model-visible write tools.
 	Organizer OrganizerConfig `json:"organizer,omitempty"`
 	// Embedding configures optional vector embeddings for semantic search.
 	// Lives under memory so organizer + embeddings share the local-model story.
@@ -470,25 +476,29 @@ type MemoryConfig struct {
 }
 
 // OrganizerRuntimeYzma loads GGUF in-process through github.com/hybridgroup/yzma.
-// Only this runtime is implemented; the field exists so alternative local
-// backends can be added without a config migration.
 const OrganizerRuntimeYzma = "yzma"
+
+// OrganizerRuntimeAPI uses an explicitly configured remote text-generation API.
+const OrganizerRuntimeAPI = "api"
 
 // DefaultOrganizerRuntime is used when memory.organizer.runtime is empty.
 const DefaultOrganizerRuntime = OrganizerRuntimeYzma
 
-// OrganizerConfig configures the local memory-organizer model (llama.cpp/GGUF).
-//
-// The whole path stays local: no remote or hosted endpoint is consulted, and
-// there is no fallback to the chat provider. A missing library or model leaves
-// the organizer unavailable instead of routing memory work to a network model.
+// OrganizerConfig selects local GGUF inference or an independent API endpoint.
+// Local mode never falls back to the network; API mode never inherits the chat
+// provider. API credentials and URL must be explicitly configured.
 type OrganizerConfig struct {
-	// Model is the GGUF filename under ~/.solcode/models.
+	BaseURL    string `json:"base_url,omitempty"`
+	BaseURLEnv string `json:"base_url_env,omitempty"`
+	APIKey     string `json:"api_key,omitempty"`
+	APIKeyEnv  string `json:"api_key_env,omitempty"`
+	APIFormat  string `json:"api_format,omitempty"`
+	// Model is an API model id, or a GGUF filename under ~/.solcode/models.
 	Model string `json:"model,omitempty"`
 	// Enabled turns the local organizer on. It is also the single source of
 	// truth for disabling the model-visible memory write tools.
 	Enabled bool `json:"enabled,omitempty"`
-	// Runtime selects the local inference backend. Empty means "yzma".
+	// Runtime selects "yzma" (default, local GGUF) or "api".
 	Runtime string `json:"runtime,omitempty"`
 	// ModelPath is derived from Model. Legacy paths migrate to filenames.
 	ModelPath string `json:"model_path,omitempty"`
@@ -1373,6 +1383,10 @@ func applyJSONConfig(cfg *Config, data []byte) error {
 			if err := json.Unmarshal(value, &cfg.Model); err != nil {
 				return err
 			}
+		case "subagents":
+			if err := json.Unmarshal(value, &cfg.Subagents); err != nil {
+				return err
+			}
 		case "max_tokens":
 			if err := json.Unmarshal(value, &cfg.MaxTokens); err != nil {
 				return err
@@ -2060,13 +2074,32 @@ func (cfg *Config) normalizeOrganizer() {
 	if org.Runtime == "" {
 		org.Runtime = DefaultOrganizerRuntime
 	}
-	org.Processor = GPUProcessor()
-	if org.Model == "" {
-		org.Model = legacyModelName(org.ModelPath)
+	org.Model = strings.TrimSpace(org.Model)
+	org.APIKey = strings.TrimSpace(org.APIKey)
+	org.APIKeyEnv = strings.TrimSpace(org.APIKeyEnv)
+	org.BaseURLEnv = strings.TrimSpace(org.BaseURLEnv)
+	org.BaseURL = strings.TrimRight(strings.TrimSpace(org.BaseURL), "/")
+	if org.Runtime == OrganizerRuntimeAPI {
+		if v := strings.TrimSpace(os.Getenv(org.APIKeyEnv)); v != "" {
+			org.APIKey = v
+		}
+		if v := strings.TrimSpace(os.Getenv(org.BaseURLEnv)); v != "" {
+			org.BaseURL = strings.TrimRight(v, "/")
+		}
+		if strings.TrimSpace(org.APIFormat) == "" {
+			org.APIFormat = anthropic.FormatOpenAI
+		}
+		org.APIFormat = anthropic.NormalizeFormat(org.APIFormat)
+		org.ModelPath = ""
+	} else {
+		org.Processor = GPUProcessor()
+		if org.Model == "" {
+			org.Model = legacyModelName(org.ModelPath)
+		}
+		org.Model = localModelName(org.Model)
+		org.ModelPath = LocalModelPath(org.Model)
+		org.LibDir = ""
 	}
-	org.Model = localModelName(org.Model)
-	org.ModelPath = LocalModelPath(org.Model)
-	org.LibDir = ""
 	// Default / hard-cap 16k. The multi-GB RSS bug was n_batch==n_ctx, not a
 	// large window by itself; yzma keeps n_batch <= 512 regardless.
 	if org.ContextSize <= 0 {
@@ -2106,6 +2139,8 @@ func (cfg *Config) normalizeOrganizer() {
 // OrganizerType returns the normalized organizer runtime. Empty means "yzma".
 func (c Config) OrganizerType() string {
 	switch strings.ToLower(strings.TrimSpace(c.Memory.Organizer.Runtime)) {
+	case OrganizerRuntimeAPI:
+		return OrganizerRuntimeAPI
 	case OrganizerRuntimeYzma:
 		return OrganizerRuntimeYzma
 	default:
@@ -2113,17 +2148,15 @@ func (c Config) OrganizerType() string {
 	}
 }
 
-// OrganizerEnabled reports whether the local memory organizer should run.
-//
-// Unlike Embedding/Jev there is no API variant, so a missing model path simply
-// leaves the organizer disabled. Callers must treat a false result as "produce
-// memory the legacy way", never as "use the chat provider instead".
+// OrganizerEnabled reports whether the selected backend has explicit settings.
+// It never inherits credentials or a model from the active chat provider.
 func (c Config) OrganizerEnabled() bool {
 	if !c.Memory.Organizer.Enabled {
 		return false
 	}
-	if c.OrganizerType() != OrganizerRuntimeYzma {
-		return false
+	if c.OrganizerType() == OrganizerRuntimeAPI {
+		org := c.Memory.Organizer
+		return strings.TrimSpace(org.Model) != "" && strings.TrimSpace(org.BaseURL) != "" && strings.TrimSpace(org.APIKey) != ""
 	}
 	return strings.TrimSpace(c.Memory.Organizer.ModelPath) != ""
 }

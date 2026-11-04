@@ -16,7 +16,7 @@ import (
 	"github.com/solosw/solcode/internal/sessionmemory"
 )
 
-// organizerRuntime holds the optional local memory organizer (Letta archival
+// organizerRuntime holds the optional configured memory organizer (Letta archival
 // write path). It is constructed lazily from config and closed with the App.
 type organizerRuntime struct {
 	org *organizer.Organizer
@@ -44,14 +44,20 @@ func newOrganizerRuntime(cfg config.Config) *organizerRuntime {
 	if cfg.Memory.Organizer.IdleUnloadSec < 0 {
 		idle = -1
 	}
-	gen := yzma.New(yzma.Config{
-		ModelPath:       cfg.Memory.Organizer.ModelPath,
-		LibDir:          cfg.OrganizerLibDir(),
-		ContextSize:     contextSize,
-		Threads:         cfg.Memory.Organizer.Threads,
-		GPULayers:       cfg.Memory.Organizer.GPULayers,
-		IdleUnloadAfter: idle,
-	})
+	var gen organizer.LocalGenerator
+	if cfg.OrganizerType() == config.OrganizerRuntimeAPI {
+		org := cfg.Memory.Organizer
+		gen = organizer.NewAPIGenerator(org)
+	} else {
+		gen = yzma.New(yzma.Config{
+			ModelPath:       cfg.Memory.Organizer.ModelPath,
+			LibDir:          cfg.OrganizerLibDir(),
+			ContextSize:     contextSize,
+			Threads:         cfg.Memory.Organizer.Threads,
+			GPULayers:       cfg.Memory.Organizer.GPULayers,
+			IdleUnloadAfter: idle,
+		})
+	}
 	org := organizer.New(gen, organizer.Options{
 		MaxOutputTokens: cfg.Memory.Organizer.MaxOutputTokens,
 		Temperature:     cfg.Memory.Organizer.Temperature,

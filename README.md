@@ -325,22 +325,37 @@ These skills are **not** registered without Jev routing, and `skills.disabled` /
 ### Memory organizer (optional)
 
 > **Status: wired into compaction.** When enabled, compact triggers an async
-> local organizer run (session recall → `.solcode/solcode.md`, archival
+> organizer run (session recall → `.solcode/solcode.md`, archival
 > candidates → durable memories), hides `WriteMemory` / `WriteSessionMemory`,
 > keeps `Read*` tools, and runs lifecycle consolidation. Opt-in new sessions
 > can bootstrap core + archival memory into the first prompt (Letta-style).
-> Quality still depends on the local GGUF model.
+> Quality depends on the configured local or API model.
 
-A **fully local** GGUF model that summarizes finished sessions and extracts
-durable memory. It runs **in-process** through `llama.cpp`, loaded with
-[`hybridgroup/yzma`](https://github.com/hybridgroup/yzma) over purego FFI — no
-CGO, no external server, and no remote endpoint. There is deliberately no API
-mode and no fallback to the chat provider: if the local model cannot load, the
-organizer is simply unavailable.
+A configurable model that summarizes finished sessions and extracts durable
+memory. The default `runtime="yzma"` runs a **local GGUF** in-process through
+`llama.cpp` / purego FFI, without CGO or an external server. Set `runtime="api"`
+to use a separately configured API instead. Local mode never falls back to the
+network; API mode does not inherit the chat provider's credentials or model.
 
 Off by default.
 
-**What you need to provide**
+**API mode**
+
+Configure `memory.organizer` with `enabled=true`, `runtime="api"`, an API
+`model`, `base_url` (or `base_url_env`) and `api_key` (or `api_key_env`).
+`api_format` accepts `openai` (default, Chat Completions), `anthropic` or
+`responses`. Base URLs may be provider origins or end in `/v1`. API mode sends
+session content to that endpoint; no llama.cpp library or GGUF is needed.
+`context_size`, `temperature` and GPU options apply only to local inference.
+The same structured-output validation and timeout apply to both backends.
+
+Embedding independently supports `memory.embedding.type="api"` with its own
+OpenAI-compatible embeddings endpoint, model and credentials. Its base URL
+is the API root (usually ending in `/v1`). See the combined
+[API model configuration example](examples/settings/settings.models.api.example.json).
+Both backends can also be configured from Web UI → Settings.
+
+**What you need to provide for local mode**
 
 | Piece | How to get it | Notes |
 |---|---|---|
@@ -365,7 +380,8 @@ Off by default.
 | Field | Meaning |
 |---|---|
 | `enabled` | Turns the organizer on. |
-| `model` | GGUF filename in ~/.solcode/models; required when enabled. |
+| `runtime` | `yzma` (default, local GGUF) or `api` (independent endpoint). |
+| `model` | API model ID or GGUF filename in ~/.solcode/models; required when enabled. |
 | `context_size` | Context window in tokens (default 16384). Bounds how much transcript fits. |
 | `max_output_tokens` | Completion cap for one organizer run. |
 | `temperature` | Sampling temperature. `0` selects greedy decoding. |
@@ -377,8 +393,8 @@ See also [`examples/settings/settings.memory.organizer.example.json`](examples/s
 
 Two ways — both need no compiler and no CGO.
 
-*From the Web UI* — open `/workflow-ui` → **Settings** → *Memory Organizer (local
-model)* and press **Download llama.cpp library**. The
+*From the Web UI* — open `/workflow-ui` → **Settings** → *Memory Organizer*,
+select *Local GGUF* and press **Download llama.cpp library**. The
 settings card shows whether the model file and the library were found on disk,
 and the download runs in the background with a progress bar. Leave the page if
 you like; reopening it resumes showing the install state.

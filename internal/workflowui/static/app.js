@@ -66,6 +66,7 @@
     newMcpHeaders: document.getElementById("new-mcp-headers"),
     // features (bypass sub-agents + computer use)
     setBypassSubagents: document.getElementById("set-bypass-subagents"),
+    setSubagentModel: document.getElementById("set-subagent-model"),
     setComputerUse: document.getElementById("set-computer-use"),
     // jev
     jevState: document.getElementById("jev-state"),
@@ -98,6 +99,14 @@
 
     memoryOrganizerState: document.getElementById("memory-organizer-state"),
     setMemoryOrganizerEnabled: document.getElementById("set-memory-organizer-enabled"),
+    setMemoryOrganizerRuntime: document.getElementById("set-memory-organizer-runtime"),
+    setMemoryOrganizerBaseUrl: document.getElementById("set-memory-organizer-base-url"),
+    setMemoryOrganizerBaseUrlEnv: document.getElementById("set-memory-organizer-base-url-env"),
+    setMemoryOrganizerApiKey: document.getElementById("set-memory-organizer-api-key"),
+    setMemoryOrganizerApiKeyEnv: document.getElementById("set-memory-organizer-api-key-env"),
+    setMemoryOrganizerApiFormat: document.getElementById("set-memory-organizer-api-format"),
+    memoryOrganizerApiFields: document.getElementById("memory-organizer-api-fields"),
+    memoryOrganizerLocalFields: document.getElementById("memory-organizer-local-fields"),
     setMemoryOrganizerContext: document.getElementById("set-memory-organizer-context"),
     setMemoryOrganizerMaxOutput: document.getElementById("set-memory-organizer-max-output"),
     setMemoryOrganizerTemperature: document.getElementById("set-memory-organizer-temperature"),
@@ -802,11 +811,45 @@
   }
 
   function switchTab(tab) {
-    document.querySelectorAll(".tab").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
+    document.querySelectorAll(".tab").forEach((b) => {
+      b.classList.toggle("active", b.dataset.tab === tab);
+      b.setAttribute("aria-pressed", String(b.dataset.tab === tab));
+    });
     document.getElementById("tab-workflow").classList.toggle("hidden", tab !== "workflow");
     document.getElementById("tab-settings").classList.toggle("hidden", tab !== "settings");
     if (tab === "settings" && !settings.draft) {
       loadSettingsV2();
+    }
+    if (tab === "settings") requestAnimationFrame(updateSettingsNavigation);
+  }
+
+  function updateSettingsNavigation() {
+    const main = document.getElementById("settings-main");
+    if (!main.offsetParent) return;
+    const headerHeight = main.querySelector(".settings-header").offsetHeight;
+    const navigation = main.querySelector(".settings-navigation");
+    const navHeight = window.innerWidth <= 960 ? navigation.offsetHeight : 0;
+    main.style.setProperty("--settings-header-height", `${headerHeight}px`);
+    main.style.setProperty("--settings-scroll-offset", `${headerHeight + navHeight + 20}px`);
+    const sections = [...main.querySelectorAll(".settings-section[id]")];
+    const threshold = main.getBoundingClientRect().top + headerHeight + navHeight + 30;
+    let active = sections[0];
+    let activeTop = -Infinity;
+    for (const section of sections) {
+      const top = section.getBoundingClientRect().top;
+      const preferred = navigation.dataset.selectedSection === `#${section.id}`;
+      // Side-by-side cards share a row: keep the explicitly chosen card active.
+      if (top <= threshold && (top > activeTop + 1 || (Math.abs(top - activeTop) <= 1 && preferred))) {
+        active = section;
+        activeTop = top;
+      }
+    }
+    if (main.scrollTop + main.clientHeight >= main.scrollHeight - 4) active = sections.at(-1);
+    for (const link of navigation.querySelectorAll("a")) {
+      const selected = link.hash === `#${active.id}`;
+      link.classList.toggle("active", selected);
+      if (selected) link.setAttribute("aria-current", "location");
+      else link.removeAttribute("aria-current");
     }
   }
 
@@ -835,6 +878,7 @@
       settings.draft = copySettings(data);
       clearSettingsDirty();
       renderSettingsV2();
+      requestAnimationFrame(updateSettingsNavigation);
       // Reflect an install that started before this page loaded.
       refreshMemoryOrganizerInstallStatus();
     } catch (err) {
@@ -855,6 +899,7 @@
 
   function syncFeatureSettings(d) {
     d.bypass_subagents_enabled = Boolean(el.setBypassSubagents.checked);
+    d.subagent_model = el.setSubagentModel.value.trim();
     d.computer_use = { ...d.computer_use, enabled: Boolean(el.setComputerUse.checked) };
     const jev = d.jev || (d.jev = {});
     jev.enabled = Boolean(el.setJevEnabled.checked);
@@ -903,6 +948,15 @@
 
     const org = d.memory_organizer || (d.memory_organizer = {});
     org.enabled = Boolean(el.setMemoryOrganizerEnabled.checked);
+    org.runtime = el.setMemoryOrganizerRuntime.value || "yzma";
+    org.base_url = el.setMemoryOrganizerBaseUrl.value.trim();
+    org.base_url_env = el.setMemoryOrganizerBaseUrlEnv.value.trim();
+    org.api_key_env = el.setMemoryOrganizerApiKeyEnv.value.trim();
+    org.api_format = el.setMemoryOrganizerApiFormat.value || "openai";
+    const orgKey = el.setMemoryOrganizerApiKey.value.trim();
+    if (orgKey) { org.api_key = orgKey; org.api_key_set = true; }
+    else { delete org.api_key; }
+    updateMemoryOrganizerBackendVisibility(org.runtime);
     org.model = el.setMemoryOrganizerModelPath.value.trim();
     org.context_size = numberInput(el.setMemoryOrganizerContext.value, org.context_size);
     org.max_output_tokens = numberInput(el.setMemoryOrganizerMaxOutput.value, org.max_output_tokens);
@@ -915,6 +969,15 @@
     el.setJevModel.placeholder = local ? "Kev-4B-Q8_0.gguf" : "jev-latest";
     el.jevApiFields.classList.toggle("hidden", local);
     el.jevLocalFields.classList.toggle("hidden", !local);
+  }
+
+  function updateMemoryOrganizerBackendVisibility(runtime) {
+    const api = runtime === "api";
+    el.setMemoryOrganizerTemperature.disabled = api;
+    el.setMemoryOrganizerContext.disabled = api;
+    el.memoryOrganizerApiFields.classList.toggle("hidden", !api);
+    el.memoryOrganizerLocalFields.classList.toggle("hidden", api);
+    el.setMemoryOrganizerModelPath.placeholder = api ? "API model id" : "Qwen3.5-0.8B-BF16.gguf";
   }
 
   function updateEmbeddingBackendVisibility(type) {
@@ -1025,6 +1088,7 @@
 
   function renderFeatureSettings(d) {
     el.setBypassSubagents.checked = Boolean(d.bypass_subagents_enabled);
+    el.setSubagentModel.value = d.subagent_model || "";
     el.setComputerUse.checked = Boolean(d.computer_use?.enabled);
 
     const jev = d.jev || {};
@@ -1069,6 +1133,14 @@
 
     const org = d.memory_organizer || {};
     el.setMemoryOrganizerEnabled.checked = Boolean(org.enabled);
+    el.setMemoryOrganizerRuntime.value = org.runtime === "api" ? "api" : "yzma";
+    el.setMemoryOrganizerBaseUrl.value = org.base_url || "";
+    el.setMemoryOrganizerBaseUrlEnv.value = org.base_url_env || "";
+    el.setMemoryOrganizerApiKey.value = "";
+    el.setMemoryOrganizerApiKey.placeholder = org.api_key_set ? "A key is stored — leave blank to keep it" : "API key or env var required";
+    el.setMemoryOrganizerApiKeyEnv.value = org.api_key_env || "";
+    el.setMemoryOrganizerApiFormat.value = org.api_format || "openai";
+    updateMemoryOrganizerBackendVisibility(el.setMemoryOrganizerRuntime.value);
     el.setMemoryOrganizerModelPath.value = org.model || "";
     el.setMemoryOrganizerContext.value = org.context_size ?? 16384;
     el.setMemoryOrganizerMaxOutput.value = org.max_output_tokens ?? 800;
@@ -1081,11 +1153,14 @@
     renderMemoryOrganizerProbe(org);
   }
 
-  // memoryOrganizerStateLabel mirrors the backend rule: the organizer needs a
-  // model file and the llama.cpp library, and has no API fallback.
+  // Mirror the selected backend readiness without falling back between backends.
   function memoryOrganizerStateLabel(org) {
     if (!org.enabled) return "off";
     if (!(org.model || "").trim()) return "needs a model";
+    if (org.runtime === "api") {
+      if (!org.base_url && !org.base_url_env) return "needs a base URL";
+      return org.api_key_set ? "ready" : "needs a key";
+    }
     if (!org.model_present) return "model not found";
     if (!org.library_present) return "needs llama.cpp library";
     return "ready";
@@ -1095,7 +1170,7 @@
   // typo is visible before enabling the organizer.
   function renderMemoryOrganizerProbe(org) {
     if (!el.memoryOrganizerProbe) return;
-    if (!org.enabled) {
+    if (!org.enabled || org.runtime === "api") {
       el.memoryOrganizerProbe.textContent = "";
       return;
     }
@@ -1293,6 +1368,7 @@
       skills_enabled: Object.fromEntries((d.skills || []).filter((s) => s.enabled).map((s) => [s.name, true])),
       skills_disabled: Object.fromEntries((d.skills || []).filter((s) => !s.enabled).map((s) => [s.name, true])),
       bypass_subagents_enabled: Boolean(d.bypass_subagents_enabled),
+      subagent_model: d.subagent_model || "",
       computer_use_enabled: Boolean(d.computer_use?.enabled),
       jev_enabled: Boolean(d.jev?.enabled),
       jev_type: d.jev?.type || "api",
@@ -1312,6 +1388,11 @@
       embedding_timeout_sec: d.embedding?.timeout_sec ?? 30,
       embedding_dimensions: d.embedding?.dimensions ?? 0,
       memory_organizer_enabled: Boolean(d.memory_organizer?.enabled),
+      memory_organizer_runtime: d.memory_organizer?.runtime || "yzma",
+      memory_organizer_base_url: d.memory_organizer?.base_url || "",
+      memory_organizer_base_url_env: d.memory_organizer?.base_url_env || "",
+      memory_organizer_api_key_env: d.memory_organizer?.api_key_env || "",
+      memory_organizer_api_format: d.memory_organizer?.api_format || "openai",
       memory_organizer_model: d.memory_organizer?.model || "",
       memory_organizer_context_size: d.memory_organizer?.context_size ?? 8192,
       memory_organizer_max_output_tokens: d.memory_organizer?.max_output_tokens ?? 1500,
@@ -1321,6 +1402,9 @@
     // Only send the key when the user typed one; otherwise the stored key stays.
     if (d.jev?.api_key) {
       payload.jev_api_key = d.jev.api_key;
+    }
+    if (d.memory_organizer?.api_key) {
+      payload.memory_organizer_api_key = d.memory_organizer.api_key;
     }
     if (d.embedding?.api_key) {
       payload.embedding_api_key = d.embedding.api_key;
@@ -1491,6 +1575,23 @@
     document.querySelectorAll(".tab").forEach((b) => {
       b.addEventListener("click", () => switchTab(b.dataset.tab));
     });
+    let navigationFrame = 0;
+    const scheduleNavigationUpdate = () => {
+      if (navigationFrame) return;
+      navigationFrame = requestAnimationFrame(() => {
+        navigationFrame = 0;
+        updateSettingsNavigation();
+      });
+    };
+    const settingsNavigation = document.querySelector(".settings-navigation");
+    settingsNavigation.querySelectorAll("a").forEach((link) => {
+      link.addEventListener("click", () => {
+        settingsNavigation.dataset.selectedSection = link.hash;
+        scheduleNavigationUpdate();
+      });
+    });
+    document.getElementById("settings-main").addEventListener("scroll", scheduleNavigationUpdate, { passive: true });
+    window.addEventListener("resize", scheduleNavigationUpdate);
     document.getElementById("btn-save-settings").onclick = saveSettingsV2;
     document.getElementById("btn-reload-settings").onclick = loadSettingsV2;
     el.btnMemoryOrganizerInstall.addEventListener("click", startMemoryOrganizerInstall);
@@ -1570,6 +1671,8 @@
       el.setEmbeddingType,
       el.setEmbeddingApiKey,
       el.setMemoryOrganizerEnabled,
+      el.setMemoryOrganizerRuntime,
+      el.setMemoryOrganizerApiFormat,
     ].forEach((input) => {
       input.addEventListener("change", () => {
         syncFeatureSettings(settings.draft || {});
@@ -1590,6 +1693,11 @@
       el.setEmbeddingApiKeyEnv,
       el.setEmbeddingTimeout,
       el.setEmbeddingDimensions,
+      el.setSubagentModel,
+      el.setMemoryOrganizerBaseUrl,
+      el.setMemoryOrganizerBaseUrlEnv,
+      el.setMemoryOrganizerApiKey,
+      el.setMemoryOrganizerApiKeyEnv,
       el.setMemoryOrganizerModelPath,
       el.setMemoryOrganizerContext,
       el.setMemoryOrganizerMaxOutput,
@@ -1653,7 +1761,8 @@
       }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
         e.preventDefault();
-        saveWorkflow();
+        if (document.getElementById("tab-settings").classList.contains("hidden")) saveWorkflow();
+        else saveSettingsV2();
       }
     });
 

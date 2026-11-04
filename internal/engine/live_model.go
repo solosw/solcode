@@ -37,6 +37,7 @@ func (e *Engine) InvalidateReasoningHistory() {
 func copyModelConfig(dst *Config, src Config) {
 	dst.Client, dst.ModelName, dst.ModelKey = src.Client, src.ModelName, src.ModelKey
 	dst.FastModelName = src.FastModelName
+	dst.SubagentModelName = src.SubagentModelName
 	dst.MaxTokens, dst.MaxContextTokens = src.MaxTokens, src.MaxContextTokens
 	dst.Thinking, dst.ThinkingText, dst.Effort = src.Thinking, src.ThinkingText, src.Effort
 	dst.Stream = src.Stream

@@ -50,7 +50,5 @@ func (cfg *Config) NormalizeLocalModels() {
 	if cfg.JevType() == JevBackendLocal {
 		cfg.normalizeJev()
 	}
-	if cfg.EmbeddingType() == EmbeddingBackendGGUF {
-		cfg.normalizeEmbedding()
-	}
+	cfg.normalizeEmbedding()
 }

@@ -10,8 +10,10 @@
   <div id="app">
     <!-- Tab bar -->
     <nav id="tabbar">
-      <button class="tab active" data-tab="workflow">Workflows</button>
-      <button class="tab" data-tab="settings">Settings</button>
+      <div class="app-wordmark"><span class="brand-glyph" aria-hidden="true">s</span>solcode<span class="app-divider"></span><span class="app-caption">Control center</span></div>
+      <button class="tab active" data-tab="workflow" aria-controls="tab-workflow" aria-pressed="true">Workflows</button>
+      <button class="tab" data-tab="settings" aria-controls="tab-settings" aria-pressed="false">Settings</button>
+      <span class="workspace-label"><span class="status-dot" aria-hidden="true"></span>Local workspace</span>
     </nav>
 
     <!-- Workflow tab -->
@@ -108,19 +110,37 @@
       <main id="settings-main">
         <header class="settings-header">
           <div>
-            <div class="settings-title">Runtime Settings</div>
-            <div id="settings-dirty" class="settings-subtitle">All changes are saved together.</div>
+            <div class="eyebrow">WORKSPACE PREFERENCES</div>
+            <h1 class="settings-title">Make it your own.</h1>
+            <div id="settings-dirty" class="settings-subtitle" role="status">All changes are saved together.</div>
           </div>
           <div class="settings-actions">
             <button id="btn-reload-settings" class="btn" title="Discard local changes and reload">Reload</button>
             <button id="btn-save-settings" class="btn primary">Save changes</button>
           </div>
         </header>
-        <div id="settings-status" class="status"></div>
+        <div id="settings-status" class="status" role="status"></div>
 
+        <div class="settings-shell">
+          <nav class="settings-navigation" aria-label="Settings sections">
+            <div class="nav-group-label">CONFIGURATION</div>
+            <a class="settings-nav-link active" href="#settings-runtime" aria-current="location"><span class="nav-symbol" aria-hidden="true">01</span>Model runtime</a>
+            <a class="settings-nav-link" href="#settings-providers"><span class="nav-symbol" aria-hidden="true">02</span>Providers</a>
+            <a class="settings-nav-link" href="#settings-models"><span class="nav-symbol" aria-hidden="true">03</span>Models</a>
+            <div class="nav-group-label">CAPABILITIES</div>
+            <a class="settings-nav-link" href="#settings-mcp"><span class="nav-symbol" aria-hidden="true">04</span>MCP servers</a>
+            <a class="settings-nav-link" href="#settings-skills"><span class="nav-symbol" aria-hidden="true">05</span>Skills</a>
+            <a class="settings-nav-link" href="#settings-features"><span class="nav-symbol" aria-hidden="true">06</span>Agents &amp; tools</a>
+            <div class="nav-group-label">INTELLIGENCE &amp; MEMORY</div>
+            <a class="settings-nav-link" href="#settings-jev"><span class="nav-symbol" aria-hidden="true">07</span>Jev routing</a>
+            <a class="settings-nav-link" href="#settings-embedding"><span class="nav-symbol" aria-hidden="true">08</span>Embedding</a>
+            <a class="settings-nav-link" href="#settings-memory"><span class="nav-symbol" aria-hidden="true">09</span>Memory organizer</a>
+            <div class="navigation-note"><span class="status-dot" aria-hidden="true"></span><div>Your workspace, your rules.<br /><span>Changes apply after saving.</span></div></div>
+          </nav>
         <div class="settings-layout">
-          <section class="settings-section settings-runtime">
-            <h2>Model Runtime</h2>
+          <section id="settings-runtime" class="settings-section settings-runtime">
+            <div class="section-heading"><div><div class="section-kicker">THE FOUNDATION</div><h2>Model runtime</h2></div><span class="badge">Primary model</span></div>
+            <p class="settings-hint">Choose the model that powers your workspace and fine-tune its limits.</p>
             <div class="settings-grid">
               <label>Provider
                 <select id="set-provider"></select>
@@ -144,7 +164,7 @@
             </div>
           </section>
 
-          <section class="settings-section">
+          <section id="settings-providers" class="settings-section compact-card">
             <div class="section-heading">
               <h2>Providers</h2>
               <span id="provider-count" class="badge"></span>
@@ -168,7 +188,7 @@
             </details>
           </section>
 
-          <section class="settings-section">
+          <section id="settings-models" class="settings-section compact-card">
             <div class="section-heading">
               <h2>Models</h2>
               <span id="model-count" class="badge"></span>
@@ -186,8 +206,9 @@
             </details>
           </section>
 
-          <section class="settings-section">
-            <div class="section-heading"><h2>MCP Servers</h2></div>
+          <section id="settings-mcp" class="settings-section compact-card">
+            <div class="section-heading"><h2>MCP servers</h2></div>
+            <p class="settings-hint">Connect the services and tools your agents can use.</p>
             <div id="mcp-list" class="settings-list"></div>
             <details class="settings-add">
               <summary>Add MCP server</summary>
@@ -215,13 +236,14 @@
             </details>
           </section>
 
-          <section class="settings-section">
+          <section id="settings-skills" class="settings-section compact-card">
             <div class="section-heading"><h2>Skills</h2></div>
+            <p class="settings-hint">Give your agents reusable, purpose-built workflows.</p>
             <div id="skill-list" class="settings-list"></div>
           </section>
 
-          <section class="settings-section">
-            <div class="section-heading"><h2>Features</h2></div>
+          <section id="settings-features" class="settings-section">
+            <div class="section-heading"><div><div class="section-kicker">BUILT FOR YOUR WORKFLOW</div><h2>Agents &amp; tools</h2></div><span class="badge">Capabilities</span></div>
             <div class="settings-list">
               <label class="settings-row settings-toggle-row">
                 <div class="settings-row-main">
@@ -232,6 +254,10 @@
                   </div>
                 </div>
                 <input type="checkbox" id="set-bypass-subagents" />
+              </label>
+              <label class="settings-field">Default sub-agent model
+                <input id="set-subagent-model" type="text" placeholder="Inherit main model (or enter model id / fast)" />
+                <span class="settings-hint">User-controlled only. Role TOML model overrides this default; uses the chat provider.</span>
               </label>
               <label class="settings-row settings-toggle-row">
                 <div class="settings-row-main">
@@ -248,9 +274,9 @@
             </div>
           </section>
 
-          <section class="settings-section">
+          <section id="settings-jev" class="settings-section">
             <div class="section-heading">
-              <h2>Jev (System One)</h2>
+              <div><div class="section-kicker">SMARTER DECISIONS</div><h2>Jev · System One</h2></div>
               <span class="badge" id="jev-state"></span>
             </div>
             <p class="settings-hint">
@@ -343,9 +369,9 @@
             </div>
           </section>
 
-          <section class="settings-section">
+          <section id="settings-embedding" class="settings-section">
             <div class="section-heading">
-              <h2>Embedding</h2>
+              <div><div class="section-kicker">SEMANTIC SEARCH</div><h2>Embedding</h2></div>
               <span class="badge" id="embedding-state"></span>
             </div>
             <p class="settings-hint">
@@ -405,31 +431,47 @@
             </div>
           </section>
 
-          <section class="settings-section">
+          <section id="settings-memory" class="settings-section">
             <div class="section-heading">
-              <h2>Memory Organizer (local model)</h2>
+              <div><div class="section-kicker">CONTEXT THAT LASTS</div><h2>Memory organizer</h2></div>
               <span class="badge" id="memory-organizer-state"></span>
             </div>
             <p class="settings-hint">
-              Runs a local GGUF model in-process through llama.cpp to summarize finished
-              sessions and extract long-term memory. Everything stays on this machine:
-              there is no API mode and no fallback to the chat provider. While this is
-              enabled the model's own memory-writing tools are disabled.
+              Summarizes finished sessions and extracts long-term memory using a local GGUF
+              model or an independently configured API. API mode sends session content to
+              that endpoint; local mode never falls back to an API. While enabled, the
+              chat model's own memory-writing tools are disabled.
             </p>
             <div class="settings-list">
               <label class="settings-row settings-toggle-row">
                 <div class="settings-row-main">
-                  <strong>Enable local memory organizer</strong>
+                  <strong>Enable memory organizer</strong>
                   <div class="settings-row-detail">
-                    Needs a GGUF model and the llama.cpp shared library. Install the
-                    library with <code>yzma install</code>, or point
-                    <code>lib_dir</code> at an existing build.
+                    Local mode needs a GGUF model and llama.cpp. API mode needs its
+                    own base URL, model and API key; chat credentials are not inherited.
                   </div>
                 </div>
                 <input type="checkbox" id="set-memory-organizer-enabled" />
               </label>
             </div>
 
+            <div class="settings-grid">
+              <label>Backend
+                <select id="set-memory-organizer-runtime"><option value="yzma">Local GGUF</option><option value="api">API</option></select>
+              </label>
+              <label class="span-2">Model (API id or local GGUF filename)
+                <input id="set-memory-organizer-model-path" type="text" placeholder="Qwen3.5-0.8B-BF16.gguf" />
+              </label>
+            </div>
+            <div id="memory-organizer-api-fields" class="settings-grid hidden">
+              <label>API format
+                <select id="set-memory-organizer-api-format"><option value="openai">OpenAI Chat Completions</option><option value="anthropic">Anthropic Messages</option><option value="responses">OpenAI Responses</option></select>
+              </label>
+              <label class="span-2">Base URL<input id="set-memory-organizer-base-url" type="text" /></label>
+              <label>Base URL env var<input id="set-memory-organizer-base-url-env" type="text" /></label>
+              <label>API key<input id="set-memory-organizer-api-key" type="password" autocomplete="off" /></label>
+              <label>API key env var<input id="set-memory-organizer-api-key-env" type="text" /></label>
+            </div>
             <details><summary>Advanced generation settings</summary>
             <div class="settings-grid">
               <label>Context size (tokens)
@@ -438,7 +480,7 @@
               <label>Max output tokens
                 <input id="set-memory-organizer-max-output" type="number" min="64" max="2048" step="64" />
               </label>
-              <label>Temperature (0 = greedy)
+              <label>Temperature (local only, 0 = greedy)
                 <input id="set-memory-organizer-temperature" type="number" min="0" max="2" step="0.05" />
               </label>
               <label>Timeout (sec)
@@ -447,11 +489,7 @@
             </div>
 
             </details>
-            <div class="settings-grid">
-              <label>GGUF model filename
-                <input id="set-memory-organizer-model-path" type="text" placeholder="Qwen3.5-0.8B-BF16.gguf" />
-              </label>
-            </div>
+            <div id="memory-organizer-local-fields">
             <p class="settings-hint">Models: <code>~/.solcode/models</code> · GPU only · no CPU fallback.</p>
             <div id="memory-organizer-probe" class="settings-row-detail"></div>
 
@@ -465,7 +503,9 @@
             <div id="memory-organizer-install-bar" class="install-bar hidden">
               <div id="memory-organizer-install-fill" class="install-bar-fill"></div>
             </div>
+            </div>
           </section>
+        </div>
         </div>
       </main>
     </div>

@@ -1,0 +1,25 @@
+{
+  "subagents": {
+    "model": "YOUR_CHILD_MODEL"
+  },
+  "memory": {
+    "embedding": {
+      "enabled": true,
+      "type": "api",
+      "model": "YOUR_EMBEDDING_MODEL",
+      "base_url_env": "EMBEDDING_BASE_URL",
+      "api_key_env": "EMBEDDING_API_KEY",
+      "timeout_sec": 30
+    },
+    "organizer": {
+      "enabled": true,
+      "runtime": "api",
+      "api_format": "openai",
+      "model": "YOUR_SUMMARY_MODEL",
+      "base_url_env": "ORGANIZER_BASE_URL",
+      "api_key_env": "ORGANIZER_API_KEY",
+      "max_output_tokens": 1500,
+      "timeout_sec": 180
+    }
+  }
+}

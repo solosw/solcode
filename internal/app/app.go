@@ -3530,6 +3530,7 @@ func engineConfig(cfg config.Config, client *cpanthropic.Client, runtime *hook.R
 		Tools:                  registry,
 		Permissions:            permissions,
 		ModelName:              cfg.Model,
+		SubagentModelName:      strings.TrimSpace(cfg.Subagents.Model),
 		FastModelName:          cfg.FastModel,
 		MaxContextTokens:       cfg.MaxContextTokens,
 		MaxTokens:              cfg.MaxTokens,
@@ -3707,10 +3708,11 @@ func (a *App) RunWorkflow(ctx context.Context, name, args string) (string, error
 	}
 	taskTool := tool.NewTaskTool(a.Coordinator)
 	result, err := taskTool.Invoke(ctx, &tool.UseContext{
-		AgentID:   "workflow",
-		WorkDir:   a.Config.WorkDir,
-		FastModel: a.Config.FastModel,
-		Status:    a.onStatus,
+		AgentID:       "workflow",
+		WorkDir:       a.Config.WorkDir,
+		SubagentModel: a.Config.Subagents.Model,
+		FastModel:     a.Config.FastModel,
+		Status:        a.onStatus,
 	}, raw)
 	if err != nil {
 		return "", err

@@ -97,12 +97,13 @@ func TestTaskTool_InputSchemaOmitsMaxTurns(t *testing.T) {
 	}
 }
 
-func TestTaskTool_MultipleTasksUseFastModelAndDependencyGraph(t *testing.T) {
+func TestTaskTool_MultipleTasksUseConfiguredModelAndDependencyGraph(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	runner := &capturingAgentRunner{}
 	coordinator := agent.NewCoordinator(runner)
 	taskTool := tool.NewTaskTool(coordinator)
 
-	result, err := taskTool.Invoke(context.Background(), &tool.UseContext{AgentID: "main-agent", WorkDir: "/tmp/project", FastModel: "fast-model"}, json.RawMessage(`{
+	result, err := taskTool.Invoke(context.Background(), &tool.UseContext{AgentID: "main-agent", WorkDir: "/tmp/project", SubagentModel: "child-model", FastModel: "fast-model"}, json.RawMessage(`{
 		"tasks":[
 			{"id":"a","description":"Easy task","prompt":"Do easy work","difficulty":"easy"},
 			{"id":"b","description":"Hard task","prompt":"Do hard work","difficulty":"hard","depends_on":["a"]}
@@ -117,11 +118,11 @@ func TestTaskTool_MultipleTasksUseFastModelAndDependencyGraph(t *testing.T) {
 	if len(runner.cfgs) != 2 {
 		t.Fatalf("expected two captured configs, got %d", len(runner.cfgs))
 	}
-	if runner.cfgs[0].Description != "Easy task" || runner.cfgs[0].Model != "fast-model" {
-		t.Fatalf("expected easy task to use fast model, got %#v", runner.cfgs[0])
+	if runner.cfgs[0].Description != "Easy task" || runner.cfgs[0].Model != "child-model" {
+		t.Fatalf("expected easy task to use configured model, got %#v", runner.cfgs[0])
 	}
-	if runner.cfgs[1].Description != "Hard task" || runner.cfgs[1].Model != "" {
-		t.Fatalf("expected hard task to use main model fallback, got %#v", runner.cfgs[1])
+	if runner.cfgs[1].Description != "Hard task" || runner.cfgs[1].Model != "child-model" {
+		t.Fatalf("expected hard task to use the same configured model, got %#v", runner.cfgs[1])
 	}
 	if !strings.Contains(result.Text, "## a - Easy task") || !strings.Contains(result.Text, "## b - Hard task") {
 		t.Fatalf("expected grouped multi-task output, got %q", result.Text)
