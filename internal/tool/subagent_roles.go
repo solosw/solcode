@@ -59,7 +59,7 @@ func CheckBypassAgentTypes(input json.RawMessage) error {
 		return fmt.Errorf("invalid Task parameters: %w", err)
 	}
 	switch params.Action {
-	case "list", "status", "history", "wait", "cancel", "archive":
+	case "list", "status", "history", "wait", "cancel", "archive", "questions":
 		return nil
 	}
 	check := func(name string) error {

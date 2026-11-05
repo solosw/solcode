@@ -295,7 +295,7 @@ func New(cfg config.Config, opts ...Option) (*App, error) {
 	coordinator.SetEventHandler(func(event agent.Event) {
 		// Confirm accepted starts before the runner can emit child content.
 		// Synchronous completions are still delivered by the calling tool.
-		if options.onAgentProgress == nil || (!event.Detached && event.Kind != agent.EventStarted) {
+		if options.onAgentProgress == nil || (!event.Detached && event.Kind != agent.EventStarted && event.Kind != agent.EventNeedsInput) {
 			return
 		}
 		output := event.Result.Output
@@ -305,6 +305,7 @@ func New(cfg config.Config, opts ...Option) (*App, error) {
 		options.onAgentProgress(tool.AgentProgressEvent{Kind: string(event.Kind), RunID: event.Status.RunID, AgentID: string(event.Status.ID), ParentAgentID: string(event.Status.ParentID), ParentToolUseID: event.ParentToolUseID, TaskID: event.TaskID, Description: event.Description, Output: output, IsError: event.Result.Error != ""})
 	})
 	subagent := tool.NewSubagentTool(coordinator)
+	registry.Register(tool.NewAskParentTool(coordinator), tool.NewReplyChildTool(coordinator))
 	registry.Register(subagent, tool.NewTaskToolWithSubagent(subagent), tool.NewBatchToolWithPTC(tool.BatchLimits{
 		MaxOperations:       cfg.Batch.MaxOperations,
 		MaxParallel:         cfg.Batch.MaxParallel,
@@ -683,6 +684,7 @@ func (a *App) ReloadFeatures(cfg config.Config, mcpFactory mcp.ClientFactory) er
 	a.lspManager = lspManager
 	a.ChangeGraph = graphStore
 	subagent := tool.NewSubagentTool(a.Coordinator)
+	registry.Register(tool.NewAskParentTool(a.Coordinator), tool.NewReplyChildTool(a.Coordinator))
 	registry.Register(subagent, tool.NewTaskToolWithSubagent(subagent), tool.NewBatchToolWithPTC(tool.BatchLimits{
 		MaxOperations:       cfg.Batch.MaxOperations,
 		MaxParallel:         cfg.Batch.MaxParallel,
@@ -3531,6 +3533,7 @@ func engineConfig(cfg config.Config, client *cpanthropic.Client, runtime *hook.R
 		Permissions:            permissions,
 		ModelName:              cfg.Model,
 		SubagentModelName:      strings.TrimSpace(cfg.Subagents.Model),
+		ModelContextLimit:      cfg.ContextLimitForModel,
 		FastModelName:          cfg.FastModel,
 		MaxContextTokens:       cfg.MaxContextTokens,
 		MaxTokens:              cfg.MaxTokens,
@@ -3708,11 +3711,12 @@ func (a *App) RunWorkflow(ctx context.Context, name, args string) (string, error
 	}
 	taskTool := tool.NewTaskTool(a.Coordinator)
 	result, err := taskTool.Invoke(ctx, &tool.UseContext{
-		AgentID:       "workflow",
-		WorkDir:       a.Config.WorkDir,
-		SubagentModel: a.Config.Subagents.Model,
-		FastModel:     a.Config.FastModel,
-		Status:        a.onStatus,
+		AgentID:           "workflow",
+		WorkDir:           a.Config.WorkDir,
+		SubagentModel:     a.Config.Subagents.Model,
+		ModelContextLimit: a.Config.ContextLimitForModel,
+		FastModel:         a.Config.FastModel,
+		Status:            a.onStatus,
 	}, raw)
 	if err != nil {
 		return "", err

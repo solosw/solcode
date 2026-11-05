@@ -28,12 +28,11 @@ func (timeoutTestTool) ValidateInput(context.Context, json.RawMessage) error {
 	return nil
 }
 
-func TestTimeoutForTaskToolIsThirtyMinutes(t *testing.T) {
-	if got := timeoutForTool(timeoutTestTool{name: tool.TaskToolName}); got != 30*time.Minute {
-		t.Fatalf("Task timeout = %s, want 30m", got)
-	}
-	if got := timeoutForTool(timeoutTestTool{name: tool.SubagentToolName}); got != 30*time.Minute {
-		t.Fatalf("Subagent timeout = %s, want 30m", got)
+func TestTimeoutForCoordinationToolsHasNoExecutorDeadline(t *testing.T) {
+	for _, name := range []string{tool.TaskToolName, tool.SubagentToolName, tool.AskParentToolName} {
+		if got := timeoutForTool(timeoutTestTool{name: name}); got != 0 {
+			t.Errorf("%s timeout = %s, want no executor deadline", name, got)
+		}
 	}
 }
 

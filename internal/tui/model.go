@@ -1758,6 +1758,8 @@ func (m *Model) updateAgentActivity(msg AgentStatusMsg) {
 func (m *Model) applyAgentProgress(msg AgentProgressMsg) {
 	state := msg.Kind
 	switch strings.ToLower(strings.TrimSpace(msg.Kind)) {
+	case "needs_input":
+		state = "waiting_parent"
 	case "started":
 		state = "running"
 	case "tool_start":
@@ -1806,6 +1808,8 @@ func (m *Model) applyAgentProgress(msg AgentProgressMsg) {
 
 func agentProgressLine(msg AgentProgressMsg) string {
 	switch msg.Kind {
+	case "needs_input":
+		return "waiting for parent: " + truncate(oneLine(msg.Output), 160)
 	case "started":
 		return "started"
 	case "retry":
@@ -2630,6 +2634,9 @@ func (m Model) renderOneAgentPanel(activity AgentActivity, t Theme) string {
 	case "running", "started":
 		marker = lipgloss.NewStyle().Foreground(t.Claude).Render("●")
 		stateLabel = "running"
+	case "waiting_parent", "needs_input":
+		marker = t.Muted.Render("◌")
+		stateLabel = "waiting for parent"
 	case "completed":
 		marker = lipgloss.NewStyle().Foreground(t.Success).Render("✓")
 	case "failed":

@@ -47,15 +47,17 @@ type UseContext struct {
 	// AgentRole is the agent.AgentRole string for this invoke ("main", "task",
 	// "sub"). Empty means main. AskUser uses it to skip the interactive user
 	// dialog for nested agents and let Jev choose instead.
-	AgentRole        string
-	TodoPath         string
-	SubagentModel    string
-	FastModel        string
-	Status           func(string)
-	TaskRetryDelay   time.Duration
-	TextFileSystem   TextFileSystem
-	TerminalRunner   TerminalRunner
-	RecordFileChange func(ctx context.Context, change FileChange)
+	AgentRole     string
+	TodoPath      string
+	SubagentModel string
+	// ModelContextLimit resolves the configured capacity after role model selection.
+	ModelContextLimit func(model string) int64
+	FastModel         string
+	Status            func(string)
+	TaskRetryDelay    time.Duration
+	TextFileSystem    TextFileSystem
+	TerminalRunner    TerminalRunner
+	RecordFileChange  func(ctx context.Context, change FileChange)
 	// CaptureCheckpoint records turn-start file content for code-only rewind.
 	// content == nil means the file did not exist.
 	CaptureCheckpoint func(path string, content *string)
@@ -85,7 +87,7 @@ type UseContext struct {
 
 // AgentProgressEvent describes a Task/Subagent progress update for interactive UIs.
 type AgentProgressEvent struct {
-	Kind  string // started | completed | failed | cancelled | retry | tool_start | tool_done | text_delta | thinking_delta
+	Kind  string // started | needs_input | completed | failed | cancelled | retry | tool_start | tool_done | text_delta | thinking_delta
 	RunID string
 	// Pending marks a start request not yet accepted by the coordinator.
 	Pending         bool

@@ -101,6 +101,8 @@ func (s *Server) emitSubagentProgress(root *acpSession, event tool.AgentProgress
 		s.emitToolStart(child.session, event.ToolName, input, toolID)
 	case "tool_done":
 		s.emitToolDone(child.session, event.ToolName, event.Output, event.IsError, toolID)
+	case "needs_input":
+		s.emitUpdate(child.session.id, SessionUpdate{SessionUpdate: "status_update", Message: "Waiting for parent: " + event.Output})
 	case "retry":
 		s.emitUpdate(child.session.id, SessionUpdate{SessionUpdate: "status_update", Message: event.Output})
 	case "completed", "failed", "cancelled", "canceled":

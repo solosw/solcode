@@ -89,12 +89,13 @@ GOAL_STATUS: INCOMPLETE`, goalPath)
 		return false, "", fmt.Errorf("encode goal checker task: %w", err)
 	}
 	result, err := tool.NewTaskTool(a.Coordinator).Invoke(ctx, &tool.UseContext{
-		AgentID:        "goal",
-		WorkDir:        workDir,
-		SubagentModel:  a.Config.Subagents.Model,
-		FastModel:      a.Config.FastModel,
-		Status:         a.onStatus,
-		TaskRetryDelay: 0,
+		AgentID:           "goal",
+		WorkDir:           workDir,
+		SubagentModel:     a.Config.Subagents.Model,
+		ModelContextLimit: a.Config.ContextLimitForModel,
+		FastModel:         a.Config.FastModel,
+		Status:            a.onStatus,
+		TaskRetryDelay:    0,
 	}, payload)
 	if err != nil {
 		return false, "", fmt.Errorf("run goal checker task: %w", err)

@@ -137,6 +137,9 @@ func (c *Coordinator) start(ctx context.Context, cfg AgentConfig, resume bool) (
 			}
 		}
 	} else {
+		if cfg.ForkContext == "" {
+			cfg.ForkContext = "full"
+		}
 		fork, err = selectFork(cfg)
 		if err != nil {
 			return "", err
@@ -157,6 +160,13 @@ func (c *Coordinator) start(ctx context.Context, cfg AgentConfig, resume bool) (
 		}
 	}
 	snapshot, err := r.Active(fork)
+	if err != nil {
+		return "", err
+	}
+	// Known AskParent answers are safe tool results, not unknown external effects.
+	// Materialize only those results; all other interrupted calls still require
+	// explicit reconciliation below. Never invoke an old tool again.
+	snapshot, err = restoreParentAnswers(r, snapshot)
 	if err != nil {
 		return "", err
 	}
@@ -186,7 +196,7 @@ func (c *Coordinator) start(ctx context.Context, cfg AgentConfig, resume bool) (
 		cfg.RecoveryNote = "Previous execution was interrupted with unknown tool outcomes; do not replay old operations. Follow the caller's reconciliation instructions."
 	}
 	now := time.Now()
-	if n := len(r.Runs); n > 0 && (r.Runs[n-1].State == AgentRunning || r.Runs[n-1].State == AgentWaitingPermission) {
+	if n := len(r.Runs); n > 0 && (r.Runs[n-1].State == AgentRunning || r.Runs[n-1].State == AgentWaitingPermission || r.Runs[n-1].State == AgentWaitingParent) {
 		r.Runs[n-1].State = AgentInterrupted
 		r.Runs[n-1].EndedAt = &now
 		r.Runs[n-1].Result = AgentResult{AgentID: cfg.ID, RunID: r.Runs[n-1].ID, Error: "run interrupted before completion; inspect history", NoRetry: true}
@@ -225,6 +235,7 @@ func (c *Coordinator) start(ctx context.Context, cfg AgentConfig, resume bool) (
 	runCtx, cancel := context.WithCancel(runParent)
 	a := &runningAgent{status: r.Status, record: r, fork: fork, cancel: cancel, done: make(chan struct{})}
 	c.agents[cfg.ID] = a
+	c.signalLocked()
 	handler := c.eventHandler
 	startedStatus := a.status
 	started = true
@@ -284,6 +295,7 @@ func (c *Coordinator) execute(ctx context.Context, a *runningAgent, cfg AgentCon
 	}
 	result.AgentID = cfg.ID
 	result.RunID = cfg.RunID
+	a.checkpointMu.Lock()
 	c.mu.Lock()
 	now := time.Now()
 	if ctx.Err() != nil {
@@ -301,6 +313,12 @@ func (c *Coordinator) execute(ctx context.Context, a *runningAgent, cfg AgentCon
 			a.status.State = AgentFailed
 		} else {
 			a.status.State = AgentIdle
+		}
+	}
+	for i := range a.record.ParentRequests {
+		request := &a.record.ParentRequests[i]
+		if request.RunID == cfg.RunID && request.AnsweredAt == nil && request.CancelledAt == nil {
+			request.CancelledAt = &now
 		}
 	}
 	a.record.Status = a.status
@@ -337,7 +355,9 @@ func (c *Coordinator) execute(ctx context.Context, a *runningAgent, cfg AgentCon
 		c.notifications = append(c.notifications, event)
 	}
 	close(a.done)
+	c.signalLocked()
 	c.mu.Unlock()
+	a.checkpointMu.Unlock()
 	c.emit(handler, event)
 }
 
@@ -429,12 +449,12 @@ func (c *Coordinator) Archive(ctx context.Context, id AgentID, scope Scope) erro
 
 func selectFork(cfg AgentConfig) (Snapshot, error) {
 	switch cfg.ForkContext {
-	case "", "none":
+	case "none":
 		return Snapshot{}, nil
 	case "working_set":
 		return Snapshot{WorkingSet: cfg.ParentContext.WorkingSet}, nil
-	case "full":
-		return cfg.ParentContext, nil
+	case "", "full":
+		return windowFork(cfg.ParentContext, cfg.MaxContextTokens), nil
 	case "last_n":
 		n := cfg.ForkLastN
 		if n <= 0 {
@@ -460,7 +480,7 @@ func selectFork(cfg AgentConfig) (Snapshot, error) {
 				}
 			}
 		}
-		return Snapshot{Messages: messages[start:], WorkingSet: cfg.ParentContext.WorkingSet}, nil
+		return windowFork(Snapshot{Messages: messages[start:], WorkingSet: cfg.ParentContext.WorkingSet}, cfg.MaxContextTokens), nil
 	default:
 		return Snapshot{}, fmt.Errorf("invalid fork_context: %s", cfg.ForkContext)
 	}

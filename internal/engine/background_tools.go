@@ -27,6 +27,10 @@ type backgroundTools struct {
 	yieldAfter time.Duration
 	pending    []*backgroundTool
 	wake       chan struct{}
+	// Cooperative Task yielding remains enabled even when timed backgrounding
+	// is off, otherwise a child asking its blocked parent would deadlock.
+	cooperativeOnly bool
+	parentEvents    func() (<-chan struct{}, bool)
 }
 
 type backgroundTool struct {
@@ -62,7 +66,8 @@ func (b *backgroundTools) execute(ctx context.Context, name, toolUseID string, i
 			return invoke(ctx, nil)
 		}
 	}
-	if b == nil || len(b.pending) >= maxBackgroundTools || (name != tool.BashToolName && name != tool.TaskToolName) {
+	cooperative := b != nil && b.parentEvents != nil && name == tool.TaskToolName
+	if b == nil || (b.cooperativeOnly && !cooperative) || (len(b.pending) >= maxBackgroundTools && !cooperative) || (name != tool.BashToolName && name != tool.TaskToolName) {
 		return invoke(ctx, nil)
 	}
 	var params struct {
@@ -97,16 +102,33 @@ func (b *backgroundTools) execute(ctx context.Context, name, toolUseID string, i
 		return ToolResult{Content: tool.ErrorResult("tool canceled"), IsError: true}
 	case <-started:
 	}
-	if !params.RunInBackground {
-		timer := time.NewTimer(b.yieldAfter)
-		defer timer.Stop()
-		select {
-		case <-job.done:
-			return job.result
-		case <-ctx.Done():
-			cancel()
-			return ToolResult{Content: tool.ErrorResult("tool canceled"), IsError: true}
-		case <-timer.C:
+	if !params.RunInBackground || b.cooperativeOnly {
+		var timeout <-chan time.Time
+		if !b.cooperativeOnly {
+			timer := time.NewTimer(b.yieldAfter)
+			defer timer.Stop()
+			timeout = timer.C
+		}
+		waiting := true
+		for waiting {
+			var wake <-chan struct{}
+			if cooperative {
+				var needsParent bool
+				wake, needsParent = b.parentEvents()
+				if needsParent {
+					break
+				}
+			}
+			select {
+			case <-job.done:
+				return job.result
+			case <-ctx.Done():
+				cancel()
+				return ToolResult{Content: tool.ErrorResult("tool canceled"), IsError: true}
+			case <-timeout:
+				waiting = false
+			case <-wake:
+			}
 		}
 		// Prefer a real result when completion raced with the yield timer.
 		select {

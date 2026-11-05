@@ -209,9 +209,13 @@ func (t *subagentTool) startAttempt(ctx context.Context, uctx *UseContext, param
 	}
 	parentSession := ""
 	parentContext := agent.Snapshot{}
+	var contextLimit int64
 	if uctx != nil {
 		parentSession = uctx.SessionID
 		parentContext = uctx.ParentContext
+		if uctx.ModelContextLimit != nil {
+			contextLimit = uctx.ModelContextLimit(subagentModel(params))
+		}
 	}
 	_, err := start(ctx, agent.AgentConfig{
 		Detached:        params.detached,
@@ -228,6 +232,7 @@ func (t *subagentTool) startAttempt(ctx context.Context, uctx *UseContext, param
 		AllowedTools:     params.AllowedTools,
 		UnlimitedTurns:   true,
 		Model:            subagentModel(params),
+		MaxContextTokens: contextLimit,
 		ParentToolUseID:  parentTool,
 		TaskID:           params.TaskID,
 	})

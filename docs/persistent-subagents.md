@@ -4,9 +4,9 @@ Task is disabled in Bypass by default. Enable **Settings → Features → Bypass
 sub-agents** or set `"permissions": {"bypass_subagents": true}` to allow the three
 built-in roles: explorer, worker and reviewer. Ultra is unaffected by this toggle
 and additionally permits configured custom roles. Other modes do not
-grant Task access, even through tool allowlists. No new public tool is introduced;
-existing Task graphs, dependencies, fast-model selection, retries and automatic
-background completion remain supported.
+grant Task access, even through tool allowlists. Task graphs, dependencies,
+user-configured model selection, retries and automatic background completion remain
+supported. `AskParent` and `ReplyChild` provide run-specific parent/child questions.
 
 ## Create and continue
 
@@ -14,7 +14,8 @@ Children belong to the project working directory, not one parent session. Any
 main session using the same working directory and session storage can list,
 inspect, resume or archive them. Different project working directories remain
 isolated, even when session.dir is shared. Parent agent/session IDs are retained
-as run provenance rather than access restrictions.
+as run provenance rather than project-history access restrictions. Answering a
+child's question is stricter: only its owning parent agent/session can reply.
 
 Create a child with action=spawn:
 
@@ -25,8 +26,11 @@ Create a child with action=spawn:
 spawn returns after the child's start is durably recorded, without waiting for
 its model or tool work. The submission receipt includes an opaque, stable
 agent_id and an independent run_id. It is not proof of completion or success.
-The main agent can continue independent work immediately. When it needs the
-result, explicitly wait:
+Other tools already issued in the same parent model response can still execute.
+At the next model boundary, the host parks the parent until a child question,
+completion/failure, or queued user prompt arrives. Parking issues no model requests;
+all parent decisions use the original serial main loop. To explicitly await a
+particular result, use:
 
 ~~~json
 {"action":"wait","agent_id":"agent-id-from-the-result","run_id":"run-id-from-the-result","timeout_ms":30000}
@@ -35,8 +39,11 @@ result, explicitly wait:
 wait defaults to 30 seconds (maximum 300 seconds). A timeout returns
 timed_out=true and does not cancel the child. Cancelling a wait request does
 not cancel the child either. Omit run_id to wait for the current run; pin the
-receipt's run_id to avoid accidentally waiting for a later resume. cancel also
-accepts run_id so a stale receipt cannot cancel a newer run.
+receipt's run_id to avoid accidentally waiting for a later resume. A pending
+question from this child or a sibling can return `waiting_parent` early so the
+parent can reply instead of deadlocking in wait; this does not cancel either run.
+A completed target returns its actual result, even if a sibling needs input.
+cancel also accepts run_id so a stale receipt cannot cancel a newer run.
 
 After the previous run finishes, pass agent_id in a follow-up Task to append a
 new prompt to that child's conversation. resume also returns after durable start:
@@ -57,16 +64,24 @@ returning or the main agent normally finishing a turn. Explicit cancel, app
 shutdown, or process termination ends their execution; they are not a daemon.
 App shutdown cancels and joins owned runs before closing shared tools.
 
-Detached completions produce model-context notifications at active model
-boundaries, or on the parent session's next turn. Notifications do not automatically start a
-new main-agent run; pending children do not prevent the parent from finishing. They are isolated by
-project and parent session and consumed once in process. After a restart, use
-wait/status/history for durable results; notification delivery is not persisted.
-The UI also receives completion/failure/cancellation progress events.
+Questions and detached completions produce model-context notifications at safe
+model boundaries and wake a parked parent run. They do not create a second parent
+model loop or independently start a new run after the parent has ended (for
+example, at its turn limit). Notifications are isolated by project and parent
+session and consumed once in process. Pending questions are durable when session
+persistence is enabled; notification-delivery bookkeeping is not persisted, so
+questions can be delivered again after restart. Use questions/status/history to
+inspect saved state. The UI also shows waiting-for-parent and completion/failure/
+cancellation progress.
 
 The legacy run/task-graph path retains host background yielding and whole-graph
-notifications; run_in_background only affects that path. Explicit wait always
-honors its own bounded wait instead of being wrapped in a second background job.
+notifications; run_in_background only affects that path. A parent question also
+cooperatively yields a Task graph when timed backgrounding is disabled, so its
+blocked parent can answer. Explicit wait uses its bounded wait (or returns early
+for a question), not a second background job. Task/Subagent orchestration and
+AskParent have no outer executor deadline: waiting for a decision does not consume
+a 30-minute task timeout. Cancellation, explicit wait bounds, model turn limits
+and each actual child tool's own execution deadline still apply.
 
 Do not substitute task_id for agent_id. Task item IDs still describe dependency
 edges in one graph. An explicit async submission has one fixed run_id; failures
@@ -134,7 +149,10 @@ another ceiling; an empty intersection denies all tools. Built-in Explorer and
 Reviewer exclude shell commands and mutations. User overrides may change role
 behavior and its requested tools, but cannot grant more than the parent or a
 persisted instance ceiling. Global permission checks and revocations still apply
-on every tool call, including BatchTool children. Nested agents remain forbidden.
+on every tool call, including BatchTool children. AskParent is a coordination
+exception to child allowed_tools ceilings (including read-only roles), not to
+global permissions, hooks or guardrails. A parent answer never grants new tool
+permissions. Nested agents remain forbidden.
 
 ## Context inheritance
 
@@ -143,10 +161,31 @@ child's own active context; it does not fork the parent's context again.
 
 | fork_context | Inherited context |
 | --- | --- |
-| none (default) | No parent messages or working set |
-| last_n | Last fork_last_n user turns (default 10), including their tool exchanges |
-| full | Completed parent conversation |
+| full (default) | Completed parent conversation and working set, with automatic capacity windowing |
+| none | No parent messages or working set |
+| last_n | Last fork_last_n user turns (default 10), including their tool exchanges; also capacity-windowed |
 | working_set | Bounded file/hash/fact/open-question metadata, not tool payloads |
+
+For full/default inheritance, let `C` be the configured child context capacity.
+If the estimated inherited messages plus working-set metadata use at most `0.8 C`,
+inherit them all. Above that threshold, select a recent suffix using at most
+`0.4 C`, leaving space for the child system prompt, tool schemas, task prompt and
+execution. This is local BPE/image token estimation, not a provider billing count.
+The remaining request material still goes through the normal context budget guard.
+
+The capacity is resolved after selecting the user-configured role/default/fast
+model, using that model's `providers[].models[].max_context_tokens` on the active
+provider. An inherited or unknown model falls back to the active runtime context
+limit; configure the child model capacity explicitly when it differs. The same
+child capacity controls its subsequent compaction, without changing the parent
+or sibling engines. No additional summary-model call is made.
+
+Window boundaries keep tool-use/result exchanges together. A single oversized
+plain-text message can contribute an annotated tail on Unicode boundaries.
+Oversized tool/image exchanges are omitted whole rather than split or forced over
+budget; working-set JSON is also retained or dropped whole. Whole-message
+boundaries can leave the inherited window below 40%. The parent history is not
+modified, and `none`/`working_set` remain explicit alternatives.
 
 The current unfinished parent tool call and transient mode/skill overlays are not
 forked. Immutable, content-addressed fork snapshots are shared by children. A child
@@ -163,11 +202,56 @@ observations resolve through the original durable parent-session relationship,
 even after a different project session resumes the child. The normal
 shared tools/system prefix remains unchanged between new and resumed runs.
 
+### Parallel context isolation and parent questions
+
+Children created by one parallel Task invocation start from the same parent
+snapshot, windowed independently for each child capacity. Each child then owns its
+conversation and checkpoints; one child's conversation is not automatically
+appended to another child or to the parent. Resume restores that child's own
+history, without re-forking a newer parent snapshot.
+
+A child that needs a decision calls AskParent; it waits without model polling or
+holding the coordinator lock, while siblings continue:
+
+~~~json
+{"question":"Which compatibility target should I use?","context":"Option A preserves the old API; option B requires a migration. I recommend A."}
+~~~
+
+The parent receives a `needs_input` notification containing the exact agent_id,
+run_id and request_id. It can also retrieve pending requests with
+`Task {"action":"questions"}`; status includes saved parent_requests. The parent
+answers with ReplyChild, optionally several requests in one model response:
+
+~~~json
+{"agent_id":"agent-id-from-the-question","run_id":"run-id-from-the-question","request_id":"request-id-from-the-question","answer":"Use option A and preserve the existing API."}
+~~~
+
+Each request is bound to its agent/run/request identity and the checkpointed
+AskParent tool_use_id. The answer is saved before broadcasting a wakeup. Only the
+matching request consumes it as a tool result and continues the same run;
+**do not Task resume an active child**. Repeating the identical answer is
+idempotent; a conflicting answer, stale run, foreign parent identity, cancelled
+request or archived child is rejected. Ownership requires the same working
+directory, parent session and parent agent, even though project history is
+readable by other sessions. Parent decisions remain serial; no event callback
+starts a competing model request.
+
+Cancellation wakes a waiting child and cancels unanswered requests when its run
+ends. Answers and questions are stored in the child record when persistence is
+enabled. After process death, a saved question is not a live waiting worker:
+answer it as the original parent, then explicitly resume the interrupted child.
+Recovery fills only the known AskParent result from the saved answer. Unanswered
+questions block resume, and unrelated tool calls with unknown outcomes still
+require inspection and explicit reconciliation; old calls are never replayed.
+There is no cross-process live mailbox: another process cannot answer a request
+while the run lock is owned elsewhere, and saved answers do not auto-start runs.
+
 ## Lifecycle operations
 
 ~~~json
 {"action":"list"}
 {"action":"status","agent_id":"agent-id-from-the-result"}
+{"action":"questions"}
 {"action":"history","agent_id":"agent-id-from-the-result","offset":0,"limit":20}
 {"action":"history","agent_id":"agent-id-from-the-result","history_kind":"runs","offset":0,"limit":20}
 {"action":"history","agent_id":"agent-id-from-the-result","history_kind":"events","offset":0,"limit":20}
@@ -253,7 +337,11 @@ foreign-project isolation, explicit spawn/resume validation, model-free manageme
 legacy records and inherited observation provenance, process termination after a
 mutation, concurrent Resume, cancellation before runner exit, permission revocation,
 checkpoint failures, context compaction with preserved audit, fork deduplication,
-retry correlation, and Task graph compatibility/background delivery. Usage-counter
+retry correlation, and Task graph compatibility/background delivery. Parent-question
+tests additionally cover parallel multi-round answers, event-driven parent parking,
+early and duplicate replies, strict parent ownership, cancellation, question/answer
+save failures, restart recovery without replaying uncertain sibling tools, global
+permission denial and TUI/ACP waiting-state routing. Usage-counter
 tests use deterministic mocked API responses. They are not evidence of a real
 provider's cache hit rate or a measured percentage of billed-token savings.
 For a live comparison, replay the same multi-stage workload with and without

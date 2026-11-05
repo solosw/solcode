@@ -38,7 +38,6 @@ type ToolResult struct {
 
 const (
 	defaultToolTimeout = 2 * time.Minute
-	taskToolTimeout    = 30 * time.Minute
 	// bashToolTimeout is slightly above Bash MaxTimeout (24h) so the executor
 	// does not cancel a long auto-wait before the job's own lifetime ends.
 	bashToolTimeout = 24*time.Hour + 30*time.Second
@@ -121,8 +120,11 @@ func timeoutForTool(selected tool.Tool) time.Duration {
 		return defaultToolTimeout
 	}
 	switch selected.Name() {
-	case tool.TaskToolName, tool.SubagentToolName:
-		return taskToolTimeout
+	case tool.TaskToolName, tool.SubagentToolName, tool.AskParentToolName:
+		// Coordination may wait indefinitely for a parent decision. Do not
+		// charge that wait against an outer executor deadline; run cancellation,
+		// explicit Task wait bounds and individual child tool deadlines still apply.
+		return 0
 	case tool.AskUserToolName:
 		// AskUser waits on a human dialog; keep the executor ceiling above the
 		// tool's own AskUserTimeout so the tool can fall back to Jev first.
@@ -184,7 +186,7 @@ func (x *ToolExecutor) Execute(ctx context.Context, call ToolCall, env ToolEnv) 
 	// Runtime allowlist (sub/task AllowedTools). Checked after the global
 	// permission service so plan-mode / bypass still apply, but before
 	// validate/invoke. Schema on the wire is intentionally unaffected.
-	if len(x.allowedTools) > 0 && !x.allowedTools[call.Name] {
+	if len(x.allowedTools) > 0 && !x.allowedTools[call.Name] && selected.Name() != tool.AskParentToolName {
 		content := tool.ErrorResult(fmt.Sprintf(
 			"tool %q is not in this agent's allowed_tools (runtime permission; schema still lists the shared core set)",
 			call.Name,
@@ -213,7 +215,11 @@ func (x *ToolExecutor) Execute(ctx context.Context, call ToolCall, env ToolEnv) 
 	captureCheckpointBeforeInvoke(ctx, selected, input, env.UseContext)
 	beforeFP := captureFingerprintBeforeInvoke(selected, env.UseContext)
 
-	toolCtx, cancel := context.WithTimeout(ctx, timeoutForTool(selected))
+	toolCtx, cancel := context.WithCancel(ctx)
+	if timeout := timeoutForTool(selected); timeout > 0 {
+		cancel()
+		toolCtx, cancel = context.WithTimeout(ctx, timeout)
+	}
 	defer cancel()
 	if env.OnInvokeStart != nil {
 		env.OnInvokeStart()

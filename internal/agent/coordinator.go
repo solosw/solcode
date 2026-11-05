@@ -23,6 +23,7 @@ const (
 	AgentCreated           AgentState = "created"
 	AgentRunning           AgentState = "running"
 	AgentWaitingPermission AgentState = "waiting_permission"
+	AgentWaitingParent     AgentState = "waiting_parent"
 	AgentIdle              AgentState = "idle"
 	// AgentCompleted is the source-compatible name for a completed, reusable agent.
 	AgentCompleted   AgentState = AgentIdle
@@ -56,17 +57,21 @@ type AgentConfig struct {
 	MaxTurns                int
 	UnlimitedTurns          bool
 	Model                   string
-	ParentToolUseID         string
-	TaskID                  string
+	// MaxContextTokens is the host-resolved child capacity, never a tool argument.
+	MaxContextTokens int64
+	ParentToolUseID  string
+	TaskID           string
 }
 
 type EventKind string
 
 const (
-	EventStarted   EventKind = "started"
-	EventCompleted EventKind = "completed"
-	EventFailed    EventKind = "failed"
-	EventCancelled EventKind = "cancelled"
+	EventStarted    EventKind = "started"
+	EventCompleted  EventKind = "completed"
+	EventFailed     EventKind = "failed"
+	EventCancelled  EventKind = "cancelled"
+	EventNeedsInput EventKind = "needs_input"
+	EventAnswered   EventKind = "answered"
 )
 
 type Event struct {
@@ -106,13 +111,15 @@ type Runner interface {
 }
 
 type Coordinator struct {
-	mu            sync.RWMutex
-	runner        Runner
-	agents        map[AgentID]*runningAgent
-	eventHandler  func(Event)
-	store         Store
-	closed        bool
-	notifications []Event
+	mu                 sync.RWMutex
+	runner             Runner
+	agents             map[AgentID]*runningAgent
+	eventHandler       func(Event)
+	store              Store
+	closed             bool
+	notifications      []Event
+	changed            chan struct{}
+	deliveredQuestions map[string]bool
 }
 
 type runningAgent struct {
@@ -126,7 +133,7 @@ type runningAgent struct {
 }
 
 func NewCoordinator(runner Runner, stores ...Store) *Coordinator {
-	c := &Coordinator{runner: runner, agents: make(map[AgentID]*runningAgent)}
+	c := &Coordinator{runner: runner, agents: make(map[AgentID]*runningAgent), changed: make(chan struct{}), deliveredQuestions: make(map[string]bool)}
 	if len(stores) > 0 {
 		c.store = stores[0]
 	}
@@ -196,6 +203,7 @@ func (c *Coordinator) cancelRun(id AgentID, runID string) error {
 	now := time.Now()
 	running.status.EndedAt = &now
 	cancel := running.cancel
+	c.signalLocked()
 	c.mu.Unlock()
 
 	cancel()

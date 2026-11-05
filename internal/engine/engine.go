@@ -59,6 +59,7 @@ type Config struct {
 	Permissions        *permission.Service
 	ModelName          string
 	SubagentModelName  string
+	ModelContextLimit  func(model string) int64
 	FastModelName      string
 	MaxContextTokens   int64
 	MaxTokens          int64
@@ -418,6 +419,21 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 	isMain := cfg.Role == "" || cfg.Role == agent.AgentRoleMain
 	isTask := cfg.Role == agent.AgentRoleTask
 	background := newBackgroundTools(isMain && e.config.BackgroundTasksEnabled, e.config.BackgroundYieldAfter)
+	var agentEvents tool.AgentEventSource
+	parentScope := &tool.UseContext{SessionID: nonEmpty(runReq.SessionID, string(cfg.ID)), AgentID: string(cfg.ID), WorkDir: cfg.WorkDir}
+	if isMain && e.config.Tools != nil {
+		agentEvents, _ = e.config.Tools.Find(tool.TaskToolName).(tool.AgentEventSource)
+	}
+	if agentEvents != nil {
+		if background == nil {
+			background = newBackgroundTools(true, 0)
+			background.cooperativeOnly = true
+		}
+		background.parentEvents = func() (<-chan struct{}, bool) {
+			wake, _, questions := agentEvents.ParentEvents(parentScope)
+			return wake, questions
+		}
+	}
 	defer func() {
 		for _, notification := range background.abort(e.config.OnToolDone) {
 			result.Messages = append(result.Messages, sdk.NewUserMessage(sdk.NewTextBlock(notification)))
@@ -462,6 +478,37 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 		}
 		return count
 	}
+	// Subscribe before draining: completion/questions cannot be lost between
+	// an empty mailbox check and sleeping. Model calls remain on this loop.
+	waitForAgentEvent := func() (int, error) {
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			var wake <-chan struct{}
+			live, questions := false, false
+			if agentEvents != nil {
+				wake, live, questions = agentEvents.ParentEvents(parentScope)
+			}
+			injected := drainBackground() + drainQueuedPrompts()
+			if injected > 0 || questions || (!live && !background.hasPending()) {
+				return injected, nil
+			}
+			var backgroundWake <-chan struct{}
+			if background != nil {
+				backgroundWake = background.wake
+			}
+			select {
+			case <-ctx.Done():
+				return 0, ctx.Err()
+			case <-wake:
+			case <-backgroundWake:
+			case <-ticker.C:
+				if injected := drainQueuedPrompts(); injected > 0 {
+					return injected, nil
+				}
+			}
+		}
+	}
 	emitProgress := func(kind, toolUseID, toolName, toolInput, output string, isError bool) {
 		if !isTask || e.config.OnAgentProgress == nil {
 			return
@@ -485,8 +532,18 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 		if err := ctx.Err(); err != nil {
 			return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: err.Error()}, Messages: messages}
 		}
-		drainBackground()
-		drainQueuedPrompts()
+		injected := drainBackground() + drainQueuedPrompts()
+		if isMain && turn > 0 && injected == 0 && agentEvents != nil {
+			_, live, questions := agentEvents.ParentEvents(parentScope)
+			if live && !questions {
+				if e.config.OnStatus != nil {
+					e.config.OnStatus("Waiting for child question or completion")
+				}
+				if _, err := waitForAgentEvent(); err != nil {
+					return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: err.Error()}, Messages: messages}
+				}
+			}
+		}
 		if isMain && cfg.Model == "" {
 			messages = e.refreshMainModel(messages)
 		}
@@ -755,28 +812,27 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 				}
 				continue
 			}
-			if background.hasPending() {
-				if turn+1 >= turnLimit {
-					return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: fmt.Sprintf("max turns reached: %d; unfinished background calls canceled", turnLimit)}, Messages: messages}
+			live, questions := false, false
+			if agentEvents != nil {
+				_, live, questions = agentEvents.ParentEvents(parentScope)
+			}
+			if live || background.hasPending() {
+				if turnLimit > 0 && turn+1 >= turnLimit {
+					return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: fmt.Sprintf("max turns reached: %d; child work remains pending", turnLimit)}, Messages: messages}
 				}
-				if e.config.OnStatus != nil {
-					e.config.OnStatus("Waiting for background Bash/Task results")
-				}
-				// No model polling: wait for completion. A local queue tick also
-				// lets newly submitted user prompts wake an otherwise idle run.
-				ticker := time.NewTicker(100 * time.Millisecond)
-				for injected == 0 {
-					select {
-					case <-ctx.Done():
-						ticker.Stop()
-						return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: ctx.Err().Error()}, Messages: messages}
-					case <-background.wake:
-						injected += drainBackground()
-					case <-ticker.C:
-						injected += drainQueuedPrompts()
+				if questions {
+					// A final-text response cannot abandon a child awaiting input.
+					for _, notification := range agentEvents.PendingParentQuestions(ctx, parentScope) {
+						messages = append(messages, sdk.NewUserMessage(sdk.NewTextBlock(notification)))
+					}
+				} else {
+					if e.config.OnStatus != nil {
+						e.config.OnStatus("Waiting for child question or background completion")
+					}
+					if _, err := waitForAgentEvent(); err != nil {
+						return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: err.Error()}, Messages: messages}
 					}
 				}
-				ticker.Stop()
 				continue
 			}
 			e.runStopHook(ctx, cfg)
@@ -800,21 +856,22 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 			}
 			toolEnv := ToolEnv{
 				UseContext: &tool.UseContext{
-					SessionID:      nonEmpty(runReq.SessionID, string(cfg.ID)),
-					ParentContext:  e.forkSource(use.Name, messages, workingSet),
-					MessageID:      use.ID,
-					RunID:          cfg.RunID,
-					WorkDir:        cfg.WorkDir,
-					SkillRoots:     callSkillRoots,
-					AgentID:        string(cfg.ID),
-					AgentRole:      string(cfg.Role),
-					AllowedTools:   cfg.AllowedTools,
-					PermissionMode: string(currentMode),
-					TodoPath:       e.config.TodoPath,
-					SubagentModel:  e.config.SubagentModelName,
-					FastModel:      e.config.FastModelName,
-					TextFileSystem: e.config.TextFileSystem,
-					TerminalRunner: e.config.TerminalRunner,
+					SessionID:         nonEmpty(runReq.SessionID, string(cfg.ID)),
+					ParentContext:     e.forkSource(use.Name, messages, workingSet),
+					MessageID:         use.ID,
+					RunID:             cfg.RunID,
+					WorkDir:           cfg.WorkDir,
+					SkillRoots:        callSkillRoots,
+					AgentID:           string(cfg.ID),
+					AgentRole:         string(cfg.Role),
+					AllowedTools:      cfg.AllowedTools,
+					PermissionMode:    string(currentMode),
+					TodoPath:          e.config.TodoPath,
+					SubagentModel:     e.config.SubagentModelName,
+					ModelContextLimit: e.modelContextResolver(),
+					FastModel:         e.config.FastModelName,
+					TextFileSystem:    e.config.TextFileSystem,
+					TerminalRunner:    e.config.TerminalRunner,
 					Status: func(status string) {
 						if e.config.OnStatus != nil {
 							e.config.OnStatus(status)

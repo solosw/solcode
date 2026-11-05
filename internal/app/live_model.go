@@ -14,7 +14,8 @@ func (a *App) UpdateModelForNextCall(cfg config.Config) {
 		Client:    cpanthropic.NewClient(cpanthropic.Options{APIKey: cfg.APIKey, BaseURL: cfg.BaseURL, Format: cfg.APIFormat}),
 		ModelKey:  cfg.Provider + "\x00" + cfg.APIFormat + "\x00" + cfg.BaseURL + "\x00" + cfg.Model,
 		ModelName: cfg.Model, FastModelName: cfg.FastModel, SubagentModelName: cfg.Subagents.Model,
-		MaxTokens: cfg.MaxTokens, MaxContextTokens: cfg.MaxContextTokens,
+		ModelContextLimit: cfg.ContextLimitForModel,
+		MaxTokens:         cfg.MaxTokens, MaxContextTokens: cfg.MaxContextTokens,
 		Thinking: cfg.Thinking, ThinkingText: cfg.ThinkingText, Effort: cfg.Effort, Stream: cfg.Stream,
 	})
 }

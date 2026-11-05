@@ -13,6 +13,12 @@ import (
 // the normal loop can execute only tool calls from a new model response.
 func (e *Engine) RunSession(ctx context.Context, req agent.SessionRequest) agent.AgentResult {
 	e = e.forRun()
+	if req.Config.MaxContextTokens <= 0 {
+		req.Config.MaxContextTokens = e.modelContextLimit(req.Config.Model)
+	}
+	if req.Config.MaxContextTokens > 0 {
+		e.config.MaxContextTokens = req.Config.MaxContextTokens
+	}
 	if req.Config.Model == "" {
 		req.Config.Model = e.config.ModelName
 	}

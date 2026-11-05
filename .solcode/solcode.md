@@ -904,11 +904,11 @@ Organizer: 用户要求使用开源方案进行智能模型路由，并询问是
 
 Organizer: 用户要求使用开源方案进行智能模型路由，并询问是否可将每次路由结果存储到数据库以优化后续任务。 (tags: optional)
 
-## 2026-10-29 15:32:08 · session mid-run · turn -1 · importance 1.00
+## 2026-11-05 23:04:17 · session mid-run · turn -1 · importance 0.90
 - keywords: organizer, archival, retrieval, terms, database, plan_mode, codegraph, external-index, external_root, solosw/solcode, GitHub Actions, macOS
-- memory_ids: mem_21337d602406a50a, mem_38658cf5815a026f, mem_7c8798afa97850c5, mem_af37d2a653873c59, mem_efc0dbb066a67315, mem_f77b0aab13fe6028
+- memory_ids: mem_21337d602406a50a, mem_38658cf5815a026f, mem_7c8798afa97850c5, mem_90b642519d37c0a6, mem_af37d2a653873c59, mem_efc0dbb066a67315, mem_f77b0aab13fe6028
 
-Organizer: ## Active Request and Intent\n用户最新要求：**“构建有问题”**。需要定位并修复 `solosw/solcode` 最新 GitHub Actions 发布失败，保留真实 smoke 和安全校验，明确未验证平台，不能将 macOS 本机通过视为六平台通过。\n\n调查对象：**Publish master #108，run `40061745028`，attempt 1，completed/failure**，HEAD `76c2549e638
+Organizer: 用户要求优化子代理模型配置，移除 AI 选模路径，增加用户默认配置和独立 API 配置支持。已实现：移除 FastModel 参数，保留 Subagents.Model 和 role.Model 配置；为 Organizer 增加 OrganizerRuntimeAPI 和 OrganizerRuntimeYzma 两种运行时配置；将 FastModel 和 SubagentModel 映射为 SubagentModelName；将 FastModel 和 Subagent
 
 ## 2026-10-15 21:28:18 · session acp-1792052774500238000-1 · turn 7 · importance 0.50
 - keywords: organizer, archival, retrieval, terms, GGUF, turn, todolist, embedding
@@ -1339,3 +1339,57 @@ Turn memory: 已补齐 **Agent 侧 ACP v1 标准终端支持**，没有引入 Co
 - 全仓编译检查、相关包 `go vet`、差异检查通过。
 - 扩大回归仍受缺少 `python`、既有目录权限问题及此前确认的事件时序测试影响，未改动这些无关问题。
 **范围说明：SolCode 桌面客户端尚未实现终端管理器，仍走本地执行。** 本次已让 Agent 能与实现了标准 `terminal/*` 的客户端对接。
+
+## 2026-11-03 12:22:30 · session acp-1792684248330142000-1 · turn 26 · importance 0.40
+- keywords: turn, todolist
+- files: .github/workflows/publish-master.yml, .github/workflows/release.yml, README.md, docs/acp-subagents.md, docs/acp-terminals.md, docs/codegraph-runtime.md, internal/acp/protocol.go, internal/acp/server.go, internal/acp/server_test.go, internal/acp/subagents.go, internal/acp/terminal.go, internal/acp/terminal_test.go, internal/app/app.go, internal/codegraphruntime/bundle/assets/README.txt, internal/codegraphruntime/bundle/assets/target.json, internal/codegraphruntime/bundle/bootstrap.cjs, internal/codegraphruntime/bundle/bundle.go, internal/codegraphruntime/bundle/bundle_test.go, internal/codegraphruntime/bundle/extract.go, internal/codegraphruntime/bundle/notices/README.txt, internal/codegraphruntime/bundle/release.json, internal/config/config.go, internal/engine/batch_output_test.go, internal/engine/batch_ptc_test.go, internal/engine/context_builder.go, internal/engine/context_builder_test.go, internal/engine/engine.go, internal/engine/plan_permissions_test.go, internal/engine/prefix_share_test.go, internal/engine/terminal_test.go, internal/mcp/codegraph.go, internal/mcp/codegraph_smoke_test.go, internal/mcp/codegraph_test.go, internal/permission/modes.go, internal/permission/plan.go, internal/permission/plan_test.go, internal/permission/service.go, internal/tool/bash.go, internal/tool/bash_terminal_test.go, internal/tool/batch.go
+
+Turn memory: /btw
+
+## 2026-11-04 19:33:12 · session acp-1793790580996458000-1 · turn 0 · importance 0.90
+- keywords: todolist, todo-write, turn, organizer, archival, subagent, embedding, memory
+- files: README.md, cmd/solcode/main.go, docs/persistent-subagents.md, examples/settings/README.md, examples/settings/settings.models.api.example.json, internal/app/app.go, internal/app/goal.go, internal/app/live_model.go, internal/app/organizer_api_test.go, internal/app/organizer_bridge.go, internal/config/config.go, internal/config/local_models.go, internal/config/model_backends_test.go, internal/embedding/api_test.go, internal/engine/engine.go, internal/engine/live_model.go, internal/organizer/api.go, internal/organizer/api_test.go, internal/organizer/organizer.go, internal/tool/subagent.go, internal/tool/subagent_model_config_test.go, internal/tool/subagent_roles.go, internal/tool/subagent_roles_test.go, internal/tool/task.go, internal/tool/tool.go, internal/workflowui/server.go, internal/workflowui/settings_model_backends_test.go, internal/workflowui/settings_organizer_test.go, internal/workflowui/static/app.js, internal/workflowui/static/index.html, unit_tests/subagent_tool_test.go, unit_tests/task_tool_test.go
+- memory_ids: mem_90b642519d37c0a6
+
+Organizer: 用户要求优化子代理，将模型配置改为用户配置，并支持 embedding 和记忆摘要使用 API。assistant: 已检查子代理、embedding 和记忆摘要的模型配置链路，并将子代理改为只使用用户配置，同时补齐 embedding 和记忆摘要模型的 API 配置支持。assistant: [tool use: CodeGraph] {"action":"explore","includeCode":true,"maxFiles":12,"query":"subagent
+
+## 2026-11-04 20:07:39 · session acp-1793790580996458000-1 · turn 1 · importance 0.90
+- keywords: todolist, todo-write, turn, organizer, archival, subagent, embedding, memory, config, api
+- files: README.md, cmd/solcode/main.go, docs/persistent-subagents.md, examples/settings/README.md, examples/settings/settings.models.api.example.json, internal/app/app.go, internal/app/goal.go, internal/app/live_model.go, internal/app/organizer_api_test.go, internal/app/organizer_bridge.go, internal/config/config.go, internal/config/local_models.go, internal/config/model_backends_test.go, internal/embedding/api_test.go, internal/engine/engine.go, internal/engine/live_model.go, internal/organizer/api.go, internal/organizer/api_test.go, internal/organizer/organizer.go, internal/tool/subagent.go, internal/tool/subagent_model_config_test.go, internal/tool/subagent_roles.go, internal/tool/subagent_roles_test.go, internal/tool/task.go, internal/tool/tool.go, internal/workflowui/server.go, internal/workflowui/settings_layout_test.go, internal/workflowui/settings_model_backends_test.go, internal/workflowui/settings_organizer_test.go, internal/workflowui/static/app.js, internal/workflowui/static/index.html, internal/workflowui/static/style.css, unit_tests/subagent_tool_test.go, unit_tests/task_tool_test.go
+- memory_ids: mem_90b642519d37c0a6
+
+Organizer: 用户要求：“优化子代理，子代理不再由 ai 指定模型，改成自己配置。然后 embedding 和记忆摘要模型也可以使用 api，记忆摘要模型也是”。assistant: 已检查子代理、embedding 和记忆摘要的模型配置链路，并把子代理改为只使用用户配置，同时补齐 embedding、记忆摘要模型的 API 配置支持。assistant: [tool use: BatchTool] {code:"const r = await Promise.all([tools.LS{
+
+## 2026-11-04 20:12:12 · session acp-1793790580996458000-1 · turn 2 · importance 0.90
+- keywords: turn, todolist, organizer, archival, subagent, embedding, memory, config, api
+- files: README.md, cmd/solcode/main.go, docs/persistent-subagents.md, examples/settings/README.md, examples/settings/settings.models.api.example.json, internal/app/app.go, internal/app/goal.go, internal/app/live_model.go, internal/app/organizer_api_test.go, internal/app/organizer_bridge.go, internal/config/config.go, internal/config/local_models.go, internal/config/model_backends_test.go, internal/embedding/api_test.go, internal/engine/engine.go, internal/engine/live_model.go, internal/organizer/api.go, internal/organizer/api_test.go, internal/organizer/organizer.go, internal/tool/subagent.go, internal/tool/subagent_model_config_test.go, internal/tool/subagent_roles.go, internal/tool/subagent_roles_test.go, internal/tool/task.go, internal/tool/tool.go, internal/workflowui/server.go, internal/workflowui/settings_layout_test.go, internal/workflowui/settings_model_backends_test.go, internal/workflowui/settings_organizer_test.go, internal/workflowui/static/app.js, internal/workflowui/static/index.html, internal/workflowui/static/style.css, unit_tests/subagent_tool_test.go, unit_tests/task_tool_test.go
+- memory_ids: mem_90b642519d37c0a6
+
+Organizer: 用户要求：“优化子代理，子代理不再由 ai 指定模型，改成自己配置。然后 embedding 和记忆摘要模型也可以使用 api，记忆摘要模型也是”。assistant: 已检查子代理、embedding 和记忆摘要的模型配置链路，并把子代理改为只使用用户配置，同时补齐 embedding、记忆摘要模型的 API 配置支持。assistant: [tool use: BatchTool] {code:"const r = await Promise.all([tools.LS{
+
+## 2026-11-05 21:43:50 · session acp-1793790580996458000-1 · turn 3 · importance 0.40
+- keywords: turn, todolist
+- files: README.md, cmd/solcode/main.go, docs/persistent-subagents.md, examples/settings/README.md, examples/settings/settings.models.api.example.json, internal/app/app.go, internal/app/goal.go, internal/app/live_model.go, internal/app/organizer_api_test.go, internal/app/organizer_bridge.go, internal/config/config.go, internal/config/local_models.go, internal/config/model_backends_test.go, internal/embedding/api_test.go, internal/engine/engine.go, internal/engine/live_model.go, internal/organizer/api.go, internal/organizer/api_test.go, internal/organizer/organizer.go, internal/tool/subagent.go, internal/tool/subagent_model_config_test.go, internal/tool/subagent_roles.go, internal/tool/subagent_roles_test.go, internal/tool/task.go, internal/tool/tool.go, internal/workflowui/server.go, internal/workflowui/settings_layout_test.go, internal/workflowui/settings_model_backends_test.go, internal/workflowui/settings_organizer_test.go, internal/workflowui/static/app.js, internal/workflowui/static/index.html, internal/workflowui/static/style.css, unit_tests/subagent_tool_test.go, unit_tests/task_tool_test.go
+
+Turn memory: 我认为子agent和主agent应该是这样的。主agent创建子agent后。主agent进行阻塞，然后当子agent需要向主agent获取信息时，子agent进行等待，当主agent回复子agent消息时，子agent恢复。一直这样循环往复，直到任务完成。这种设计对比现在如何
+
+## 2026-11-05 21:46:55 · session acp-1793790580996458000-1 · turn 4 · importance 0.90
+- keywords: turn, todolist, organizer, archival, subagent, embedding, config, api
+- files: README.md, cmd/solcode/main.go, docs/persistent-subagents.md, examples/settings/README.md, examples/settings/settings.models.api.example.json, internal/app/app.go, internal/app/goal.go, internal/app/live_model.go, internal/app/organizer_api_test.go, internal/app/organizer_bridge.go, internal/config/config.go, internal/config/local_models.go, internal/config/model_backends_test.go, internal/embedding/api_test.go, internal/engine/engine.go, internal/engine/live_model.go, internal/organizer/api.go, internal/organizer/api_test.go, internal/organizer/organizer.go, internal/tool/subagent.go, internal/tool/subagent_model_config_test.go, internal/tool/subagent_roles.go, internal/tool/subagent_roles_test.go, internal/tool/task.go, internal/tool/tool.go, internal/workflowui/server.go, internal/workflowui/settings_layout_test.go, internal/workflowui/settings_model_backends_test.go, internal/workflowui/settings_organizer_test.go, internal/workflowui/static/app.js, internal/workflowui/static/index.html, internal/workflowui/static/style.css, unit_tests/subagent_tool_test.go, unit_tests/task_tool_test.go
+- memory_ids: mem_90b642519d37c0a6
+
+Organizer: 用户要求：“优化子代理，子代理不再由 ai 指定模型，改成自己配置。然后 embedding 和记忆摘要模型也可以使用 api，记忆摘要模型也是”。assistant: 已检查子代理、embedding 和记忆摘要的模型配置链路，并把子代理改为只使用用户配置，并补齐 embedding、记忆摘要模型的 API 配置支持。assistant: [tool use: BatchTool] {code:"console.log((await tools.Bash({command:
+
+## 2026-11-05 22:23:49 · session acp-1793790580996458000-1 · turn 5 · importance 0.90
+- keywords: todolist, todo-write, turn, organizer, archival, subagent, embedding, api
+- files: README.md, cmd/solcode/main.go, docs/persistent-subagents.md, examples/settings/README.md, examples/settings/settings.models.api.example.json, internal/agent/coordinator.go, internal/agent/fork_parallel_test.go, internal/agent/fork_window.go, internal/agent/fork_window_test.go, internal/agent/lifecycle.go, internal/agent/session_store_test.go, internal/app/app.go, internal/app/goal.go, internal/app/live_model.go, internal/app/organizer_api_test.go, internal/config/model_context.go, internal/engine/engine.go, internal/engine/model_context.go, internal/engine/model_context_test.go, internal/engine/persistent.go, internal/organizer/api.go, internal/organizer/api_test.go, internal/organizer/organizer.go, internal/tool/subagent.go, internal/tool/subagent_context_test.go, internal/tool/subagent_model_config_test.go, internal/tool/subagent_roles.go, internal/tool/subagent_roles_test.go, internal/tool/task.go, internal/tool/task_agents.go, internal/tool/tool.go, internal/workflowui/server.go, internal/workflowui/settings_layout_test.go, internal/workflowui/settings_model_backends_test.go, internal/workflowui/settings_organizer_test.go, internal/workflowui/static/app.js, internal/workflowui/static/index.html, internal/workflowui/static/style.css, unit_tests/subagent_tool_test.go, unit_tests/task_tool_test.go
+- memory_ids: mem_90b642519d37c0a6
+
+Organizer: 用户要求：“优化子代理，子代理不再由 ai 指定模型，改成自己配置。然后 embedding 和记忆摘要模型也可以使用 api，记忆摘要模型也是”。assistant: 已检查子代理、embedding 和记忆摘要的模型配置链路，并把子代理改为只使用用户配置，并补齐 embedding、记忆摘要模型的 API 配置支持。assistant: [tool use: BatchTool] {"code":"console.log((await tools.Bash({\n  \"
+
+## 2026-11-05 23:14:19 · session acp-1793790580996458000-1 · turn 6 · importance 0.90
+- keywords: todolist, todo-write, turn, organizer, archival, 并行, 问答, 并发, 唤醒, 继承
+- files: README.md, cmd/solcode/main.go, docs/persistent-subagents.md, examples/settings/README.md, examples/settings/settings.models.api.example.json, internal/acp/subagents.go, internal/agent/coordinator.go, internal/agent/fork_parallel_test.go, internal/agent/fork_window.go, internal/agent/fork_window_test.go, internal/agent/lifecycle.go, internal/agent/parent_requests.go, internal/agent/parent_requests_test.go, internal/agent/parent_wait.go, internal/agent/session_store.go, internal/agent/session_store_test.go, internal/agent/state_view.go, internal/agentsession/parent_recovery_test.go, internal/app/app.go, internal/app/goal.go, internal/app/live_model.go, internal/app/organizer_api_test.go, internal/app/organizer_bridge.go, internal/config/config.go, internal/config/local_models.go, internal/config/model_backends_test.go, internal/config/model_context.go, internal/config/model_context_test.go, internal/embedding/api_test.go, internal/engine/background_tools.go, internal/engine/engine.go, internal/engine/live_model.go, internal/engine/model_context.go, internal/engine/model_context_test.go, internal/engine/parent_collaboration_test.go, internal/engine/persistent.go, internal/engine/task_async_test.go, internal/engine/tool_executor.go, internal/engine/tool_selector.go, internal/organizer/api.go
+- memory_ids: mem_e131c97f84819e98
+
+Organizer: 用户要求落实父子 Agent 并行问答机制，包括 AskParent、回答投递、等待状态和事件唤醒调度。预期：主 Agent 委派后等待事件；子 Agent 缺信息时挂起并提问；主 Agent 串行决策、精确回复对应请求；该子 Agent 在原 run 中继续，其他子 Agent 不受影响，循环直至完成。上一项用户明确要求的上下文继承策略已实现但尚未提交：默认继承主 Agent 完整已完成上下文；超过子模型容量 80% 时截取近期窗口至约 40%；保证工具调用/结果配对。问答

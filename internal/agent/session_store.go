@@ -33,6 +33,7 @@ type Store interface {
 
 // Scope authorizes access by project WorkDir. Parent fields describe the caller
 // for compatibility and provenance; they do not restrict project-level reuse.
+// Parent-question delivery and replies additionally require exact parent ownership.
 type Scope struct {
 	ParentID        AgentID
 	ParentSessionID string
@@ -117,6 +118,7 @@ type Record struct {
 	Runs                []RunRecord
 	Events              []SessionEvent
 	Messages            []sdk.MessageParam
+	ParentRequests      []ParentRequest `json:"parent_requests,omitempty"`
 	Context             []int
 	ForkID              string
 	WorkingSet          json.RawMessage

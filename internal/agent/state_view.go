@@ -32,7 +32,7 @@ func (c *Coordinator) refreshState(ctx context.Context, r *Record) error {
 		r.Status = a.status
 		return nil
 	}
-	if r.Status.State != AgentRunning && r.Status.State != AgentWaitingPermission {
+	if r.Status.State != AgentRunning && r.Status.State != AgentWaitingPermission && r.Status.State != AgentWaitingParent {
 		return nil
 	}
 	if c.store == nil {

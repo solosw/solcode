@@ -36,7 +36,7 @@ func TestForkModesAndAllowlistIntersection(t *testing.T) {
 		mode    string
 		n       int
 		working bool
-	}{{"none", 0, false}, {"full", 3, true}, {"last_n", 1, true}, {"working_set", 0, true}} {
+	}{{"", 3, true}, {"none", 0, false}, {"full", 3, true}, {"last_n", 1, true}, {"working_set", 0, true}} {
 		out, err := selectFork(AgentConfig{ForkContext: tc.mode, ForkLastN: 1, ParentContext: parent})
 		if err != nil || len(out.Messages) != tc.n || (len(out.WorkingSet) > 0) != tc.working {
 			t.Fatalf("%s: %+v %v", tc.mode, out, err)

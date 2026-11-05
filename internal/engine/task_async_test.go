@@ -49,7 +49,7 @@ func parseAsyncReceipt(t *testing.T, req cpanthropic.MessageRequest) (string, st
 	return id, run
 }
 
-func TestAsyncTaskMainContinuesThenExplicitlyWaits(t *testing.T) {
+func TestAsyncTaskSameTurnWorkThenExplicitWait(t *testing.T) {
 	for _, background := range []bool{false, true} {
 		t.Run(map[bool]string{false: "background disabled", true: "background enabled"}[background], func(t *testing.T) {
 			runner := detachedTestRunner{started: make(chan struct{}), release: make(chan struct{})}
@@ -68,10 +68,10 @@ func TestAsyncTaskMainContinuesThenExplicitlyWaits(t *testing.T) {
 				calls++
 				switch calls {
 				case 1:
-					return backgroundMessage(t, backgroundCall("spawn", "Task", map[string]any{"action": "spawn", "description": "analyze", "prompt": "work", "run_in_background": true})), nil
+					return backgroundMessage(t, backgroundCall("spawn", "Task", map[string]any{"action": "spawn", "description": "analyze", "prompt": "work", "run_in_background": true}), backgroundCall("independent", "Independent", map[string]any{})), nil
 				case 2:
 					id, run := parseAsyncReceipt(t, req)
-					return backgroundMessage(t, backgroundCall("independent", "Independent", map[string]any{}), backgroundCall("wait", "Task", map[string]any{"action": "wait", "agent_id": id, "run_id": run, "timeout_ms": 2000, "run_in_background": true})), nil
+					return backgroundMessage(t, backgroundCall("wait", "Task", map[string]any{"action": "wait", "agent_id": id, "run_id": run, "timeout_ms": 2000, "run_in_background": true})), nil
 				case 3:
 					results := backgroundResultTexts(req.Messages, "wait")
 					if !independent || len(results) != 1 || !strings.Contains(results[0], "async-child-result") || strings.Contains(results[0], "running_in_background") {
@@ -95,7 +95,7 @@ func TestAsyncTaskMainContinuesThenExplicitlyWaits(t *testing.T) {
 	}
 }
 
-func TestAsyncTaskSurvivesNormalTurnAndDeliversNextTurn(t *testing.T) {
+func TestAsyncTaskSurvivesParentTurnLimitAndDeliversNextTurn(t *testing.T) {
 	runner := detachedTestRunner{started: make(chan struct{}), release: make(chan struct{})}
 	c := agent.NewCoordinator(runner)
 	t.Cleanup(c.Close)
@@ -111,15 +111,20 @@ func TestAsyncTaskSurvivesNormalTurnAndDeliversNextTurn(t *testing.T) {
 		id, run = parseAsyncReceipt(t, req)
 		return backgroundMessage(t), nil
 	})
-	cfg := Config{Client: client, Tools: registry, Permissions: permission.NewServiceWithConfig(permission.Config{Mode: permission.ModeBypass, BypassSubagents: true}), MaxTurns: 3}
+	cfg := Config{Client: client, Tools: registry, Permissions: permission.NewServiceWithConfig(permission.Config{Mode: permission.ModeBypass, BypassSubagents: true}), MaxTurns: 1}
 	eng := NewEngine(cfg)
 	ctx, cancel := context.WithCancel(t.Context())
 	request := RunRequest{SessionID: "parent-session", AgentConfig: agent.AgentConfig{ID: "main", WorkDir: t.TempDir(), Prompt: "submit"}}
 	first := eng.RunWithHistory(ctx, request)
 	cancel()
-	if first.AgentResult.Error != "" || calls != 2 {
-		t.Fatalf("normal turn unexpectedly waited: %+v calls=%d", first.AgentResult, calls)
+	if !strings.Contains(first.AgentResult.Error, "max turns") || calls != 1 {
+		t.Fatalf("parent turn limit not enforced: %+v calls=%d", first.AgentResult, calls)
 	}
+	statuses := c.List()
+	if len(statuses) != 1 {
+		t.Fatalf("child not retained: %+v", statuses)
+	}
+	id, run = string(statuses[0].ID), statuses[0].RunID
 	<-runner.started
 	short, stop := context.WithTimeout(t.Context(), 5*time.Millisecond)
 	defer stop()
@@ -128,6 +133,7 @@ func TestAsyncTaskSurvivesNormalTurnAndDeliversNextTurn(t *testing.T) {
 	}
 	// Config updates are safe while a detached run is active. The next main run
 	// observes the new config while the child keeps its original run snapshot.
+	cfg.MaxTurns = 3
 	cfg.Client = backgroundTestClient(func(_ context.Context, req cpanthropic.MessageRequest) (*sdk.Message, error) {
 		if !messagesContain(req.Messages, "async-child-result") || contextOccurrences(req.Messages, "<background-task-notification>") != 1 {
 			t.Error("next-turn completion missing or duplicated")
