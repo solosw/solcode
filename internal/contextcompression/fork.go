@@ -9,6 +9,7 @@ import (
 // The child's active view and future folds never mutate its parent's state.
 func (s *State) Fork(messages []sdk.MessageParam) *State {
 	next := s.Clone()
+	next.Nudge = NudgeState{}
 	if err := next.Sync(messages); err != nil {
 		return next
 	}

@@ -24,8 +24,8 @@ The host offers four stable core tools to main and child agents:
 
 | Tool | Purpose |
 | --- | --- |
-| `acp_status` | Context tokens, revision, stable references, protected messages and safe boundaries; paginated with offset/limit. |
-| `compress` | Inclusive visible start/end references, a model-authored summary, optional topic, and the status revision. |
+| `acp_status` | Compact overview/ranges with `view:"overview"` or `view:"ranges"`; detailed references with `view:"messages"` (default), paginated with offset/limit. |
+| `compress` | Inclusive visible start/end references, a model-authored summary, optional topic, and the revision from a current reminder or status response. |
 | `decompress` | Read a block's evidence or a source message; optionally restore a visible block into the active view. |
 | `search_context` | Unified lookup of context originals/summaries, archival memory and the current session log. |
 
@@ -35,7 +35,11 @@ Example sequence:
 {"start":"m2","end":"m12","summary":"Implemented auth.go validation; targeted test passed. Integration test remains pending. Preserve the user's public API constraint.","topic":"Token validation","revision":0}
 ```
 
-The example is the argument to `compress` after checking `acp_status`. References
+The example is the argument to `compress` using a current `context-budget`
+reminder or `acp_status` response. A reminder already contains the revision, safe
+ranges, protected ranges and existing summary-block metadata, so an extra status
+call is optional. Refresh status when state is uncertain, the model changes,
+references become stale, or other ranges/details are needed. References
 are opaque and local to the current session; do not invent them or use a sibling's
 references. `mN` identifies an immutable source message; `bN` identifies a fold.
 
@@ -107,13 +111,67 @@ its old execution registration remains for compatibility.
 
 ## Context pressure and cache behavior
 
-At approximately 75% of the message budget, the loop appends a compression reminder
-at a safe model boundary, with an eight-turn cooldown. The model chooses what to
-fold. Registering these tools disables the old automatic history truncation path.
-At the hard composed-request limit, SolCode stops before issuing an oversized
-request and preserves history; explicit `/compact` is available when a summary
-backend is configured. A single unexpectedly large tool result can still reach
-this limit before the AI gets another turn.
+At each safe model boundary, SolCode estimates the composed input request,
+including messages, system instructions and tool schemas. Its local adaptation
+of the reference strategy uses the following default pressure bands and gates:
+
+- Below 45%: no budget reminder.
+- From 45% to below 75%: wait for both 50,000 tokens of growth and 15 model
+  iterations since the baseline or last reminder.
+- From 75% to below 95%: issue an initial pressure reminder when useful history
+  is available. Later reminders require a five-iteration cooldown and at least
+  `min(20,000, 45% of the context limit)` new tokens.
+- At 95% and above: allow emergency escalation past the normal cooldown, growth
+  and minimum-benefit gates. Repeated emergency reminders still require the
+  five-iteration cooldown and positive growth.
+
+Ordinary reminders require an estimated saving of at least 5,000 tokens. The
+planning estimate retains a quarter of each eligible range plus a 128-token fold
+wrapper; actual savings depend on the model-authored summary and are validated
+by `compress`. Even an emergency reminder requires a structurally safe range
+with positive estimated savings. A reminder that would itself exceed the input
+budget is omitted without consuming the reminder cooldown.
+
+Reminder state survives user turns and session checkpoints. A successful fold
+resets the growth baseline and cooldown; child forks start their own schedule.
+Changing the configured context limit resets the schedule for the new budget.
+Reminders include the revision, model, request/history/system-and-tools token
+estimates, safe inclusive range references, protected ranges and existing block
+metadata. Lists are bounded to eight entries each, with full range counts; use
+`acp_status` for more detail. Safety ranges preserve tool exchanges and current
+protection rules. The working AI can choose completed work and write its own
+summary through `compress`.
+
+Settings can override the local policy in `context_nudge` (zero or omitted
+fields use defaults):
+
+```json
+{
+  "context_nudge": {
+    "min_pressure": 0.45,
+    "max_pressure": 0.75,
+    "emergency_pressure": 0.95,
+    "frequency": 5,
+    "iteration_threshold": 15,
+    "growth_tokens": 50000,
+    "min_growth_tokens": 20000,
+    "min_benefit_tokens": 5000
+  }
+}
+```
+
+This is a native policy using local token estimates, not a byte-for-byte port of
+the proxy's provider-usage meters or tier promotion logic. Registering these
+tools disables the old automatic history truncation path. When `memory.organizer`
+is enabled and configured, the main agent instead generates reversible summary
+blocks at `memory.compaction_trigger_percent` (default 85%) of the composed input
+budget, including during a running turn. It summarizes eligible ranges through
+the selected organizer backend, preserves protected requests/overlays and whole
+tool exchanges, and checkpoints the archive and active view together. API errors,
+non-reducing summaries and failed saves leave the previous active history intact.
+Without an organizer, the working AI continues to manage folds itself.
+At the hard composed-request limit, SolCode stops if protected context still
+cannot fit. Explicit `/compact` remains available with a summary backend.
 
 Tools and system prompts remain stable across folds. Source references are shown
 in tool responses rather than rewritten onto every historical message. A fold
@@ -124,14 +182,16 @@ benchmark claim about upstream savings.
 
 ## Shared model for explicit summaries and memory extraction
 
-`/compact` and background session summary generation use only
+Automatic threshold summaries, `/compact` and background session summaries use only
 `memory.organizer`, the same configured runtime/model/API endpoint as memory
 organization and extraction. There is no separate session-summary model setting
 and no fallback to `fast_model` or the chat provider. `fast_model` retains its other
 existing purposes.
 
 Both local GGUF and independently configured API runtimes are supported. The
-existing organizer enable switch controls this backend. Without it, explicit
+existing organizer enable switch controls this backend. Saving feature settings
+rebuilds the organizer runtime so changes to its model, API endpoint and credentials
+apply without restarting. Without it, explicit
 summary generation reports a configuration error and retains history; the AI's
 `compress` tool still works because its summary is supplied as an argument.
 

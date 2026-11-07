@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/solosw/solcode/internal/anthropic"
+	"github.com/solosw/solcode/internal/contextcompression"
 	"github.com/solosw/solcode/internal/hook"
 	"github.com/solosw/solcode/internal/httpproxy"
 	"github.com/solosw/solcode/internal/permission"
@@ -133,34 +134,35 @@ type Config struct {
 	// APIFormat selects "anthropic" (default), "openai" (Chat Completions), or
 	// "responses" (OpenAI Responses). Internal Anthropic message/tool types
 	// remain the compatibility boundary for the engine/session stack.
-	APIFormat        string                `json:"api_format,omitempty"`
-	Model            string                `json:"model"`
-	FastModel        string                `json:"fast_model,omitempty"`
-	Subagents        SubagentsConfig       `json:"subagents,omitempty"`
-	MaxContextTokens int64                 `json:"max_context_tokens,omitempty"`
-	MaxTokens        int64                 `json:"max_tokens"`
-	SystemPrompt     string                `json:"system_prompt"`
-	WorkDir          string                `json:"work_dir"`
-	MaxTurns         int                   `json:"max_turns"`
-	Stream           bool                  `json:"stream"`
-	Thinking         bool                  `json:"thinking"`
-	ThinkingText     bool                  `json:"thinking_text"`
-	Effort           string                `json:"effort"`
-	PermissionMode   permission.Mode       `json:"permission_mode"`
-	Permissions      permission.Config     `json:"permissions,omitempty"`
-	Hooks            hook.Config           `json:"hooks,omitempty"`
-	TUI              TUIConfig             `json:"tui,omitempty"`
-	Skills           SkillsConfig          `json:"skills,omitempty"`
-	Workflows        WorkflowsConfig       `json:"workflows,omitempty"`
-	BackgroundTasks  BackgroundTasksConfig `json:"background_tasks,omitempty"`
-	Batch            BatchConfig           `json:"batch,omitempty"`
-	MCP              MCPConfig             `json:"mcp,omitempty"`
-	MCPServers       []MCPServerConfig     `json:"mcp_servers,omitempty"`
-	LSP              LSPConfig             `json:"lsp,omitempty"`
-	Session          SessionConfig         `json:"session,omitempty"`
-	Memory           MemoryConfig          `json:"memory,omitempty"`
-	KnowledgeGraph   KnowledgeGraphConfig  `json:"knowledge_graph,omitempty"`
-	Sandbox          sandbox.Policy        `json:"sandbox,omitempty"`
+	APIFormat        string                         `json:"api_format,omitempty"`
+	Model            string                         `json:"model"`
+	FastModel        string                         `json:"fast_model,omitempty"`
+	Subagents        SubagentsConfig                `json:"subagents,omitempty"`
+	ContextNudge     contextcompression.NudgeConfig `json:"context_nudge,omitempty"`
+	MaxContextTokens int64                          `json:"max_context_tokens,omitempty"`
+	MaxTokens        int64                          `json:"max_tokens"`
+	SystemPrompt     string                         `json:"system_prompt"`
+	WorkDir          string                         `json:"work_dir"`
+	MaxTurns         int                            `json:"max_turns"`
+	Stream           bool                           `json:"stream"`
+	Thinking         bool                           `json:"thinking"`
+	ThinkingText     bool                           `json:"thinking_text"`
+	Effort           string                         `json:"effort"`
+	PermissionMode   permission.Mode                `json:"permission_mode"`
+	Permissions      permission.Config              `json:"permissions,omitempty"`
+	Hooks            hook.Config                    `json:"hooks,omitempty"`
+	TUI              TUIConfig                      `json:"tui,omitempty"`
+	Skills           SkillsConfig                   `json:"skills,omitempty"`
+	Workflows        WorkflowsConfig                `json:"workflows,omitempty"`
+	BackgroundTasks  BackgroundTasksConfig          `json:"background_tasks,omitempty"`
+	Batch            BatchConfig                    `json:"batch,omitempty"`
+	MCP              MCPConfig                      `json:"mcp,omitempty"`
+	MCPServers       []MCPServerConfig              `json:"mcp_servers,omitempty"`
+	LSP              LSPConfig                      `json:"lsp,omitempty"`
+	Session          SessionConfig                  `json:"session,omitempty"`
+	Memory           MemoryConfig                   `json:"memory,omitempty"`
+	KnowledgeGraph   KnowledgeGraphConfig           `json:"knowledge_graph,omitempty"`
+	Sandbox          sandbox.Policy                 `json:"sandbox,omitempty"`
 	// Proxy configures outbound HTTP(S) traffic for API, Fetch, MCP HTTP, etc.
 	Proxy httpproxy.Config `json:"proxy,omitempty"`
 	// Image is an optional OpenAI-compatible Images API (generations + edits),
@@ -1386,6 +1388,10 @@ func applyJSONConfig(cfg *Config, data []byte) error {
 			}
 		case "subagents":
 			if err := json.Unmarshal(value, &cfg.Subagents); err != nil {
+				return err
+			}
+		case "context_nudge":
+			if err := json.Unmarshal(value, &cfg.ContextNudge); err != nil {
 				return err
 			}
 		case "max_tokens":

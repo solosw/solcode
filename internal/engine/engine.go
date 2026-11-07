@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/solosw/solcode/internal/contextcompression"
-	contextmessage "github.com/solosw/solcode/internal/message"
 	"sort"
 	"strings"
 	"sync"
@@ -63,6 +62,7 @@ type Config struct {
 	SubagentModelName  string
 	ModelContextLimit  func(model string) int64
 	FastModelName      string
+	ContextNudge       contextcompression.NudgeConfig
 	MaxContextTokens   int64
 	MaxTokens          int64
 	SystemPrompt       string
@@ -116,6 +116,10 @@ type Config struct {
 	// CompactMessages is invoked mid-run when estimated context reaches MaxContextTokens (100%).
 	// It must return a shorter message list. Nil disables mid-run compaction.
 	CompactMessages func(ctx context.Context, messages []sdk.MessageParam) ([]sdk.MessageParam, error)
+	// ContextSummary uses the configured organizer for automatic, reversible folds.
+	// Nil leaves compression to the working model.
+	ContextSummary           func(ctx context.Context, transcript string) (string, error)
+	CompactionTriggerPercent int
 	// Router optionally adds a semantic fallback to lexical tool selection.
 	// Nil keeps selection purely lexical.
 	Router *Router
@@ -416,7 +420,6 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 	if contextEnabled {
 		compactMessages = nil
 	} // autonomous folds replace automatic truncation
-	lastContextNudge := -8
 	// Efficiency controller (§7): local anti-loop signals. Advisory only; it
 	// never issues requests, executes operations, or ends the run.
 	efficiency := NewRequestEfficiencyController()
@@ -679,10 +682,6 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 		if builder.EfficiencyNote != "" && workingSet.HasContext() {
 			builder.WorkingSet = workingSet.InjectionText()
 		}
-		if contextEnabled && e.config.MaxContextTokens > 0 && turn-lastContextNudge >= 8 && int64(contextcompression.Tokens(messages)) >= e.config.MaxContextTokens*3/4 {
-			messages = append(messages, sdk.NewUserMessage(sdk.NewTextBlock(contextmessage.DynamicContextText("context-budget", "Context is approaching its budget. Call acp_status, select older completed work, and use compress with a summary you write. Preserve the current request and tool pairing. Read needed evidence with decompress/search_context. No extra summarizer model is called by compress."))))
-			lastContextNudge = turn
-		}
 		messages = dynamic.append(messages, builder, runReq, workingSetTaskChanged)
 		workingSetTaskChanged = false
 		// Overlays are now durable messages; Build must not add a transient copy
@@ -704,6 +703,30 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 			ThinkingText: e.config.ThinkingText,
 			Effort:       e.config.Effort,
 			Stream:       e.config.Stream,
+		}
+		if contextEnabled && isMain && e.config.ContextSummary != nil {
+			nextMessages, nextState, compactErr := e.compactContext(ctx, compression, messages, requestBuilder, buildReq)
+			if compactErr != nil {
+				return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: compactErr.Error(), NoRetry: true}, Messages: messages}
+			}
+			if nextState != nil {
+				staged := runReq
+				staged.Compression = nextState
+				if err := staged.saveCheckpoint("compacted", nextMessages, workingSet, runUsage, true); err != nil {
+					return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: err.Error(), NoRetry: true}, Messages: messages}
+				}
+				*compression = *nextState
+				messages = nextMessages
+				buildReq.Messages = messages
+			}
+		}
+		if contextEnabled {
+			var nudgeErr error
+			messages, nudgeErr = e.appendContextNudge(compression, messages, requestBuilder, buildReq)
+			if nudgeErr != nil {
+				return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: nudgeErr.Error(), NoRetry: true}, Messages: messages}
+			}
+			buildReq.Messages = messages
 		}
 		// Mid-run guard uses the actual materialized transcript, including all
 		// newly appended context. Recovery metadata is restored before Create.
@@ -945,7 +968,18 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 				changed := false
 				switch name {
 				case tool.ACPStatusToolName:
-					data = next.StatusPage(int(e.config.MaxContextTokens), req.Offset, req.Limit)
+					switch req.View {
+					case "overview", "ranges":
+						limit := req.Limit
+						if limit <= 0 {
+							limit = 20
+						}
+						data = next.Overview(int(e.config.MaxContextTokens), min(200, limit))
+					case "", "messages":
+						data = next.StatusPage(int(e.config.MaxContextTokens), req.Offset, req.Limit)
+					default:
+						return nil, fmt.Errorf("unknown status view %q; use overview, ranges or messages", req.View)
+					}
 				case tool.SearchContextToolName:
 					data, err = next.Search(req.Query, req.Offset, req.Limit)
 				case tool.DecompressToolName:
@@ -978,6 +1012,11 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 						if requestBuilder.EstimateContextTokens(preview) >= e.config.MaxContextTokens {
 							return nil, fmt.Errorf("restored request exceeds context budget; read evidence with pagination")
 						}
+					}
+					if name == tool.CompressToolName {
+						preview := buildReq
+						preview.Messages = view
+						next.Nudge.Compressed(int(requestBuilder.EstimateContextTokens(preview)))
 					}
 					staged := runReq
 					staged.Compression = next

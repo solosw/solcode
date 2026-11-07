@@ -36,10 +36,14 @@ func TestEngineConfigReceivesSkillRegistry(t *testing.T) {
 // force-loaded and behavior matches the pre-Jev build.
 func TestEngineConfigWithoutJevHasNoBundledSkills(t *testing.T) {
 	cfg := jevConfig(false)
+	cfg.ContextNudge.Frequency = 9
 	ec := engineConfig(cfg, nil, nil, nil, nil,
 		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
 		nil, nil, nil, nil, nil, nil)
 
+	if ec.ContextNudge.Frequency != 9 {
+		t.Fatal("context reminder settings not passed to engine")
+	}
 	for _, info := range ec.Skills {
 		switch info.Name {
 		case "explore", "implement", "verify", "research", "debug", "review":

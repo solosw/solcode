@@ -282,6 +282,7 @@ func New(cfg config.Config, opts ...Option) (*App, error) {
 	engineCfg.ShouldInjectWorkingSet = jev.shouldInjectWorkingSet()
 	engineCfg.Guardrail = jev.guardrail()
 	engineCfg.TerminalRunner = options.terminalRunner
+	application.configureContextSummary(&engineCfg)
 	engineCfg.AskUserAutoSelect = application.askUserAutoSelect
 	// Snapshot todolist on every TodoWrite so mid-turn updates are not lost;
 	// turn-end recording still captures the final state plus pruned files.
@@ -630,6 +631,9 @@ func (a *App) SwitchModel(cfg config.Config) error {
 	if cfg.APIKey != a.Config.APIKey || cfg.BaseURL != a.Config.BaseURL || cpanthropic.NormalizeFormat(cfg.APIFormat) != a.Client.Format() {
 		client = cpanthropic.NewClient(cpanthropic.Options{APIKey: cfg.APIKey, BaseURL: cfg.BaseURL, Format: cfg.APIFormat})
 	}
+	if cfg.Memory.Organizer != a.Config.Memory.Organizer {
+		a.reloadOrganizer(cfg)
+	}
 	a.Config = cfg
 	a.Permissions.SetBypassSubagents(cfg.Permissions.BypassSubagents)
 	a.Client = client
@@ -648,6 +652,7 @@ func (a *App) SwitchModel(cfg config.Config) error {
 		}}).WithRetrievalBudget(cfg.Memory.RetrievalM2Limit, cfg.Memory.RetrievalM3Limit, cfg.Memory.RetrievalM4Limit, cfg.Memory.RetrievalM5Limit)
 	}
 	ec := engineConfig(cfg, client, a.Hooks, a.Tools, a.Permissions, a.onTextDelta, a.onThinkingDelta, a.onToolStart, a.onToolDone, a.emitUsage, a.onStatus, a.onAgentProgress, a.onAskUser, a.textFileSystem, a.queuedPrompts, newFileChangeRecorder(a.ChangeGraph), a.captureCheckpoint, a.uncaptureCheckpoint, a.listCheckpointPaths, a.fingerprintBaseline, a.compactMessagesMidRun)
+	a.configureContextSummary(&ec)
 	ec.TerminalRunner = a.terminalRunner
 	ec.OnTodosUpdated = a.recordTodoSessionMemory
 	ec.AskUserAutoSelect = a.askUserAutoSelect
@@ -682,6 +687,7 @@ func (a *App) ReloadFeatures(cfg config.Config, mcpFactory mcp.ClientFactory) er
 	if a.ChangeGraph != nil {
 		_ = a.ChangeGraph.Close()
 	}
+	a.reloadOrganizer(cfg)
 	a.Config = cfg
 	a.Permissions.SetBypassSubagents(cfg.Permissions.BypassSubagents)
 	a.Tools = registry
@@ -750,6 +756,7 @@ func (a *App) ReloadFeatures(cfg config.Config, mcpFactory mcp.ClientFactory) er
 	registry.Register(tool.ContextTools(contextMemory, a)...)
 	registry.Register(tool.NewReadSessionMemoryTool(a)) // legacy execution only
 	engineCfg := engineConfig(cfg, a.Client, a.Hooks, a.Tools, a.Permissions, a.onTextDelta, a.onThinkingDelta, a.onToolStart, a.onToolDone, a.emitUsage, a.onStatus, a.onAgentProgress, a.onAskUser, a.textFileSystem, a.queuedPrompts, newFileChangeRecorder(a.ChangeGraph), a.captureCheckpoint, a.uncaptureCheckpoint, a.listCheckpointPaths, a.fingerprintBaseline, a.compactMessagesMidRun)
+	a.configureContextSummary(&engineCfg)
 	engineCfg.TerminalRunner = a.terminalRunner
 	engineCfg.Router = jev.router()
 	engineCfg.ShouldInjectWorkingSet = jev.shouldInjectWorkingSet()
@@ -3547,6 +3554,7 @@ func engineConfig(cfg config.Config, client *cpanthropic.Client, runtime *hook.R
 		ModelContextLimit:      cfg.ContextLimitForModel,
 		FastModelName:          cfg.FastModel,
 		MaxContextTokens:       cfg.MaxContextTokens,
+		ContextNudge:           cfg.ContextNudge,
 		MaxTokens:              cfg.MaxTokens,
 		SystemPrompt:           cfg.SystemPrompt,
 		ProjectRules:           config.FormatProjectRulesPrompt(config.LoadProjectRules(cfg.WorkDir)),

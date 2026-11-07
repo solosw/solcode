@@ -27,11 +27,11 @@ func (t *contextTool) Name() string { return t.name }
 func (t *contextTool) Description() string {
 	switch t.name {
 	case CompressToolName:
-		return "Control your own context: replace a completed contiguous history range with a summary YOU write in this call. First call acp_status for stable mN/bN references and revision; endpoints are inclusive. Preserve user requirements, decisions, exact paths, failures and unfinished work. Include older bN summaries when a higher-level fold is useful. No summarizer model is called. Original messages remain recoverable with decompress/search_context. Latest user request, recent messages and tool pairing boundaries are protected. Fold older completed work before context becomes full; keep unrelated cached prefix messages unchanged."
+		return "Control your own context: replace a completed contiguous history range with a summary YOU write in this call. Use stable mN/bN references and revision from a current context-budget reminder or acp_status; endpoints are inclusive. Call acp_status only when state is uncertain, the model changed, references are stale, or you need other ranges/details. Preserve user requirements, decisions, exact paths, failures and unfinished work. Include older bN summaries when a higher-level fold is useful. No summarizer model is called. Original messages remain recoverable with decompress/search_context. Latest user request, recent messages and tool pairing boundaries are protected. Fold older completed work before context becomes full; keep unrelated cached prefix messages unchanged."
 	case DecompressToolName:
 		return "Read original evidence behind a bN compression block, with offset/limit pagination. deep=true reads through nested folds. By default this does not change history. restore=true replaces a visible summary with its children (deep=true restores original messages), subject to context budget. For bN, offset/limit count source messages (previews). For an mN source reference returned by search_context, offset/limit count characters in the exact serialized message (default 4000, max 8000). Follow next_offset until total_runes to read large evidence."
 	default:
-		return "Inspect current context budget, revision, stable mN message / bN summary references, safe range boundaries and protected messages. Use before compress; choose an older completed range and write its summary yourself."
+		return "Inspect current context budget, revision, stable mN message / bN summary references, safe range boundaries and protected messages. Use view=overview for a compact overview, view=ranges for safe ranges, or view=messages (default) for paginated references. A current context-budget reminder already supplies revision and safe ranges for direct compress. Refresh here when state is uncertain, the model changes, or references become stale."
 	}
 }
 func (t *contextTool) InputSchema() map[string]any {
@@ -46,9 +46,10 @@ func (t *contextTool) InputSchema() map[string]any {
 		props["end"] = str("Inclusive last visible mN or bN reference")
 		props["summary"] = str("Summary written by you; retain requirements, evidence and unfinished work")
 		props["topic"] = str("Short topic")
-		props["revision"] = map[string]any{"type": "integer", "description": "Revision from acp_status"}
+		props["revision"] = map[string]any{"type": "integer", "description": "Revision from a current context-budget reminder or acp_status"}
 		required = []string{"start", "end", "summary", "revision"}
 	case ACPStatusToolName:
+		props["view"] = map[string]any{"type": "string", "enum": []string{"overview", "ranges", "messages"}, "description": "Overview or safe ranges without message details; messages is the default paginated listing"}
 		props["offset"] = map[string]any{"type": "integer", "minimum": 0}
 		props["limit"] = map[string]any{"type": "integer", "minimum": 1, "maximum": 200}
 	case DecompressToolName:

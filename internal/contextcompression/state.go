@@ -36,13 +36,15 @@ type State struct {
 	NextBlock   int `json:"next_block,omitempty"`
 	sourceIndex map[string]sdk.MessageParam
 	blockIndex  map[string]*Block
-	Version     int      `json:"version"`
-	Revision    int      `json:"revision"`
-	Sources     []Entry  `json:"sources,omitempty"`
-	Blocks      []Block  `json:"blocks,omitempty"`
-	Active      []string `json:"active,omitempty"`
+	Nudge       NudgeState `json:"nudge,omitempty"`
+	Version     int        `json:"version"`
+	Revision    int        `json:"revision"`
+	Sources     []Entry    `json:"sources,omitempty"`
+	Blocks      []Block    `json:"blocks,omitempty"`
+	Active      []string   `json:"active,omitempty"`
 }
 type Request struct {
+	View     string `json:"view,omitempty"`
 	Start    string `json:"start,omitempty"`
 	End      string `json:"end,omitempty"`
 	Summary  string `json:"summary,omitempty"`

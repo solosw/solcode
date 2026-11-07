@@ -40,6 +40,9 @@ func copyModelConfig(dst *Config, src Config) {
 	dst.SubagentModelName = src.SubagentModelName
 	dst.ModelContextLimit = src.ModelContextLimit
 	dst.MaxTokens, dst.MaxContextTokens = src.MaxTokens, src.MaxContextTokens
+	dst.ContextNudge = src.ContextNudge
+	dst.ContextSummary = src.ContextSummary
+	dst.CompactionTriggerPercent = src.CompactionTriggerPercent
 	dst.Thinking, dst.ThinkingText, dst.Effort = src.Thinking, src.ThinkingText, src.Effort
 	dst.Stream = src.Stream
 }
