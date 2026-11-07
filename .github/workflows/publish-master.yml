@@ -35,7 +35,7 @@ jobs:
             goarch: amd64
             codegraph_target: x86_64-pc-windows-msvc
             pack: zip
-          - runner: macos-14
+          - runner: macos-15
             goos: darwin
             goarch: arm64
             codegraph_target: aarch64-apple-darwin
