@@ -611,7 +611,7 @@ func (s *Server) replayPersistedHistory(ctx context.Context, sess *acpSession, r
 	if u := sessionUsageUpdate(ctx, sess.application, loaded, sess.cfg.MaxContextTokens); u != nil {
 		s.emitUpdate(sess.id, SessionUpdate{SessionUpdate: "usage_update", Usage: u})
 	}
-	return nil
+	return s.replayPersistedSubagents(ctx, sess)
 }
 
 func (s *Server) emitSessionBootstrap(sess *acpSession) {

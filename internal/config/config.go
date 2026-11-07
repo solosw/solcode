@@ -467,7 +467,8 @@ type MemoryConfig struct {
 	TierM2TTLHours           int     `json:"tier_m2_ttl_hours,omitempty"`
 	PromotionAccessThreshold int     `json:"promotion_access_threshold,omitempty"`
 	PromotionConfidence      float64 `json:"promotion_confidence,omitempty"`
-	// Organizer configures asynchronous memory summarization and extraction.
+	// Organizer is the shared backend for session compression summaries and
+	// asynchronous memory summarization and extraction.
 	// When enabled, it owns memory writes instead of model-visible write tools.
 	Organizer OrganizerConfig `json:"organizer,omitempty"`
 	// Embedding configures optional vector embeddings for semantic search.

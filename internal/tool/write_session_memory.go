@@ -68,8 +68,8 @@ When to use this vs WriteMemory:
 - WriteSessionMemory (this tool) — one entry per session, written at the end, as a
   chronological record: the problem, what was fixed/decided, validation, dead ends,
   and what remains. It is scoped to this session and stores the checkpoint turn,
-  the files that changed, the timestamp, and the session id. ReadSessionMemory only
-  returns this session's entries.
+  the files that changed, the timestamp, and the session id.
+  search_context(source="session_memory") only returns this session's entries.
 - WriteMemory — a single durable fact that stays true across sessions: a user
   preference, a project rule, a verified command, a settled decision. It is not a
   log; it is knowledge, and relevant entries are injected automatically in later
@@ -80,7 +80,7 @@ it is "a fact worth knowing in every future session", use WriteMemory. Most
 sessions produce one session memory and zero to three WriteMemory entries.
 
 The entry stores:
-- keywords: short retrieval terms for later ReadSessionMemory calls in this session
+- keywords: short retrieval terms for later search_context calls in this session
 - summary: MUST include (1) Problem — the user's request/bug/goal, and (2) Status —
   what was fixed or decided, how verified, and what is still unfinished. Keep the
   ending complete; do not stop mid-sentence. Prefer outcomes over narration.

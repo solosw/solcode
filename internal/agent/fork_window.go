@@ -63,6 +63,7 @@ func windowFork(parent Snapshot, capacity int64) Snapshot {
 			out.Messages = []sdk.MessageParam{message}
 		}
 	}
+	out.Compression = parent.Compression.Fork(out.Messages)
 	return out
 }
 

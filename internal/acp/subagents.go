@@ -52,18 +52,11 @@ func (s *Server) emitSubagentProgress(root *acpSession, event tool.AgentProgress
 		if parent := root.subagents[event.ParentAgentID]; parent != nil {
 			parentID = parent.session.id
 		}
-		child = &acpSubagent{parentID: parentID, runID: event.RunID, runs: map[string]bool{event.RunID: true}, session: &acpSession{
-			id: s.nextSessionID(), workDir: root.workDir,
-			toolCalls: make(map[string]string), toolCallsByID: make(map[string]string),
-			lastToolInput: make(map[string]json.RawMessage),
-		}}
-		root.subagents[key] = child
 		title := strings.TrimSpace(event.Description)
 		if title == "" {
 			title = key
 		}
-		s.emitUpdate(parentID, SessionUpdate{SessionUpdate: "subagent_update", SessionID: child.session.id,
-			Title: title, Description: event.Description, Capabilities: &SubagentCapabilities{}})
+		child = s.announceSubagent(root, key, parentID, event.RunID, title, event.Description)
 	}
 	if !fresh && kind == "started" {
 		// A resumed conversation has a new run. Do not revive completed runs when
@@ -119,6 +112,20 @@ func (s *Server) emitSubagentProgress(root *acpSession, event tool.AgentProgress
 		child.finished = true
 		s.emitSubagentState(child, state)
 	}
+}
+
+// announceSubagent is called with root.subagentMu held. Identity is stable across
+// session/load and process restarts, and is scoped to the ACP root conversation.
+func (s *Server) announceSubagent(root *acpSession, key, parentID, runID, title, description string) *acpSubagent {
+	child := &acpSubagent{parentID: parentID, runID: runID, runs: map[string]bool{runID: true}, session: &acpSession{
+		id: root.id + "/agent/" + key, workDir: root.workDir,
+		toolCalls: make(map[string]string), toolCallsByID: make(map[string]string),
+		lastToolInput: make(map[string]json.RawMessage),
+	}}
+	root.subagents[key] = child
+	s.emitUpdate(parentID, SessionUpdate{SessionUpdate: "subagent_update", SessionID: child.session.id,
+		Title: title, Description: description, Capabilities: &SubagentCapabilities{}})
+	return child
 }
 
 func (s *Server) emitSubagentState(child *acpSubagent, state *SubagentState) {

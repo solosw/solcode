@@ -435,17 +435,18 @@ func (g *generator) generateIsolated(ctx context.Context, req organizer.Generate
 		"ctx":        g.contextSize(),
 	})
 	resp, err := CallNativeWorker(ctx, WorkerRequest{
-		Op:          "generate",
-		ModelPath:   g.cfg.ModelPath,
-		LibDir:      ResolveLibraryDir(g.cfg.LibDir),
-		ContextSize: g.contextSize(),
-		Threads:     g.cfg.Threads,
-		GPULayers:   g.cfg.GPULayers,
-		System:      req.System,
-		User:        req.User,
-		Grammar:     req.Grammar,
-		MaxTokens:   req.MaxTokens,
-		Temperature: req.Temperature,
+		RequireComplete: req.RequireComplete,
+		Op:              "generate",
+		ModelPath:       g.cfg.ModelPath,
+		LibDir:          ResolveLibraryDir(g.cfg.LibDir),
+		ContextSize:     g.contextSize(),
+		Threads:         g.cfg.Threads,
+		GPULayers:       g.cfg.GPULayers,
+		System:          req.System,
+		User:            req.User,
+		Grammar:         req.Grammar,
+		MaxTokens:       req.MaxTokens,
+		Temperature:     req.Temperature,
 	})
 	if err != nil {
 		LogNativeErr("generate_isolated_fail", err, map[string]any{"exit": resp.Exit})
@@ -534,6 +535,9 @@ func (g *generator) generateInProcess(ctx context.Context, req organizer.Generat
 		maxPrompt = 64
 	}
 	if len(tokens) > maxPrompt {
+		if req.RequireComplete {
+			return "", fmt.Errorf("yzma: summary prompt exceeds context budget; source preserved")
+		}
 		// Keep the tail (user payload / transcript end) which usually carries
 		// the durable facts; drop the leading system preamble tokens first.
 		tokens = tokens[len(tokens)-maxPrompt:]
@@ -573,12 +577,14 @@ func (g *generator) generateInProcess(ctx context.Context, req organizer.Generat
 	}
 
 	// Generation: one sampled token per batch.
+	complete := false
 	for decoded := 0; decoded < maxTokens; decoded++ {
 		if err := ctx.Err(); err != nil {
 			return out.String(), err
 		}
 		next := llama.SamplerSample(smpl, g.ctx, -1)
 		if next == llama.TokenNull || llama.VocabIsEOG(g.vocab, next) {
+			complete = true
 			break
 		}
 		if n := llama.TokenToPiece(g.vocab, next, pieceBuf, 0, false); n > 0 {
@@ -595,6 +601,9 @@ func (g *generator) generateInProcess(ctx context.Context, req organizer.Generat
 			LogNativeErr("organizer_decode", err, map[string]any{"decoded": decoded})
 			return out.String(), fmt.Errorf("yzma: decode: %w", err)
 		}
+	}
+	if req.RequireComplete && !complete {
+		return "", fmt.Errorf("yzma: summary output truncated at token limit")
 	}
 	LogNative("generate_ok", map[string]any{"chars": out.Len(), "prompt_tokens": len(tokens)})
 	return out.String(), nil

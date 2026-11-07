@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"github.com/solosw/solcode/internal/agent"
+	"github.com/solosw/solcode/internal/contextcompression"
 	"time"
 )
 
@@ -27,6 +28,7 @@ type TerminalRunner interface {
 }
 
 type UseContext struct {
+	ContextControl func(context.Context, string, contextcompression.Request) (any, error)
 	// Delegation inherits this runtime ceiling, never the parent snapshot.
 	AllowedTools   []string
 	PermissionMode string

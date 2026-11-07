@@ -47,6 +47,9 @@ func (g *APIGenerator) Generate(ctx context.Context, req GenerateRequest) (strin
 	if err != nil {
 		return "", fmt.Errorf("organizer api: %w", err)
 	}
+	if response.StopReason == sdk.StopReasonMaxTokens {
+		return "", fmt.Errorf("organizer api: output truncated at token limit")
+	}
 	var text strings.Builder
 	for _, block := range response.Content {
 		if block.Type == "text" {

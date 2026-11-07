@@ -437,10 +437,11 @@
               <span class="badge" id="memory-organizer-state"></span>
             </div>
             <p class="settings-hint">
-              Summarizes finished sessions and extracts long-term memory using a local GGUF
+              Generates /compact session summaries and extracts long-term memory using a local GGUF
               model or an independently configured API. API mode sends session content to
               that endpoint; local mode never falls back to an API. While enabled, the
-              chat model's own memory-writing tools are disabled.
+              chat model's own memory-writing tools are disabled. The compress tool uses a summary
+              written by the current AI and does not call this backend.
             </p>
             <div class="settings-list">
               <label class="settings-row settings-toggle-row">

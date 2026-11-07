@@ -22,7 +22,7 @@ func (e *Engine) RunSession(ctx context.Context, req agent.SessionRequest) agent
 	if req.Config.Model == "" {
 		req.Config.Model = e.config.ModelName
 	}
-	run := RunRequest{AgentConfig: req.Config, SessionID: string(req.Config.ID), Messages: req.Snapshot.Messages, WorkingSet: req.Snapshot.WorkingSet, Checkpoint: req.Save, SkipPrompt: req.Config.Attempt > 1 && len(req.Snapshot.Messages) > 0}
+	run := RunRequest{AgentConfig: req.Config, SessionID: string(req.Config.ID), Messages: req.Snapshot.Messages, WorkingSet: req.Snapshot.WorkingSet, Compression: req.Snapshot.Compression, Checkpoint: req.Save, SkipPrompt: req.Config.Attempt > 1 && len(req.Snapshot.Messages) > 0}
 	// Never use the main session's app-bound compaction callback for a child.
 	run.CompactMessages = func(ctx context.Context, messages []sdk.MessageParam) ([]sdk.MessageParam, error) {
 		budget := int(e.config.MaxContextTokens / 2)
@@ -50,7 +50,7 @@ func (e *Engine) RunSession(ctx context.Context, req agent.SessionRequest) agent
 		result.Messages = req.Snapshot.Messages
 	}
 	if req.Save != nil {
-		if err := req.Save(agent.Checkpoint{Snapshot: agent.Snapshot{Messages: result.Messages}, Stage: "run_end"}); err != nil {
+		if err := req.Save(agent.Checkpoint{Snapshot: agent.Snapshot{Messages: result.Messages, Compression: result.Compression}, Stage: "run_end"}); err != nil {
 			result.AgentResult.Error = fmt.Sprintf("persist subagent history: %v", err)
 			result.AgentResult.NoRetry = true
 		}
@@ -86,7 +86,11 @@ func (req RunRequest) saveCheckpoint(stage string, messages []sdk.MessageParam, 
 	if req.Checkpoint == nil {
 		return nil
 	}
-	cp := agent.Checkpoint{Snapshot: agent.Snapshot{Messages: messages}, Usage: usage, UsageKnown: true, Model: req.AgentConfig.Model, Stage: stage, Compacted: compacted}
+	state := req.Compression.Clone()
+	if err := state.Sync(messages); err != nil {
+		return err
+	}
+	cp := agent.Checkpoint{Snapshot: agent.Snapshot{Messages: messages, Compression: state}, Usage: usage, UsageKnown: true, Model: req.AgentConfig.Model, Stage: stage, Compacted: compacted}
 	if w != nil {
 		cp.WorkingSet = w.Snapshot()
 	}

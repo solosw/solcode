@@ -480,7 +480,7 @@ func selectFork(cfg AgentConfig) (Snapshot, error) {
 				}
 			}
 		}
-		return windowFork(Snapshot{Messages: messages[start:], WorkingSet: cfg.ParentContext.WorkingSet}, cfg.MaxContextTokens), nil
+		return windowFork(Snapshot{Messages: messages[start:], WorkingSet: cfg.ParentContext.WorkingSet, Compression: cfg.ParentContext.Compression.Fork(messages[start:])}, cfg.MaxContextTokens), nil
 	default:
 		return Snapshot{}, fmt.Errorf("invalid fork_context: %s", cfg.ForkContext)
 	}

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/solosw/solcode/internal/contextcompression"
 	"strings"
 	"time"
 
@@ -55,8 +56,9 @@ func (u *TokenUsage) Add(v TokenUsage) {
 }
 
 type Snapshot struct {
-	Messages   []sdk.MessageParam
-	WorkingSet json.RawMessage
+	Compression *contextcompression.State `json:"compression,omitempty"`
+	Messages    []sdk.MessageParam
+	WorkingSet  json.RawMessage
 }
 
 // Checkpoint describes the entire active context, not the archival transcript.
@@ -108,6 +110,7 @@ type SessionEvent struct {
 // the immutable ForkID snapshot. Compaction changes indexes, never deletes audit
 // history. Inherited history is stored once and never copied into child files.
 type Record struct {
+	Compression *contextcompression.State `json:"compression,omitempty"`
 	// ForkParentSessionID stays fixed when another project session resumes us.
 	// Empty legacy records fall back to Config.ParentSessionID until resumed.
 	ForkParentSessionID string      `json:"fork_parent_session_id,omitempty"`
@@ -152,6 +155,11 @@ func (r *Record) Active(fork Snapshot) (Snapshot, error) {
 			return Snapshot{}, fmt.Errorf("invalid context reference %d", ref)
 		}
 		out.Messages = append(out.Messages, source[index])
+	}
+	if r.Compression != nil {
+		out.Compression = r.Compression.Clone()
+	} else {
+		out.Compression = fork.Compression.Fork(out.Messages)
 	}
 	return out, nil
 }
@@ -219,6 +227,9 @@ func (r *Record) apply(cp Checkpoint, fork Snapshot) error {
 		r.MessageTimestamps = append(r.MessageTimestamps, time.Now())
 	}
 	r.Context = refs
+	if cp.Compression != nil {
+		r.Compression = cp.Compression.Clone()
+	}
 	if len(cp.WorkingSet) != 0 && !bytes.Equal(cp.WorkingSet, r.WorkingSet) {
 		r.WorkingSet = append(json.RawMessage(nil), cp.WorkingSet...)
 	}

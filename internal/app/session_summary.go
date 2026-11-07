@@ -2,8 +2,6 @@ package app
 
 import "encoding/json"
 
-const sessionSummaryMaxTokens = 4096
-
 func sessionSummaryPrompt() string {
 	return `Create a coding-agent continuation handoff for the next agent, not a chronological activity log. Return only the summary, with no preamble or analysis.
 
@@ -13,7 +11,7 @@ Merge the previous summary with the transcript into one self-contained, up-to-da
 
 Distinguish done, in_progress, and pending work, and distinguish attempted actions from successful actions and unverified results. An execution acknowledgement, submitted request, or running_in_background notice is not completion. Preserve important asynchronous agent_id and run_id values with their latest known status and any outstanding wait or result retrieval. Preserve important durable observation references (observation_id or stored paths) when present so the next agent can retrieve omitted evidence; do not fabricate references or reconstruct unavailable output. A result_ref is invocation-local, not a durable recovery handle: never imply it can be fetched after that invocation ends.
 
-Keep exact relevant file paths, tool names, symbols, commands, and validation outcomes. State what changed, what was merely inspected or attempted, what failed and why, and what remains unverified. Prefer current active work over obsolete history and avoid repeating facts across sections. Aim for roughly 1200-2500 tokens when warranted by the source material, but always stay within the output budget (4096 tokens); shorter is better for a small session. If space is tight, compress stale history first and retain the active request, blockers, current work, and next step. Do not output raw JSON, raw logs, large code blocks, or analysis.
+Keep exact relevant file paths, tool names, symbols, commands, and validation outcomes. State what changed, what was merely inspected or attempted, what failed and why, and what remains unverified. Prefer current active work over obsolete history and avoid repeating facts across sections. Stay within the configured output budget; prioritize a complete, compact handoff over length. Preserve stable mN/bN context references when present so decompress can recover original evidence. If space is tight, compress stale history first and retain the active request, blockers, current work, and next step. Do not output raw JSON, raw logs, large code blocks, or analysis.
 
 Use exactly the following eight English Markdown ## headings, in this order, without renaming or adding headings. Write the body in the user's language, preserving literal paths, symbols, identifiers, and required exact wording. For an empty section write None; for unavailable facts write Unknown.
 

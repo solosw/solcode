@@ -904,11 +904,11 @@ Organizer: 用户要求使用开源方案进行智能模型路由，并询问是
 
 Organizer: 用户要求使用开源方案进行智能模型路由，并询问是否可将每次路由结果存储到数据库以优化后续任务。 (tags: optional)
 
-## 2026-11-05 23:04:17 · session mid-run · turn -1 · importance 0.90
+## 2026-11-07 17:48:43 · session mid-run · turn -1 · importance 0.90
 - keywords: organizer, archival, retrieval, terms, database, plan_mode, codegraph, external-index, external_root, solosw/solcode, GitHub Actions, macOS
-- memory_ids: mem_21337d602406a50a, mem_38658cf5815a026f, mem_7c8798afa97850c5, mem_90b642519d37c0a6, mem_af37d2a653873c59, mem_efc0dbb066a67315, mem_f77b0aab13fe6028
+- memory_ids: mem_21337d602406a50a, mem_38658cf5815a026f, mem_7c8798afa97850c5, mem_90b642519d37c0a6, mem_af37d2a653873c59, mem_be813a29a3c43cf1, mem_efc0dbb066a67315, mem_f77b0aab13fe6028
 
-Organizer: 用户要求优化子代理模型配置，移除 AI 选模路径，增加用户默认配置和独立 API 配置支持。已实现：移除 FastModel 参数，保留 Subagents.Model 和 role.Model 配置；为 Organizer 增加 OrganizerRuntimeAPI 和 OrganizerRuntimeYzma 两种运行时配置；将 FastModel 和 SubagentModel 映射为 SubagentModelName；将 FastModel 和 Subagent
+Organizer: 用户要求参考 billion-context 优化 SolCode 上下文处理，明确纠正方向：ReadObservation 已弃用，优先进行计划而非实现。用户已提供完整八部分中文计划，包含 Goal、Current State、Approach、Architecture、Implementation Plan、Test、Open Questions、Critical Files。当前应维持只读研究/规划，不继续实现。计划重点是当前工作的 AI 通过 compress 提交区
 
 ## 2026-10-15 21:28:18 · session acp-1792052774500238000-1 · turn 7 · importance 0.50
 - keywords: organizer, archival, retrieval, terms, GGUF, turn, todolist, embedding
@@ -1393,3 +1393,88 @@ Organizer: 用户要求：“优化子代理，子代理不再由 ai 指定模�
 - memory_ids: mem_e131c97f84819e98
 
 Organizer: 用户要求落实父子 Agent 并行问答机制，包括 AskParent、回答投递、等待状态和事件唤醒调度。预期：主 Agent 委派后等待事件；子 Agent 缺信息时挂起并提问；主 Agent 串行决策、精确回复对应请求；该子 Agent 在原 run 中继续，其他子 Agent 不受影响，循环直至完成。上一项用户明确要求的上下文继承策略已实现但尚未提交：默认继承主 Agent 完整已完成上下文；超过子模型容量 80% 时截取近期窗口至约 40%；保证工具调用/结果配对。问答
+
+## 2026-11-07 16:33:35 · session acp-1793790580996458000-1 · turn 7 · importance 0.40
+- keywords: turn, todolist
+- files: README.md, cmd/solcode/main.go, docs/persistent-subagents.md, examples/settings/README.md, examples/settings/settings.models.api.example.json, internal/acp/subagents.go, internal/agent/coordinator.go, internal/agent/fork_parallel_test.go, internal/agent/fork_window.go, internal/agent/fork_window_test.go, internal/agent/lifecycle.go, internal/agent/parent_requests.go, internal/agent/parent_requests_test.go, internal/agent/parent_wait.go, internal/agent/session_store.go, internal/agent/session_store_test.go, internal/agent/state_view.go, internal/agentsession/parent_recovery_test.go, internal/app/app.go, internal/app/goal.go, internal/app/live_model.go, internal/app/organizer_api_test.go, internal/app/organizer_bridge.go, internal/config/config.go, internal/config/local_models.go, internal/config/model_backends_test.go, internal/config/model_context.go, internal/config/model_context_test.go, internal/embedding/api_test.go, internal/engine/background_tools.go, internal/engine/engine.go, internal/engine/live_model.go, internal/engine/model_context.go, internal/engine/model_context_test.go, internal/engine/parent_collaboration_test.go, internal/engine/persistent.go, internal/engine/task_async_test.go, internal/engine/tool_executor.go, internal/engine/tool_selector.go, internal/organizer/api.go
+
+Turn memory: https://github.com/ranxianglei/billion-context 查看这个项目。来优化上下文处理策略
+
+## 2026-11-07 16:38:25 · session acp-1793790580996458000-1 · turn 8 · importance 0.40
+- keywords: todolist, todo-write, turn
+- files: README.md, cmd/solcode/main.go, docs/persistent-subagents.md, examples/settings/README.md, examples/settings/settings.models.api.example.json, internal/acp/subagents.go, internal/agent/coordinator.go, internal/agent/fork_parallel_test.go, internal/agent/fork_window.go, internal/agent/fork_window_test.go, internal/agent/lifecycle.go, internal/agent/parent_requests.go, internal/agent/parent_requests_test.go, internal/agent/parent_wait.go, internal/agent/session_store.go, internal/agent/session_store_test.go, internal/agent/state_view.go, internal/agentsession/parent_recovery_test.go, internal/app/app.go, internal/app/goal.go, internal/app/live_model.go, internal/app/organizer_api_test.go, internal/app/organizer_bridge.go, internal/config/config.go, internal/config/local_models.go, internal/config/model_backends_test.go, internal/config/model_context.go, internal/config/model_context_test.go, internal/embedding/api_test.go, internal/engine/background_tools.go, internal/engine/engine.go, internal/engine/live_model.go, internal/engine/model_context.go, internal/engine/model_context_test.go, internal/engine/parent_collaboration_test.go, internal/engine/persistent.go, internal/engine/task_async_test.go, internal/engine/tool_executor.go, internal/engine/tool_selector.go, internal/organizer/api.go
+- todos: research-context|研究 billion-context 与现有上下文处理链路|completed|valid|done; implement-context|实现适合 SolCode 的上下文策略优化|in_progress|valid|open; verify-context|补充测试、验证并记录设计取舍|pending|valid|open
+
+Turn memory: 继续
+
+## 2026-11-07 16:48:34 · session acp-1793790580996458000-1 · turn 9 · importance 0.90
+- keywords: todolist, todo-write, turn, organizer, archival, parallel, parent, context, inheritance, wait, timeout
+- files: README.md, cmd/solcode/main.go, docs/persistent-subagents.md, examples/settings/README.md, examples/settings/settings.models.api.example.json, internal/acp/subagents.go, internal/agent/coordinator.go, internal/agent/fork_parallel_test.go, internal/agent/fork_window.go, internal/agent/fork_window_test.go, internal/agent/lifecycle.go, internal/agent/parent_requests.go, internal/agent/parent_requests_test.go, internal/agent/parent_wait.go, internal/agent/session_store.go, internal/agent/session_store_test.go, internal/agent/state_view.go, internal/agentsession/parent_recovery_test.go, internal/app/app.go, internal/app/goal.go, internal/app/live_model.go, internal/app/organizer_api_test.go, internal/app/organizer_bridge.go, internal/config/config.go, internal/config/local_models.go, internal/config/model_backends_test.go, internal/config/model_context.go, internal/config/model_context_test.go, internal/embedding/api_test.go, internal/engine/background_tools.go, internal/engine/engine.go, internal/engine/live_model.go, internal/engine/model_context.go, internal/engine/model_context_test.go, internal/engine/parent_collaboration_test.go, internal/engine/persistent.go, internal/engine/task_async_test.go, internal/engine/tool_executor.go, internal/engine/tool_selector.go, internal/organizer/api.go
+- memory_ids: mem_e131c97f84819e98
+
+Organizer: 用户要求落实父子 Agent 并行问答机制，包括 AskParent、回答投递、等待状态和事件唤醒调度。预期：主 Agent 委派后等待事件；子 Agent 缺信息时挂起并提问；主 Agent 串行决策、精确回复对应请求；该子 Agent 在原 run 中继续，其他子 Agent 不受影响，循环直至完成。上一项用户明确要求的上下文继承策略已实现但尚未提交：默认继承主 Agent 完整已完成上下文；超过子模型容量 80% 时截取近期窗口至约 40%；保证工具调用/结果配对。问答
+
+## 2026-11-07 16:55:45 · session acp-1793790580996458000-1 · turn 10 · importance 0.40
+- keywords: organizer, archival, context, turn, todolist
+- files: README.md, cmd/solcode/main.go, docs/persistent-subagents.md, examples/settings/README.md, examples/settings/settings.models.api.example.json, internal/acp/subagents.go, internal/agent/coordinator.go, internal/agent/fork_parallel_test.go, internal/agent/fork_window.go, internal/agent/fork_window_test.go, internal/agent/lifecycle.go, internal/agent/parent_requests.go, internal/agent/parent_requests_test.go, internal/agent/parent_wait.go, internal/agent/session_store.go, internal/agent/session_store_test.go, internal/agent/state_view.go, internal/agentsession/parent_recovery_test.go, internal/app/app.go, internal/app/goal.go, internal/app/live_model.go, internal/app/organizer_api_test.go, internal/app/organizer_bridge.go, internal/config/config.go, internal/config/local_models.go, internal/config/model_backends_test.go, internal/config/model_context.go, internal/config/model_context_test.go, internal/embedding/api_test.go, internal/engine/background_tools.go, internal/engine/engine.go, internal/engine/live_model.go, internal/engine/model_context.go, internal/engine/model_context_test.go, internal/engine/parent_collaboration_test.go, internal/engine/persistent.go, internal/engine/task_async_test.go, internal/engine/tool_executor.go, internal/engine/tool_selector.go, internal/organizer/api.go
+- memory_ids: mem_be813a29a3c43cf1
+
+Turn memory: ## Goal
+对，**SolCode 已经能配置摘要所用的模型**。前一版计划把“由 AI 自主决定压缩”直接限定为“摘要只能由当前模型编写”，这个限制过严，应修正为：AI 决定压缩范围和时机，摘要既可以自己写，也可以交给用户配置的模型生成。
+
+## 2026-11-07 16:59:04 · session acp-1793790580996458000-1 · turn 11 · importance 0.40
+- keywords: turn, todolist
+- files: examples/settings/settings.models.api.example.json, internal/config/local_models.go, internal/config/model_backends_test.go, internal/config/model_context.go, internal/config/model_context_test.go, internal/embedding/api_test.go, internal/engine/background_tools.go, internal/engine/engine.go, internal/engine/live_model.go, internal/engine/model_context.go, internal/engine/model_context_test.go, internal/engine/parent_collaboration_test.go, internal/engine/persistent.go, internal/engine/task_async_test.go, internal/engine/tool_executor.go, internal/engine/tool_selector.go, internal/organizer/api.go, internal/organizer/api_test.go, internal/organizer/organizer.go, internal/session/compactor.go, internal/session/fold.go, internal/tool/parent.go, internal/tool/parent_test.go, internal/tool/subagent.go, internal/tool/subagent_context_test.go, internal/tool/subagent_model_config_test.go, internal/tool/subagent_roles.go, internal/tool/subagent_roles_test.go, internal/tool/task.go, internal/tool/task_agents.go, internal/tool/task_async.go, internal/tool/tool.go, internal/tui/model.go, internal/workflowui/server.go, internal/workflowui/settings_layout_test.go, internal/workflowui/settings_model_backends_test.go, internal/workflowui/settings_organizer_test.go, internal/workflowui/static/app.js, internal/workflowui/static/index.html, internal/workflowui/static/style.css
+
+Turn memory: ## Goal
+统一使用 **`memory.organizer` 作为会话压缩摘要、记忆整理与摘要提取的唯一模型配置**，去掉会话压缩单独选择模型的逻辑。
+四个上下文工具仍由当前 AI 调用，决定何时压缩、压缩哪些内容；需要模型生成摘要时，统一调用记忆整理模型。
+
+## 2026-11-07 17:14:59 · session acp-1793790580996458000-1 · turn 12 · importance 0.40
+- keywords: todolist, todo-write, turn
+- files: README.md, cmd/solcode/main.go, docs/persistent-subagents.md, examples/settings/README.md, examples/settings/settings.models.api.example.json, internal/acp/subagents.go, internal/agent/coordinator.go, internal/agent/fork_parallel_test.go, internal/agent/fork_window.go, internal/agent/fork_window_test.go, internal/agent/lifecycle.go, internal/agent/parent_requests.go, internal/agent/parent_requests_test.go, internal/agent/parent_wait.go, internal/agent/session_store.go, internal/agent/session_store_test.go, internal/agent/state_view.go, internal/agentsession/parent_recovery_test.go, internal/app/app.go, internal/app/goal.go, internal/app/live_model.go, internal/app/organizer_api_test.go, internal/app/organizer_bridge.go, internal/config/config.go, internal/config/local_models.go, internal/config/model_backends_test.go, internal/config/model_context.go, internal/config/model_context_test.go, internal/embedding/api_test.go, internal/engine/background_tools.go, internal/engine/engine.go, internal/engine/live_model.go, internal/engine/model_context.go, internal/engine/model_context_test.go, internal/engine/parent_collaboration_test.go, internal/engine/persistent.go, internal/engine/task_async_test.go, internal/engine/tool_executor.go, internal/engine/tool_selector.go, internal/organizer/api.go
+- todos: 1|核对工作树、上游压缩协议与当前接入点，清理本轮旧草稿|in_progress|invalid|open; 2|实现统一摘要后端与可持久化的上下文压缩内核|pending|valid|open; 3|接入四个上下文工具、运行循环及会话恢复|pending|valid|open; 4|完成回归验证、配置说明和上游归属文档|pending|invalid|open
+
+Turn memory: 开始实施吧
+
+## 2026-11-07 17:17:12 · session acp-1793790580996458000-1 · turn 13 · importance 0.40
+- keywords: turn, todolist
+- files: README.md, cmd/solcode/main.go, docs/persistent-subagents.md, examples/settings/README.md, examples/settings/settings.models.api.example.json, internal/acp/subagents.go, internal/agent/coordinator.go, internal/agent/fork_parallel_test.go, internal/agent/fork_window.go, internal/agent/fork_window_test.go, internal/agent/lifecycle.go, internal/agent/parent_requests.go, internal/agent/parent_requests_test.go, internal/agent/parent_wait.go, internal/agent/session_store.go, internal/agent/session_store_test.go, internal/agent/state_view.go, internal/agentsession/parent_recovery_test.go, internal/app/app.go, internal/app/goal.go, internal/app/live_model.go, internal/app/organizer_api_test.go, internal/app/organizer_bridge.go, internal/config/config.go, internal/config/local_models.go, internal/config/model_backends_test.go, internal/config/model_context.go, internal/config/model_context_test.go, internal/embedding/api_test.go, internal/engine/background_tools.go, internal/engine/engine.go, internal/engine/live_model.go, internal/engine/model_context.go, internal/engine/model_context_test.go, internal/engine/parent_collaboration_test.go, internal/engine/persistent.go, internal/engine/task_async_test.go, internal/engine/tool_executor.go, internal/engine/tool_selector.go, internal/organizer/api.go
+- todos: 1|核对工作树、上游压缩协议与当前接入点，清理本轮旧草稿|in_progress|valid|open; 2|实现统一摘要后端与可持久化的上下文压缩内核|pending|valid|open; 3|接入四个上下文工具、运行循环及会话恢复|pending|valid|open; 4|完成回归验证、配置说明和上游归属文档|pending|valid|open
+
+Turn memory: **上游 `compress` 工具执行过程中，不会再调用模型生成摘要。摘要是当前 AI 在调用工具时直接写进参数里的。**
+具体流程是：
+1. 当前 AI 阅读上下文，决定压缩哪一段。
+2. **当前 AI 自己编写摘要**，将区间引用和摘要一起传给 `compress`。
+3. 工具解析参数，校验区间、受保护消息和工具调用配对等边界。
+4. 内核记录压缩块、覆盖关系及层级信息，保留可恢复的原文。
+5. 后续请求在对应位置渲染摘要，未修改部分保持稳定。
+所以，“压缩用到模型”要分两层看：
+| 环节 | 是否用到模型 |
+|---|---|
+| 选择压缩内容、编写摘要、发起工具调用 | 是，由当前工作的 AI 完成 |
+| `compress` 工具内部校验、记录状态、替换活动视图 | **不需要额外模型调用** |
+上游 `kernel/src/compress-tools.ts` 定义工具参数与提示，`compress.ts` 处理压缩状态，`prune.ts` 负责渲染压缩后的视图。**不是把原文交给 `compress`，再由工具调用一个摘要模型。**
+我前面提出“`compress` 可以委托配置的记忆整理模型生成摘要”，属于额外扩展，并非上游原有机制。这一点我之前没有说清楚。按你最初要求移植它的策略，应该保留 **AI 自己写摘要、工具确定性执行** 的方式；`memory.organizer` 只涉及另行生成摘要的旧 `/compact` 和记忆整理路径。
+目前尚未接入新的摘要后端或四个工具，代码操作只清理了之前方向错误的 `fold.go` 草稿及其配套引用。
+
+## 2026-11-07 17:54:17 · session acp-1793790580996458000-1 · turn 14 · importance 0.90
+- keywords: todolist, todo-write, turn, organizer, archival, compression, context
+- files: README.md, cmd/solcode/main.go, docs/context-compression.md, docs/persistent-subagents.md, examples/settings/README.md, examples/settings/settings.models.api.example.json, internal/acp/subagents.go, internal/agent/coordinator.go, internal/agent/fork_parallel_test.go, internal/agent/fork_window.go, internal/agent/fork_window_test.go, internal/agent/lifecycle.go, internal/agent/parent_requests.go, internal/agent/parent_requests_test.go, internal/agent/parent_wait.go, internal/agent/session_store.go, internal/agent/session_store_test.go, internal/agent/state_view.go, internal/agentsession/parent_recovery_test.go, internal/app/app.go, internal/app/app_compaction_test.go, internal/app/goal.go, internal/app/live_model.go, internal/app/organizer_api_test.go, internal/app/organizer_bridge.go, internal/app/session_summary.go, internal/app/session_summary_test.go, internal/app/shared_summary_test.go, internal/config/config.go, internal/config/local_models.go, internal/config/model_backends_test.go, internal/config/model_context.go, internal/config/model_context_test.go, internal/contextcompression/fork.go, internal/contextcompression/handoff.go, internal/contextcompression/protection.go, internal/contextcompression/read.go, internal/contextcompression/retry_test.go, internal/contextcompression/state.go, internal/contextcompression/state_test.go
+- memory_ids: mem_be813a29a3c43cf1
+
+Organizer: 用户要求参考 billion-context 移植 AI 自主控制上下文的压缩策略，提供 compress、decompress、search_context、acp_status，保持缓存前缀稳定，不依赖已弃用的 ReadObservation。用户已明确授权实施（“开始实施吧”，随后“好的，继续实现”）。最新澄清已接受：compress 的摘要由当前工作的 AI 写进参数，工具内部不额外调用模型。旧 /compact 和另行生成会话摘要则统一使用记忆整理与摘要提取的 记忆
+
+## 2026-11-07 18:08:34 · session acp-1793790580996458000-1 · turn 15 · importance 0.90
+- keywords: todolist, todo-write, turn, organizer, archival, compression, context
+- files: README.md, cmd/solcode/main.go, docs/context-compression.md, docs/persistent-subagents.md, examples/settings/README.md, examples/settings/settings.models.api.example.json, internal/acp/subagents.go, internal/agent/coordinator.go, internal/agent/fork_parallel_test.go, internal/agent/fork_window.go, internal/agent/fork_window_test.go, internal/agent/lifecycle.go, internal/agent/parent_requests.go, internal/agent/parent_requests_test.go, internal/agent/parent_wait.go, internal/agent/session_store.go, internal/agent/session_store_test.go, internal/agent/state_view.go, internal/agentsession/parent_recovery_test.go, internal/app/app.go, internal/app/app_compaction_test.go, internal/app/context_search_test.go, internal/app/goal.go, internal/app/jev_test.go, internal/app/live_model.go, internal/app/memory_writer.go, internal/app/organizer_api_test.go, internal/app/organizer_bridge.go, internal/app/session_summary.go, internal/app/session_summary_test.go, internal/app/shared_summary_test.go, internal/config/config.go, internal/config/local_models.go, internal/config/model_backends_test.go, internal/config/model_context.go, internal/config/model_context_test.go, internal/contextcompression/fork.go, internal/contextcompression/handoff.go, internal/contextcompression/protection.go, internal/contextcompression/read.go
+- memory_ids: mem_be813a29a3c43cf1
+
+Organizer: 用户要求参考 billion-context 移植 AI 自主控制上下文的压缩策略，提供 compress、decompress、search_context、acp_status，保持缓存前缀稳定，不依赖已弃用的 ReadObservation。用户已明确授权实施（“开始实施吧”，随后“好的，继续实现”）。最新澄清已接受：compress 的摘要由当前工作的 AI 写进参数，工具内部不额外调用模型。旧 /compact 和另行生成会话摘要则统一使用记忆整理与摘要提取的 记忆
+
+## 2026-11-07 18:23:40 · session acp-1793790580996458000-1 · turn 16 · importance 0.90
+- keywords: todolist, todo-write, turn, organizer, archival, compression, context
+- files: README.md, cmd/solcode/main.go, docs/acp-subagents.md, docs/context-compression.md, docs/persistent-subagents.md, examples/settings/README.md, examples/settings/settings.models.api.example.json, internal/acp/server.go, internal/acp/subagent_replay.go, internal/acp/subagent_replay_test.go, internal/acp/subagents.go, internal/agent/coordinator.go, internal/agent/fork_parallel_test.go, internal/agent/fork_window.go, internal/agent/fork_window_test.go, internal/agent/lifecycle.go, internal/agent/parent_requests.go, internal/agent/parent_requests_test.go, internal/agent/parent_wait.go, internal/agent/session_store.go, internal/agent/session_store_test.go, internal/agent/state_view.go, internal/agentsession/parent_recovery_test.go, internal/app/app.go, internal/app/app_compaction_test.go, internal/app/context_search_test.go, internal/app/goal.go, internal/app/jev_test.go, internal/app/live_model.go, internal/app/memory_writer.go, internal/app/organizer_api_test.go, internal/app/organizer_bridge.go, internal/app/session_summary.go, internal/app/session_summary_test.go, internal/app/shared_summary_test.go, internal/config/config.go, internal/config/local_models.go, internal/config/model_backends_test.go, internal/config/model_context.go, internal/config/model_context_test.go
+- memory_ids: mem_be813a29a3c43cf1
+
+Organizer: 用户要求参考 billion-context 移植 AI 自主控制上下文的压缩策略，提供 compress、decompress、search_context、acp_status，保持缓存前缀稳定，不依赖已弃用的 ReadObservation。用户已明确授权实施（“开始实施吧”，随后“好的，继续实现”）。最新澄清已接受：compress 的摘要由当前工作的 AI 写进参数，工具内部不额外调用模型。旧 /compact 和另行生成会话摘要则统一使用记忆整理与摘要提取的 记忆

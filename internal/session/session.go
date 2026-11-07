@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/solosw/solcode/internal/contextcompression"
 	"strings"
 	"sync"
 	"time"
@@ -54,6 +55,7 @@ const (
 )
 
 type Session struct {
+	Compression *contextcompression.State `json:"compression,omitempty"`
 	// Subagent is opaque coordinator metadata; messages use the normal session transcript.
 	Subagent          json.RawMessage    `json:"subagent,omitempty"`
 	Metadata          Metadata           `json:"metadata"`

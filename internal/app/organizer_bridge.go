@@ -66,6 +66,18 @@ func newOrganizerRuntime(cfg config.Config) *organizerRuntime {
 	return &organizerRuntime{org: org, inflight: map[string]bool{}}
 }
 
+type organizerSessionSummaryWriter struct {
+	runtime     *organizerRuntime
+	contextSize int
+}
+
+func (w organizerSessionSummaryWriter) Summarize(ctx context.Context, previous, transcript string) (string, error) {
+	if w.runtime == nil || w.runtime.org == nil {
+		return "", organizer.ErrUnavailable
+	}
+	return w.runtime.org.Summarize(ctx, sessionSummaryPrompt(), previous, transcript, w.contextSize)
+}
+
 func (r *organizerRuntime) Close() error {
 	if r == nil || r.org == nil {
 		return nil

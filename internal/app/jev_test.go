@@ -251,7 +251,7 @@ func TestJevGuardrailOnlyGuardsMutatingTools(t *testing.T) {
 			BaseURL: server.URL, APIKey: "k", HTTPClient: server.Client(),
 		})),
 	}}
-	for _, name := range []string{"View", "Grep", "Glob", "LS", "ReadMemory"} {
+	for _, name := range []string{"View", "Grep", "Glob", "LS", "search_context"} {
 		if message := guard.CheckToolCall(context.Background(), name, json.RawMessage(`{}`)); message != "" {
 			t.Fatalf("tool %s should not be guarded, got %q", name, message)
 		}

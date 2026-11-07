@@ -52,6 +52,13 @@ Duplicate terminal events and events from superseded runs are ignored.
 - Permission, client filesystem, and [client terminal](acp-terminals.md) requests
   remain attached to the root session. Terminal content references are routed
   to the owning child tool card.
-- Child associations are live, in-process state; `session/load` does not replay
-  historical child sessions or restore their ACP IDs across agent restarts.
+- With session persistence enabled, `session/load` restores child discovery,
+  owned conversation history and state from the saved subagent records. Child ACP
+  IDs are stable (`<root-session-id>/agent/<agent-id>`), and parents are announced
+  before nested children. Only runs belonging to the loaded root conversation
+  are replayed, including when an agent was later reused by another session.
+- Inherited parent snapshots are not replayed as child messages. Loading never
+  starts a worker or executes a historical tool call. Unclaimed saved running
+  states are reported as interrupted (`idle` with an error) after a restart.
+  Clients without the negotiated subagent capability keep the legacy root cards.
 - Delegation policy is unchanged: this does not enable nested subagent creation.

@@ -29,6 +29,8 @@ var ErrUnavailable = errors.New("local organizer model is unavailable")
 
 // GenerateRequest is one text-generation request handed to a LocalGenerator.
 type GenerateRequest struct {
+	// RequireComplete rejects input/output truncation for continuation summaries.
+	RequireComplete bool
 	// System is the instruction preamble.
 	System string
 	// User is the state/transcript payload.

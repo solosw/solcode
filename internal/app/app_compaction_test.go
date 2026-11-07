@@ -381,12 +381,18 @@ func TestCompactSessionSkipsAISummaryWhenMaskedHistoryIsUnder50Percent(t *testin
 	}
 }
 
+type testHandoffWriter struct{}
+
+func (testHandoffWriter) Summarize(_ context.Context, previous, transcript string) (string, error) {
+	return conciseSessionSummary(transcript, previous), nil
+}
+
 func TestCompactSessionPersistsOnlyConciseSummary(t *testing.T) {
 	cfg := config.Default()
 	cfg.MaxContextTokens = 100
 	cfg.Memory.CompactionTriggerPercent = 1
 	cfg.Memory.CompactionTargetPercent = 1
-	application := &App{Config: cfg}
+	application := &App{Config: cfg, summaryWriter: testHandoffWriter{}}
 	current := session.NewSession("named", t.TempDir(), cfg.Model)
 	current.Append(
 		sdk.NewUserMessage(sdk.NewTextBlock("implement token validation")),
@@ -431,9 +437,10 @@ func TestManualCompactSessionPersistsSummaryAndUserMessage(t *testing.T) {
 		t.Fatalf("record change graph event: %v", err)
 	}
 	application := &App{
-		Config:      cfg,
-		Sessions:    session.NewManager(session.NewFileStore(cfg.Session.Dir), "main"),
-		ChangeGraph: graph,
+		Config:        cfg,
+		Sessions:      session.NewManager(session.NewFileStore(cfg.Session.Dir), "main"),
+		ChangeGraph:   graph,
+		summaryWriter: testHandoffWriter{},
 	}
 	current := session.NewSession("main", t.TempDir(), cfg.Model)
 	current.Append(
@@ -500,7 +507,7 @@ func TestCompactSessionCreatesSummaryWhenComposedContextTriggers(t *testing.T) {
 	cfg.Memory.CompactionTriggerPercent = 85
 	cfg.Memory.CompactionTargetPercent = 50
 	cfg.SystemPrompt = strings.Repeat("system context ", 80)
-	application := &App{Config: cfg}
+	application := &App{Config: cfg, summaryWriter: testHandoffWriter{}}
 	current := session.NewSession("named", t.TempDir(), cfg.Model)
 	current.Append(
 		sdk.NewUserMessage(sdk.NewTextBlock("preserve this user request")),

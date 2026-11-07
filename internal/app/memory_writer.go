@@ -80,6 +80,10 @@ func (a *App) ReadMemory(ctx context.Context, req tool.MemoryReadRequest) (tool.
 	allowCrossSession := a.sessionAllowsCrossSessionMemoryByID(ctx, sessionID)
 
 	result := tool.MemoryReadResult{CrossSessionAllowed: allowCrossSession}
+	visible := func(item memory.Item) bool {
+		otherSession := item.SourceSessionID != "" && item.SourceSessionID != sessionID
+		return !(otherSession && (!allowCrossSession || item.Tier == memory.TierWorking))
+	}
 
 	// Belief view: empty query or explicit "beliefs"/"current beliefs".
 	q := strings.ToLower(strings.TrimSpace(req.Query))
@@ -95,11 +99,11 @@ func (a *App) ReadMemory(ctx context.Context, req tool.MemoryReadRequest) (tool.
 			if herr != nil {
 				return tool.MemoryReadResult{}, herr
 			}
-			if hist.Active != nil && memoryMatchesKindScope(*hist.Active, req.Kind, req.Scope) {
+			if hist.Active != nil && visible(*hist.Active) && memoryMatchesKindScope(*hist.Active, req.Kind, req.Scope) {
 				result.Beliefs = append(result.Beliefs, fmt.Sprintf("[%s] %s", hist.Topic, hist.Active.Text))
 			}
 			for _, item := range hist.Items {
-				if !memoryMatchesKindScope(item, req.Kind, req.Scope) {
+				if !visible(item) || !memoryMatchesKindScope(item, req.Kind, req.Scope) {
 					continue
 				}
 				if len(result.Entries) >= req.Limit {
@@ -121,7 +125,7 @@ func (a *App) ReadMemory(ctx context.Context, req tool.MemoryReadRequest) (tool.
 			return result, nil
 		}
 		for _, b := range beliefs {
-			if !memoryMatchesKindScope(b.Item, req.Kind, req.Scope) {
+			if !visible(b.Item) || !memoryMatchesKindScope(b.Item, req.Kind, req.Scope) {
 				continue
 			}
 			line := strings.TrimSpace(b.Item.Text)

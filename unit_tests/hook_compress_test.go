@@ -162,7 +162,7 @@ func TestToolExecutor_PostToolUseCompressesPerTool(t *testing.T) {
 	// Built-in tool surface (text results). ViewImage is covered separately as image.
 	tools := []string{
 		"AskUser", "Bash", "Diff", "Edit", "Fetch", "Glob", "Grep", "LS",
-		"ModeSwitch", "MultiEdit", "MultiWrite", "Patch", "ReadMemory", "Skill",
+		"ModeSwitch", "MultiEdit", "MultiWrite", "Patch", "search_context", "Skill",
 		"Task", "TodoWrite", "ToolSearch", "View", "WebSearch", "Write", "WriteMemory",
 		"mcp__demo__echo",
 	}

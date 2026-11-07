@@ -14,6 +14,7 @@ const maxDynamicTools = 4
 // the agent loop and common coding edits. MCP tools and less common builtins
 // stay off the wire until lexical match, sticky use, or ToolSearch enables them.
 var coreToolNames = map[string]bool{
+	tool.CompressToolName: true, tool.DecompressToolName: true, tool.SearchContextToolName: true, tool.ACPStatusToolName: true,
 	tool.CodeGraphToolName:   true,
 	tool.AskUserToolName:     true,
 	tool.AskParentToolName:   true,
@@ -35,19 +36,20 @@ var coreToolNames = map[string]bool{
 	tool.ViewToolName:        true,
 	tool.WriteToolName:       true,
 	tool.WriteMemoryToolName: true,
-	tool.ReadMemoryToolName:  true,
 
 	// Session memory is written once at session end and searched later, so it
 	// cannot rely on lexical matching against the current turn's prompt.
 	tool.WriteSessionMemoryToolName: true,
-	tool.ReadSessionMemoryToolName:  true,
 }
 
 // hiddenFromModel tools stay registered for execution/tests but are never
 // exposed on the model tool list (including ToolSearch sticky enable).
 var hiddenFromModel = map[string]bool{
-	tool.WaitToolName:     true, // Bash timeout > 3m auto-waits; Wait is internal
-	tool.SubagentToolName: true, // Task orchestrates Subagent; not model-visible
+	tool.ReadMemoryToolName:        true, // legacy execution; search_context is the shared read entry point
+	tool.ReadSessionMemoryToolName: true,
+	tool.ReadObservationToolName:   true,
+	tool.WaitToolName:              true, // Bash timeout > 3m auto-waits; Wait is internal
+	tool.SubagentToolName:          true, // Task orchestrates Subagent; not model-visible
 }
 
 // SelectToolsForTurn keeps the full registry available for execution and

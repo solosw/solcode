@@ -19,9 +19,9 @@ func TestDefaultSystemPromptDocumentsMemoryTools(t *testing.T) {
 	for _, want := range []string{
 		"# Memory",
 		"WriteMemory",
-		"ReadMemory",
+		"search_context",
 		"WriteSessionMemory",
-		"ReadSessionMemory",
+		"source=\"session_memory\"",
 		".solcode/solcode.md",
 		"not interchangeable",
 		"Core:",
@@ -70,10 +70,10 @@ func TestWriteMemoryDescriptionCoversWhenAndWhatToSave(t *testing.T) {
 		"normal task-lifecycle", // proactive use
 		"before your final response",
 		"one to three focused entries",
-		"TodoWrite",      // where transient state belongs instead
-		"secrets",        // rejected content
+		"TodoWrite",       // where transient state belongs instead
+		"secrets",         // rejected content
 		"checkpoint turn", // write tags the current turn
-		"ReadMemory",     // how entries come back
+		"search_context",  // how entries come back
 	} {
 		if !strings.Contains(desc, want) {
 			t.Fatalf("WriteMemory description missing %q: %s", want, desc)
@@ -81,16 +81,16 @@ func TestWriteMemoryDescriptionCoversWhenAndWhatToSave(t *testing.T) {
 	}
 }
 
-func TestReadMemoryDescriptionCoversWhenToLookUp(t *testing.T) {
-	desc := tool.NewReadMemoryTool(nil).Description()
+func TestSearchContextDescriptionCoversWhenToLookUp(t *testing.T) {
+	desc := tool.NewSearchContextTool(nil, nil).Description()
 	for _, want := range []string{
 		"WriteMemory",    // pairing
 		"cross-session",  // visibility rule
 		"other-session",  // result labeling
 		"trust the code", // conflict resolution
 	} {
-		if !strings.Contains(desc, want) {
-			t.Fatalf("ReadMemory description missing %q: %s", want, desc)
+		if !strings.Contains(strings.ToLower(desc), strings.ToLower(want)) {
+			t.Fatalf("search_context description missing %q: %s", want, desc)
 		}
 	}
 }

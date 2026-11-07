@@ -359,15 +359,22 @@ func New(cfg config.Config, opts ...Option) (*App, error) {
 		if jev != nil && jev.decider != nil && jev.decider.Enabled() {
 			application.MemoryManager.WithDecider(jev.decider)
 		}
-		// Read path always available when memory is on. Write tools are hidden
-		// when the local organizer owns archival writes (Letta-style).
+		// Keep legacy read execution for existing calls; model discovery uses search_context.
+		// Write tools are hidden when the organizer owns archival writes.
 		registry.Register(tool.NewReadMemoryTool(application))
 		if !cfg.OrganizerEnabled() {
 			registry.Register(tool.NewWriteMemoryTool(application))
 		}
 	}
-	registry.Register(tool.NewReadObservationTool(application))
-	// Session recall log: Read always; Write only when the organizer is off.
+	registry.Register(tool.NewReadObservationTool(application)) // legacy execution only; hidden from the model
+	var contextMemory tool.MemoryReader
+	if cfg.Memory.Enabled {
+		contextMemory = application
+	}
+	for _, contextTool := range tool.ContextTools(contextMemory, application) {
+		registry.Register(contextTool)
+	}
+	// Legacy session recall execution; reads are exposed through search_context.
 	registry.Register(tool.NewReadSessionMemoryTool(application))
 	if !cfg.OrganizerEnabled() {
 		registry.Register(tool.NewWriteSessionMemoryTool(application))
@@ -736,6 +743,12 @@ func (a *App) ReloadFeatures(cfg config.Config, mcpFactory mcp.ClientFactory) er
 	} else {
 		a.MemoryManager = nil
 	}
+	var contextMemory tool.MemoryReader
+	if cfg.Memory.Enabled {
+		contextMemory = a
+	}
+	registry.Register(tool.ContextTools(contextMemory, a)...)
+	registry.Register(tool.NewReadSessionMemoryTool(a)) // legacy execution only
 	engineCfg := engineConfig(cfg, a.Client, a.Hooks, a.Tools, a.Permissions, a.onTextDelta, a.onThinkingDelta, a.onToolStart, a.onToolDone, a.emitUsage, a.onStatus, a.onAgentProgress, a.onAskUser, a.textFileSystem, a.queuedPrompts, newFileChangeRecorder(a.ChangeGraph), a.captureCheckpoint, a.uncaptureCheckpoint, a.listCheckpointPaths, a.fingerprintBaseline, a.compactMessagesMidRun)
 	engineCfg.TerminalRunner = a.terminalRunner
 	engineCfg.Router = jev.router()
@@ -922,7 +935,7 @@ func (a *App) RunPromptWithSession(ctx context.Context, sessionID, prompt, workD
 	unbindUsage := a.bindUsageSession(current)
 	defer unbindUsage()
 	sessionStateChanged := a.SanitizeLoadedSession(current)
-	if a.shouldCompact(ctx, current) {
+	if a.shouldCompact(ctx, current) && (a.Tools == nil || a.Tools.Find(tool.CompressToolName) == nil) {
 		changed, err := a.compactSession(ctx, current, false)
 		if err != nil {
 			return agent.AgentResult{}, fmt.Errorf("compact session with AI summary: %w", err)
@@ -959,9 +972,20 @@ func (a *App) RunPromptWithSession(ctx context.Context, sessionID, prompt, workD
 	a.beginCheckpointTurn(sessionID, workDir, prompt)
 	result := a.runMainAgentWithHistory(ctx, func() engine.RunResult {
 		return a.Engine.RunWithHistory(ctx, engine.RunRequest{
-			AgentConfig:      cfg,
-			SessionID:        sessionID,
-			Messages:         current.CopyMessages(),
+			AgentConfig: cfg,
+			SessionID:   sessionID,
+			Messages:    current.CopyMessages(),
+			Compression: current.Compression,
+			Checkpoint: func(cp agent.Checkpoint) error {
+				staged := *current
+				staged.ReplaceMessages(session.StripEphemeralContextMessages(cp.Messages))
+				staged.Compression = cp.Compression.Clone()
+				if err := a.Sessions.Save(context.WithoutCancel(ctx), &staged); err != nil {
+					return err
+				}
+				*current = staged
+				return nil
+			},
 			SessionSummary:   sessionSummaryForRequest(current),
 			MemoryContext:    memoryContext,
 			ProjectKnowledge: projectKnowledge,
@@ -969,6 +993,9 @@ func (a *App) RunPromptWithSession(ctx context.Context, sessionID, prompt, workD
 	})
 	current.Metadata.WorkDir = workDir
 	current.Metadata.Model = a.Config.Model
+	if result.Compression != nil {
+		current.Compression = result.Compression
+	}
 	if len(result.Messages) > 0 {
 		current.ReplaceMessages(session.StripEphemeralContextMessages(result.Messages))
 		if summary := session.CompactedSummary(current.Messages); summary != "" {
@@ -988,7 +1015,7 @@ func (a *App) RunPromptWithSession(ctx context.Context, sessionID, prompt, workD
 		a.runOrganizerAfterTurn(context.WithoutCancel(ctx), current, prompt, result.AgentResult.Output)
 	}
 	a.resetMemoryMaintenanceCycleIfBelowThreshold(ctx, current)
-	refreshSummary := result.AgentResult.Error == "" && a.Config.Memory.Enabled && a.shouldRefreshMemorySummary(ctx, current)
+	refreshSummary := result.AgentResult.Error == "" && a.Config.Memory.Enabled && a.Config.OrganizerEnabled() && a.shouldRefreshMemorySummary(ctx, current)
 	if refreshSummary {
 		// Persist the cycle marker before starting the detached request so another
 		// prompt cannot enqueue the same summary job again.
@@ -1535,12 +1562,20 @@ func (a *App) projectKnowledgeForRequest(ctx context.Context, current *session.S
 	return ""
 }
 
-func persistCompactedContext(current *session.Session, summary, projectKnowledge string) {
+func persistCompactedContext(current *session.Session, summary, projectKnowledge string) error {
 	if current == nil {
-		return
+		return nil
 	}
-	current.Summary = strings.TrimSpace(summary)
-	current.ReplaceMessages(session.CompactedContextMessages(current.Summary, projectKnowledge))
+	summary = strings.TrimSpace(summary)
+	after := session.CompactedContextMessages(summary, projectKnowledge)
+	state := current.Compression.Clone()
+	if err := state.Handoff(current.CopyMessages(), after, summary); err != nil {
+		return err
+	}
+	current.Summary = summary
+	current.Compression = state
+	current.ReplaceMessages(after)
+	return nil
 }
 
 func (a *App) compactedProjectKnowledge(ctx context.Context, current *session.Session, summary string) string {
@@ -1627,37 +1662,6 @@ func (a *App) CompactSession(ctx context.Context, sessionID, workDir string) (*s
 	return current, changed, nil
 }
 
-type aiSessionSummaryWriter struct {
-	client  *cpanthropic.Client
-	model   string
-	onUsage func(*sdk.Message)
-}
-
-func (w aiSessionSummaryWriter) Summarize(ctx context.Context, previous, transcript string) (string, error) {
-	if w.client == nil {
-		return "", fmt.Errorf("session summary client is unavailable")
-	}
-	input := sessionSummaryInput(previous, transcript)
-	message, err := w.client.Create(ctx, cpanthropic.MessageRequest{
-		Model:     w.model,
-		MaxTokens: sessionSummaryMaxTokens,
-		System:    sessionSummaryPrompt(),
-		Messages:  []sdk.MessageParam{sdk.NewUserMessage(sdk.NewTextBlock(input))},
-		Thinking:  false,
-		Stream:    false,
-	})
-	if err != nil {
-		return "", err
-	}
-	if w.onUsage != nil {
-		w.onUsage(message)
-	}
-	if message.StopReason == sdk.StopReasonMaxTokens {
-		return "", fmt.Errorf("session summary truncated at output token limit")
-	}
-	return strings.TrimSpace(cpanthropic.TextFromMessage(message)), nil
-}
-
 func (a *App) sessionSummaryWriter() session.SummaryWriter {
 	if a == nil {
 		return nil
@@ -1665,14 +1669,14 @@ func (a *App) sessionSummaryWriter() session.SummaryWriter {
 	if a.summaryWriter != nil {
 		return a.summaryWriter
 	}
-	if a.Client == nil {
+	if !a.Config.OrganizerEnabled() || a.organizer == nil {
 		return nil
 	}
-	return aiSessionSummaryWriter{
-		client:  a.Client,
-		model:   memoryModelName(a.Config),
-		onUsage: a.reportAPIUsage,
+	size := a.Config.Memory.Organizer.ContextSize
+	if a.Config.OrganizerType() != config.OrganizerRuntimeAPI && size > 16384 {
+		size = 16384
 	}
+	return organizerSessionSummaryWriter{runtime: a.organizer, contextSize: size}
 }
 
 func (a *App) observationStoreFor(current *session.Session) session.ObservationStore {
@@ -1859,13 +1863,16 @@ func (a *App) compactSession(ctx context.Context, current *session.Session, forc
 		summaryGate = trigger
 	}
 	writer := a.sessionSummaryWriter()
+	if writer == nil {
+		return false, fmt.Errorf("configure and enable memory.organizer to generate a session summary; compress accepts a model-authored summary without this backend")
+	}
 	result, err := session.Compact(ctx, previousSummary, messagesToCompact, writer, session.CompactOptions{
 		MaxRecentTurns:         a.Config.Memory.MaxRecentTurns,
 		SummaryThresholdTokens: trigger,
 		TargetTokens:           target,
 		EstimatedTokens:        estimated,
 		Force:                  force,
-		ObservationStore:       a.observationStoreFor(current),
+		ObservationStore:       nil, // new summaries archive original messages instead of masking observations
 		// Zero uses session.defaultRecentUnmasked (newest 2 user turns).
 		ObservationKeepTurns: 0,
 		SummaryIfAboveTokens: summaryGate,
@@ -1925,7 +1932,9 @@ func (a *App) compactSession(ctx context.Context, current *session.Session, forc
 				"error":      err.Error(),
 			})
 		}
-		persistCompactedContext(current, current.Summary, a.compactedProjectKnowledge(ctx, current, current.Summary))
+		if err := persistCompactedContext(current, current.Summary, a.compactedProjectKnowledge(ctx, current, current.Summary)); err != nil {
+			return false, err
+		}
 		a.recordCompactEvent("compact_succeeded", map[string]any{
 			"session_id":      string(current.Metadata.ID),
 			"messages_before": len(cleanedMessages),
@@ -1964,7 +1973,9 @@ func (a *App) compactSession(ctx context.Context, current *session.Session, forc
 			"error":      err.Error(),
 		})
 	}
-	persistCompactedContext(current, nextSummary, a.compactedProjectKnowledge(ctx, current, nextSummary))
+	if err := persistCompactedContext(current, nextSummary, a.compactedProjectKnowledge(ctx, current, nextSummary)); err != nil {
+		return false, err
+	}
 	retainedTokens := a.estimateSessionContextTokens(ctx, current)
 	a.recordCompactEvent("compact_succeeded", map[string]any{
 		"session_id":          string(current.Metadata.ID),

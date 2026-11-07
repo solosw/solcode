@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/solosw/solcode/internal/contextcompression"
+	contextmessage "github.com/solosw/solcode/internal/message"
 	"sort"
 	"strings"
 	"sync"
@@ -237,6 +239,7 @@ func orderedSkillRoots(active string, roots []string) []string {
 }
 
 type RunRequest struct {
+	Compression      *contextcompression.State
 	WorkingSet       json.RawMessage
 	Checkpoint       func(agent.Checkpoint) error
 	CompactMessages  func(context.Context, []sdk.MessageParam) ([]sdk.MessageParam, error)
@@ -257,6 +260,7 @@ type PrefixSnapshot struct {
 }
 
 type RunResult struct {
+	Compression *contextcompression.State
 	AgentResult agent.AgentResult
 	Messages    []sdk.MessageParam
 }
@@ -317,6 +321,15 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 	}
 
 	messages := append([]sdk.MessageParam(nil), runReq.Messages...)
+	compression := runReq.Compression.Clone()
+	runReq.Compression = compression
+	contextEnabled := e.config.Tools != nil && e.config.Tools.Find(tool.CompressToolName) != nil
+	defer func() {
+		if contextEnabled {
+			_ = compression.Sync(result.Messages)
+			result.Compression = compression
+		}
+	}()
 	prompt := cfg.Prompt
 	prompt, blocked, errText := e.runUserPromptHook(ctx, cfg, prompt)
 	// Plan-mode instructions live in dynamic context messages
@@ -400,6 +413,10 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 	if compactMessages == nil {
 		compactMessages = e.config.CompactMessages
 	}
+	if contextEnabled {
+		compactMessages = nil
+	} // autonomous folds replace automatic truncation
+	lastContextNudge := -8
 	// Efficiency controller (§7): local anti-loop signals. Advisory only; it
 	// never issues requests, executes operations, or ends the run.
 	efficiency := NewRequestEfficiencyController()
@@ -662,6 +679,10 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 		if builder.EfficiencyNote != "" && workingSet.HasContext() {
 			builder.WorkingSet = workingSet.InjectionText()
 		}
+		if contextEnabled && e.config.MaxContextTokens > 0 && turn-lastContextNudge >= 8 && int64(contextcompression.Tokens(messages)) >= e.config.MaxContextTokens*3/4 {
+			messages = append(messages, sdk.NewUserMessage(sdk.NewTextBlock(contextmessage.DynamicContextText("context-budget", "Context is approaching its budget. Call acp_status, select older completed work, and use compress with a summary you write. Preserve the current request and tool pairing. Read needed evidence with decompress/search_context. No extra summarizer model is called by compress."))))
+			lastContextNudge = turn
+		}
 		messages = dynamic.append(messages, builder, runReq, workingSetTaskChanged)
 		workingSetTaskChanged = false
 		// Overlays are now durable messages; Build must not add a transient copy
@@ -719,8 +740,8 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 				}
 			}
 		}
-		if runReq.Checkpoint != nil && e.config.MaxContextTokens > 0 && requestBuilder.EstimateContextTokens(buildReq) >= e.config.MaxContextTokens {
-			return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: "subagent context still exceeds the configured budget after compaction", NoRetry: true}, Messages: messages}
+		if (contextEnabled || runReq.Checkpoint != nil) && e.config.MaxContextTokens > 0 && requestBuilder.EstimateContextTokens(buildReq) >= e.config.MaxContextTokens {
+			return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: "context exceeds the configured budget; history is preserved. Use /compact with the configured memory organizer, or resume after reducing context", NoRetry: true}, Messages: messages}
 		}
 		if err := runReq.saveCheckpoint("request", messages, workingSet, runUsage, false); err != nil {
 			return RunResult{AgentResult: agent.AgentResult{Error: err.Error(), NoRetry: true}, Messages: messages}
@@ -856,8 +877,12 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 			}
 			toolEnv := ToolEnv{
 				UseContext: &tool.UseContext{
-					SessionID:         nonEmpty(runReq.SessionID, string(cfg.ID)),
-					ParentContext:     e.forkSource(use.Name, messages, workingSet),
+					SessionID: nonEmpty(runReq.SessionID, string(cfg.ID)),
+					ParentContext: func() agent.Snapshot {
+						snapshot := e.forkSource(use.Name, messages, workingSet)
+						snapshot.Compression = compression.Fork(snapshot.Messages)
+						return snapshot
+					}(),
 					MessageID:         use.ID,
 					RunID:             cfg.RunID,
 					WorkDir:           cfg.WorkDir,
@@ -907,6 +932,63 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 				},
 			}
 			// Dispatch batch child operations through this run's normal executor.
+			toolEnv.UseContext.ContextControl = func(controlCtx context.Context, name string, req contextcompression.Request) (any, error) {
+				if err := controlCtx.Err(); err != nil {
+					return nil, err
+				}
+				next := compression.Clone()
+				if err := next.Sync(messages); err != nil {
+					return nil, err
+				}
+				var data any
+				var err error
+				changed := false
+				switch name {
+				case tool.ACPStatusToolName:
+					data = next.StatusPage(int(e.config.MaxContextTokens), req.Offset, req.Limit)
+				case tool.SearchContextToolName:
+					data, err = next.Search(req.Query, req.Offset, req.Limit)
+				case tool.DecompressToolName:
+					if req.Restore {
+						err = next.Restore(req.BlockID, req.Deep, int(e.config.MaxContextTokens)*3/4)
+						changed = err == nil
+						data = map[string]any{"restored": changed, "block_id": req.BlockID}
+					} else {
+						data, err = next.Read(req.BlockID, req.Deep, req.Offset, req.Limit)
+					}
+				case tool.CompressToolName:
+					var ref string
+					ref, err = next.Compress(req)
+					changed = err == nil
+					data = map[string]any{"block_id": ref, "revision": next.Revision}
+				default:
+					return nil, fmt.Errorf("unknown context operation %q", name)
+				}
+				if err != nil {
+					return nil, err
+				}
+				if changed {
+					view, err := next.Messages()
+					if err != nil {
+						return nil, err
+					}
+					if name == tool.DecompressToolName && e.config.MaxContextTokens > 0 {
+						preview := buildReq
+						preview.Messages = view
+						if requestBuilder.EstimateContextTokens(preview) >= e.config.MaxContextTokens {
+							return nil, fmt.Errorf("restored request exceeds context budget; read evidence with pagination")
+						}
+					}
+					staged := runReq
+					staged.Compression = next
+					if err := staged.saveCheckpoint("context_"+name, view, workingSet, runUsage, true); err != nil {
+						return nil, err
+					}
+					messages = view
+				}
+				*compression = *next
+				return data, nil
+			}
 			toolEnv.UseContext.BatchLookup = e.config.Tools.Find
 			toolEnv.UseContext.BatchDispatch = func(batchCtx context.Context, name string, childInput json.RawMessage) (*tool.ContentBlock, error) {
 				if name == tool.BatchToolName {

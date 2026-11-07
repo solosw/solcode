@@ -28,11 +28,11 @@ type MemoryWriteRequest struct {
 
 // MemoryWriteResult reports what the memory layer did with the request.
 type MemoryWriteResult struct {
-	ID     string
-	Text   string
-	Tier   string
-	Kind   string
-	Scope  string
+	ID    string
+	Text  string
+	Tier  string
+	Kind  string
+	Scope string
 	// Turn is the checkpoint turn recorded with the entry when known.
 	Turn   int
 	Stored bool
@@ -106,7 +106,7 @@ How to write the entry:
 
 Saving twice is safe: each WriteMemory call stores its own entry (duplicates are
 kept), tagged with the current checkpoint turn when one is open. Entries are read
-back with ReadMemory, and sessions that enabled cross-session memory also get the
+back with search_context(source="memory"), and sessions that enabled cross-session memory also get the
 relevant ones injected automatically at start.`
 }
 

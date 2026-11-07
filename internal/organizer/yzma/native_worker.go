@@ -31,13 +31,14 @@ const (
 
 // WorkerRequest is one isolated native op.
 type WorkerRequest struct {
-	Op          string `json:"op"` // "generate" | "embed"
-	ModelPath   string `json:"model_path"`
-	LibDir      string `json:"lib_dir"`
-	ContextSize int    `json:"context_size"`
-	Threads     int    `json:"threads"`
-	GPULayers   int    `json:"gpu_layers"`
-	Dimensions  int    `json:"dimensions,omitempty"`
+	RequireComplete bool   `json:"require_complete,omitempty"`
+	Op              string `json:"op"` // "generate" | "embed"
+	ModelPath       string `json:"model_path"`
+	LibDir          string `json:"lib_dir"`
+	ContextSize     int    `json:"context_size"`
+	Threads         int    `json:"threads"`
+	GPULayers       int    `json:"gpu_layers"`
+	Dimensions      int    `json:"dimensions,omitempty"`
 	// generate
 	System      string  `json:"system,omitempty"`
 	User        string  `json:"user,omitempty"`
@@ -177,11 +178,12 @@ func workerGenerate(ctx context.Context, req WorkerRequest) (string, error) {
 	})
 	defer func() { _ = gen.Close() }()
 	return gen.Generate(ctx, organizer.GenerateRequest{
-		System:      req.System,
-		User:        req.User,
-		Grammar:     req.Grammar,
-		MaxTokens:   req.MaxTokens,
-		Temperature: req.Temperature,
+		RequireComplete: req.RequireComplete,
+		System:          req.System,
+		User:            req.User,
+		Grammar:         req.Grammar,
+		MaxTokens:       req.MaxTokens,
+		Temperature:     req.Temperature,
 	})
 }
 
