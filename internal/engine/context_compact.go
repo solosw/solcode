@@ -1,70 +1,41 @@
 package engine
 
 import (
-	"context"
 	"fmt"
-	"sort"
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
 	"github.com/solosw/solcode/internal/contextcompression"
-	"github.com/solosw/solcode/internal/session"
 )
 
-// compactContext stages organizer-authored folds using the same protection and
-// archive rules as compress. The caller persists the result before committing it.
-func (e *Engine) compactContext(ctx context.Context, state *contextcompression.State, messages []sdk.MessageParam, builder ContextBuilder, req BuildRequest) ([]sdk.MessageParam, *contextcompression.State, error) {
-	if e.config.MaxContextTokens <= 0 {
-		return messages, nil, nil
-	}
-	percent := e.config.CompactionTriggerPercent
-	if percent <= 0 || percent > 100 {
-		percent = 85
-	}
-	trigger := e.config.MaxContextTokens * int64(percent) / 100
-	if builder.EstimateContextTokens(req) < trigger {
-		return messages, nil, nil
-	}
-	next := state.Clone()
-	if err := next.Sync(messages); err != nil {
-		return messages, nil, err
-	}
-	ranges := next.Overview(int(e.config.MaxContextTokens), 0).CompressibleRanges
-	// Reduce the largest completed section first to bound organizer requests.
-	sort.SliceStable(ranges, func(i, j int) bool { return ranges[i].Tokens > ranges[j].Tokens })
-	if len(ranges) == 0 {
-		return messages, nil, nil
-	}
-	if e.config.OnStatus != nil {
-		e.config.OnStatus("Compacting...")
-		defer e.config.OnStatus("Thinking…")
-	}
-	for _, r := range ranges {
-		a, b, err := next.Range(r.Start, r.End)
-		if err != nil {
-			return messages, nil, err
+// prepareForcedCompression uses the current model's normal tool loop. There is
+// no separate summarizer or history replacement outside the compress tool.
+func (e *Engine) prepareForcedCompression(state *contextcompression.State, messages []sdk.MessageParam, builder ContextBuilder, req BuildRequest, explicit bool) ([]sdk.MessageParam, bool, error) {
+	if !explicit {
+		if e.config.MaxContextTokens <= 0 {
+			return messages, false, nil
 		}
-		visible, err := next.Messages()
-		if err != nil {
-			return messages, nil, err
+		percent := e.config.CompactionTriggerPercent
+		if percent <= 0 || percent > 100 {
+			percent = 85
 		}
-		summary, err := e.config.ContextSummary(ctx, session.Transcript(visible[a:b]))
-		if err != nil {
-			return messages, nil, fmt.Errorf("automatic context compaction with memory.organizer: %w", err)
-		}
-		revision := next.Revision
-		if _, err := next.Compress(contextcompression.Request{Start: r.Start, End: r.End, Summary: summary, Topic: "Automatic context summary", Revision: &revision}); err != nil {
-			return messages, nil, fmt.Errorf("automatic context compaction: %w", err)
-		}
-		visible, err = next.Messages()
-		if err != nil {
-			return messages, nil, err
-		}
-		req.Messages = visible
-		next.Nudge.Compressed(int(builder.EstimateContextTokens(req)))
-		if builder.EstimateContextTokens(req) < trigger {
-			return visible, next, nil
+		if builder.EstimateContextTokens(req) < e.config.MaxContextTokens*int64(percent)/100 {
+			return messages, false, nil
 		}
 	}
-	visible, err := next.Messages()
-	return visible, next, err
+	if err := state.Sync(messages); err != nil {
+		return messages, false, err
+	}
+	overview := state.Overview(int(e.config.MaxContextTokens), 8)
+	if overview.TotalCompressibleRanges == 0 {
+		return messages, false, nil
+	}
+	tokens := int(builder.EstimateContextTokens(req))
+	text := contextReminder(overview, req.Model, "required", tokens)
+	text += "\nCompression is mandatory for this request. Call compress now using a current safe range and revision above. Write a complete summary yourself, preserving the active task, constraints, decisions, evidence, exact paths, verification and unfinished work. Do not call other tools or finish the task in this response. After the tool succeeds, continue the original task from the retained context; compression does not complete the user's request."
+	withReminder := append(append([]sdk.MessageParam(nil), messages...), contextBudgetMessage(text))
+	req.Messages = withReminder
+	if e.config.MaxContextTokens > 0 && builder.EstimateContextTokens(req) >= e.config.MaxContextTokens {
+		return messages, false, fmt.Errorf("context exceeds the configured budget for mandatory compress; history is preserved")
+	}
+	return withReminder, true, nil
 }

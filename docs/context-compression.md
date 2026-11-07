@@ -162,16 +162,27 @@ fields use defaults):
 
 This is a native policy using local token estimates, not a byte-for-byte port of
 the proxy's provider-usage meters or tier promotion logic. Registering these
-tools disables the old automatic history truncation path. When `memory.organizer`
-is enabled and configured, the main agent instead generates reversible summary
-blocks at `memory.compaction_trigger_percent` (default 85%) of the composed input
-budget, including during a running turn. It summarizes eligible ranges through
-the selected organizer backend, preserves protected requests/overlays and whole
-tool exchanges, and checkpoints the archive and active view together. API errors,
-non-reducing summaries and failed saves leave the previous active history intact.
-Without an organizer, the working AI continues to manage folds itself.
-At the hard composed-request limit, SolCode stops if protected context still
-cannot fit. Explicit `/compact` remains available with a summary backend.
+tools disables the old automatic history truncation path. At
+`memory.compaction_trigger_percent` (default 85%) of the composed input budget,
+the host requires the active main model to call `compress`. The request includes
+a fresh revision and safe ranges, bypasses reminder cooldowns and uses the
+provider's named `tool_choice` with parallel tool calls disabled. The engine also
+validates the response: plain final text or another tool cannot satisfy this
+request, and is reported as an explicit error without executing that response.
+
+The mandatory call is synchronous and non-streaming, with thinking disabled.
+The model writes the summary directly in the tool arguments. Only the normal
+`compress` executor can commit the fold, after checkpointing its archive and active
+view together. Failed tool calls can be corrected on up to three consecutive
+attempts; invalid summaries, stale revisions and failed saves preserve history.
+Successful compression continues the original task with its normal model settings
+and turn budget. If the request remains above the trigger, compression is required
+again before ordinary work. With no safe range, protected history stays intact;
+at the hard composed-request limit, the run stops with an explicit error.
+
+Explicit `/compact` uses the same forced tool path even below the threshold, then
+returns after a successful fold. It leaves the latest real user request and
+protected history in place, and skips when no safe range exists.
 
 Tools and system prompts remain stable across folds. Source references are shown
 in tool responses rather than rewritten onto every historical message. A fold
@@ -180,23 +191,20 @@ summary bytes remain stable. Replacing a range can invalidate provider caching
 from that position onward. This is not a guarantee of zero cache misses, nor a
 benchmark claim about upstream savings.
 
-## Shared model for explicit summaries and memory extraction
+## Session compression and memory extraction models
 
-Automatic threshold summaries, `/compact` and background session summaries use only
-`memory.organizer`, the same configured runtime/model/API endpoint as memory
-organization and extraction. There is no separate session-summary model setting
-and no fallback to `fast_model` or the chat provider. `fast_model` retains its other
-existing purposes.
+Automatic threshold compression and `/compact` force the current main model to
+call `compress`, using its configured context/output limits and API client. They
+do not create a separate summary-model request or use `fast_model` or
+`memory.organizer`. A live model switch applies at the next model boundary.
+The model can fold existing summaries into higher-level blocks through the same
+tool. Compression requests are non-streaming even when chat streaming is enabled.
 
-Both local GGUF and independently configured API runtimes are supported. The
-existing organizer enable switch controls this backend. Saving feature settings
-rebuilds the organizer runtime so changes to its model, API endpoint and credentials
-apply without restarting. Without it, explicit
-summary generation reports a configuration error and retains history; the AI's
-`compress` tool still works because its summary is supplied as an argument.
+Background memory/session summaries and archival extraction continue to use
+`memory.organizer`. Both local GGUF and independently configured API runtimes are
+supported for this backend. Saving feature settings rebuilds the organizer runtime
+so changes to its model, API endpoint and credentials apply without restarting.
+Local memory organization never falls back to a network model.
 
-Long explicit-summary inputs are partitioned on UTF-8 boundaries and summarized
-hierarchically within the organizer's context/output limits. Empty, truncated or
-non-reducing generation fails safely. Local mode never falls back to a network
-model. Explicit handoff summaries and archival memory extraction have separate
-prompts/output validation while sharing the inference backend and configuration.
+The AI's `compress` tool continues to accept a summary supplied by the working
+model without making an additional model request.

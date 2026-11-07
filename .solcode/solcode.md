@@ -1572,3 +1572,80 @@ Turn memory: 现在到压缩阈值时，设置的摘要模型明明设置了api�
 - memory_ids: mem_4eede92106cf3d05, mem_eac79819d94d16e9
 
 Organizer: The user reported that when the context reaches the compaction threshold, automatic compaction fails even though a summary model with an API endpoint is configured. Investigation traced the relevant paths: the threshold path calls a.compactSession in internal/app/app.go, the summary prompt lives in internal/app/session_summary.go, the organizer bridge calls runtime.org.Summarize in internal/app/organizer_bridge.go, and organizer.APIGenerator in internal/organizer/api.go only reports Ready when Model, BaseURL and APIKey are all set (it also strips a trailing /v1 from BaseURL). It was confirmed that the model-invoked compress tool never calls a summarizer model — the assistant writes that summary itself — so the configured summary/API model only matters for threshold-driven session summaries. New compaction code was added in internal/app/context_compact.go and internal/engine/context_compact.go with tests context_compact_test.go in both packages, plus edits to internal/app/app.go, internal/engine/engine.go, internal/engine/live_model.go and docs/context-compression.md. No build or test run results were reported before the session was cut off, so verification of the fix is still outstanding, along with the pending todos for confirming the root cause and adding targeted regression tests.
+
+## 2026-11-07 22:47:35 · session acp-1793790580996458000-1 · turn 26 · importance 0.40
+- keywords: turn, todolist
+- files: README.md, cmd/solcode/main.go, docs/acp-subagents.md, docs/context-compression.md, docs/persistent-subagents.md, examples/settings/README.md, examples/settings/settings.models.api.example.json, internal/acp/server.go, internal/acp/subagent_replay.go, internal/acp/subagent_replay_test.go, internal/acp/subagents.go, internal/agent/coordinator.go, internal/agent/fork_parallel_test.go, internal/agent/fork_window.go, internal/agent/fork_window_test.go, internal/agent/lifecycle.go, internal/agent/parent_requests.go, internal/agent/parent_requests_test.go, internal/agent/parent_wait.go, internal/agent/session_store.go, internal/agent/session_store_test.go, internal/agent/state_view.go, internal/agentsession/parent_recovery_test.go, internal/app/app.go, internal/app/app_compaction_test.go, internal/app/context_search_test.go, internal/app/goal.go, internal/app/jev_test.go, internal/app/live_model.go, internal/app/memory_writer.go, internal/app/organizer_api_test.go, internal/app/organizer_bridge.go, internal/app/session_summary.go, internal/app/session_summary_test.go, internal/app/shared_summary_test.go, internal/config/config.go, internal/config/local_models.go, internal/config/model_backends_test.go, internal/config/model_context.go, internal/config/model_context_test.go
+
+Turn memory: 继续
+
+## 2026-11-07 22:56:13 · session acp-1793790580996458000-1 · turn 27 · importance 0.40
+- keywords: turn, todolist
+- files: README.md, cmd/solcode/main.go, docs/acp-subagents.md, docs/context-compression.md, docs/persistent-subagents.md, examples/settings/README.md, examples/settings/settings.models.api.example.json, internal/acp/server.go, internal/acp/subagent_replay.go, internal/acp/subagent_replay_test.go, internal/acp/subagents.go, internal/agent/coordinator.go, internal/agent/fork_parallel_test.go, internal/agent/fork_window.go, internal/agent/fork_window_test.go, internal/agent/lifecycle.go, internal/agent/parent_requests.go, internal/agent/parent_requests_test.go, internal/agent/parent_wait.go, internal/agent/session_store.go, internal/agent/session_store_test.go, internal/agent/state_view.go, internal/agentsession/parent_recovery_test.go, internal/app/app.go, internal/app/app_compaction_test.go, internal/app/context_search_test.go, internal/app/goal.go, internal/app/jev_test.go, internal/app/live_model.go, internal/app/memory_writer.go, internal/app/organizer_api_test.go, internal/app/organizer_bridge.go, internal/app/session_summary.go, internal/app/session_summary_test.go, internal/app/shared_summary_test.go, internal/config/config.go, internal/config/local_models.go, internal/config/model_backends_test.go, internal/config/model_context.go, internal/config/model_context_test.go
+- todos: 1|核对摘要与压缩的请求和调度方式|completed|valid|done; 2|将会话摘要改为同步并验证非流式请求|in_progress|valid|open; 3|运行相关回归检查|pending|valid|open
+
+Turn memory: 继续
+
+## 2026-11-07 22:57:06 · session acp-1794059830529191000-1 · turn 3 · importance 0.40
+- keywords: todolist, todo-write, turn
+- files: docs/context-compression.md
+
+Turn memory: **阈值压缩是非流式的，而且会同步等待完成。** 刚才我把“流式响应”和“后台执行”混在一起说了，抱歉。
+当前调用顺序是：
+1. 上下文达到阈值，暂停主模型请求。
+2. 调用摘要 API，`Stream` 为 `false`，等待完整摘要。
+3. 校验压缩结果并保存摘要及原文归档。
+4. 完成后继续请求主模型。
+主对话开启流式输出也不会影响摘要请求。相关 API、摘要和阈值压缩回归测试均已通过。
+
+## 2026-11-07 23:05:22 · session acp-1794059830529191000-1 · turn 4 · importance 0.55
+- keywords: todolist, todo-write, turn, organizer, archival, solcode, context-compression, summary-model, compactSession, OrganizerConfig, APIGenerator, organizer_bridge
+- files: docs/context-compression.md, internal/app/app.go, internal/app/compaction_model.go, internal/app/compaction_model_test.go, internal/app/context_compact.go, internal/app/context_compact_test.go, internal/app/live_model.go, internal/app/session_summary_test.go, internal/app/shared_summary_test.go, internal/engine/context_compact.go, internal/engine/context_compact_test.go, internal/engine/engine.go, internal/engine/live_model.go, internal/organizer/api.go, internal/organizer/api_test.go
+- memory_ids: mem_4eede92106cf3d05
+
+Organizer: 用户在 solcode 中报告：到达压缩阈值时，虽然已经为摘要模型配置了 API，但压缩仍然不通。排查沿调用链展开：internal/app/app.go:939 的 a.compactSession 触发阈值压缩，经 internal/app/organizer_bridge.go:78 调用 runtime.org.Summarize（配合 internal/app/session_summary.go 的 sessionSummaryPrompt 和 sessionSummaryInput），最终落到 internal/organizer/api.go 的 NewAPIGenerator/APIGenerator.Generate；同时确认手动调用 compress 工具本身不调用任何摘要模型，因此独立摘要模型只影响自动阈值压缩路径。已确认 APIGenerator 的 Ready() 要求 Model、BaseURL、APIKey 三者都非空，否则返回 ErrUnavailable，Generate 在输出被 MaxTokens 截断或响应为空时也会报错；但具体失败根因尚未确定。另外尝试查看 internal/config/model_backends.go 时该文件不存在（配置实际在 internal/config/config.go:493 的 OrganizerConfig），git status 显示 internal/engine/live_model.go、internal/tool/context.go、internal/config/config.go 等已修改。待办仍未完成：定位失败原因、修复并补充回归测试、运行相关检查并汇报，目前没有修复或验证结果。
+
+## 2026-11-07 23:10:45 · session acp-1794059830529191000-1 · turn 5 · importance 0.64
+- keywords: todolist, todo-write, turn, organizer, archival, context compaction, summary model, solcode, threshold
+- files: docs/context-compression.md, internal/app/app.go, internal/app/compaction_model.go, internal/app/compaction_model_test.go, internal/app/context_compact.go, internal/app/context_compact_test.go, internal/app/live_model.go, internal/app/session_summary_test.go, internal/app/shared_summary_test.go, internal/engine/context_compact.go, internal/engine/context_compact_test.go, internal/engine/engine.go, internal/engine/live_model.go, internal/organizer/api.go, internal/organizer/api_test.go
+- memory_ids: mem_4eede92106cf3d05
+
+Organizer: The user reported that when the context compaction threshold is reached in the solcode repository, compaction fails even though an API-backed summary model is configured. Investigation confirmed that the compress tool itself never calls a summarizer model, while the automatic threshold path reaches the organizer summarizer through internal/app/organizer_bridge.go and runtime.org.Summarize using sessionSummaryPrompt from internal/app/session_summary.go, with compaction triggered from compactSession in internal/app/app.go. The search also confirmed there is no internal/config/model_backends.go, because model backend configuration lives in internal/config/config.go. No fix has been verified and no test or build results were reported; the todos for locating the root cause, implementing a fix with regression tests, and running checks remain open.
+
+## 2026-11-07 23:12:23 · session acp-1793790580996458000-1 · turn 28 · importance 0.40
+- keywords: turn, todolist
+- files: README.md, cmd/solcode/main.go, docs/acp-subagents.md, docs/context-compression.md, docs/persistent-subagents.md, examples/settings/README.md, examples/settings/settings.models.api.example.json, internal/acp/server.go, internal/acp/subagent_replay.go, internal/acp/subagent_replay_test.go, internal/acp/subagents.go, internal/agent/coordinator.go, internal/agent/fork_parallel_test.go, internal/agent/fork_window.go, internal/agent/fork_window_test.go, internal/agent/lifecycle.go, internal/agent/parent_requests.go, internal/agent/parent_requests_test.go, internal/agent/parent_wait.go, internal/agent/session_store.go, internal/agent/session_store_test.go, internal/agent/state_view.go, internal/agentsession/parent_recovery_test.go, internal/app/app.go, internal/app/app_compaction_test.go, internal/app/context_search_test.go, internal/app/goal.go, internal/app/jev_test.go, internal/app/live_model.go, internal/app/memory_writer.go, internal/app/organizer_api_test.go, internal/app/organizer_bridge.go, internal/app/session_summary.go, internal/app/session_summary_test.go, internal/app/shared_summary_test.go, internal/config/config.go, internal/config/local_models.go, internal/config/model_backends_test.go, internal/config/model_context.go, internal/config/model_context_test.go
+
+Turn memory: 继续
+
+## 2026-11-07 23:18:19 · session acp-1793790580996458000-1 · turn 29 · importance 0.40
+- keywords: turn, todolist
+- files: README.md, cmd/solcode/main.go, docs/acp-subagents.md, docs/context-compression.md, docs/persistent-subagents.md, examples/settings/README.md, examples/settings/settings.models.api.example.json, internal/acp/server.go, internal/acp/subagent_replay.go, internal/acp/subagent_replay_test.go, internal/acp/subagents.go, internal/agent/coordinator.go, internal/agent/fork_parallel_test.go, internal/agent/fork_window.go, internal/agent/fork_window_test.go, internal/agent/lifecycle.go, internal/agent/parent_requests.go, internal/agent/parent_requests_test.go, internal/agent/parent_wait.go, internal/agent/session_store.go, internal/agent/session_store_test.go, internal/agent/state_view.go, internal/agentsession/parent_recovery_test.go, internal/app/app.go, internal/app/app_compaction_test.go, internal/app/context_search_test.go, internal/app/goal.go, internal/app/jev_test.go, internal/app/live_model.go, internal/app/memory_writer.go, internal/app/organizer_api_test.go, internal/app/organizer_bridge.go, internal/app/session_summary.go, internal/app/session_summary_test.go, internal/app/shared_summary_test.go, internal/config/config.go, internal/config/local_models.go, internal/config/model_backends_test.go, internal/config/model_context.go, internal/config/model_context_test.go
+
+Turn memory: 继续
+
+## 2026-11-07 23:22:14 · session acp-1794059830529191000-1 · turn 6 · importance 0.40
+- keywords: todolist, todo-write, turn
+- files: docs/context-compression.md, internal/app/app.go, internal/app/compaction_model.go, internal/app/compaction_model_test.go, internal/app/context_compact.go, internal/app/context_compact_test.go, internal/app/live_model.go, internal/app/session_summary_test.go, internal/app/shared_summary_test.go, internal/engine/context_compact.go, internal/engine/context_compact_test.go, internal/engine/engine.go, internal/engine/live_model.go, internal/organizer/api.go, internal/organizer/api_test.go
+- todos: 1|定位压缩后停滞的位置及本地运行证据|in_progress|valid|open; 2|修复恢复流程并补充回归验证|pending|valid|open; 3|验证修复并更新本地安装|pending|valid|open
+
+Turn memory: 压缩成功后一直没反应？？
+
+## 2026-11-07 23:45:50 · session acp-1794059830529191000-1 · turn 7 · importance 0.60
+- keywords: todolist, todo-write, turn, organizer, archival, solcode, compaction stall, compactContext, runMessagesLoop, saveCheckpoint, main model summary, compaction_trigger_percent
+- files: docs/context-compression.md, internal/anthropic/messages.go, internal/anthropic/openai.go, internal/anthropic/responses.go, internal/anthropic/tool_choice_test.go, internal/app/app.go, internal/app/app_compaction_test.go, internal/app/compaction_handoff_test.go, internal/app/compaction_model.go, internal/app/compaction_model_test.go, internal/app/context_compact.go, internal/app/context_compact_test.go, internal/app/live_model.go, internal/app/session_summary_test.go, internal/app/shared_summary_test.go, internal/engine/context_compact.go, internal/engine/context_compact_test.go, internal/engine/context_nudge.go, internal/engine/engine.go, internal/engine/live_model.go, internal/organizer/api.go, internal/organizer/api_test.go
+- memory_ids: mem_4eede92106cf3d05
+
+Organizer: 用户报告在 solcode 项目中，压缩阈值触发时虽然已为摘要模型配置了 API，压缩仍然不通；随后追问“压缩成功后一直没反应”，要求定位压缩完成到下一次主模型请求之间的停滞点并修复，同时更新本地安装。排查方向是 internal/engine/context_compact.go 的 compactContext（由 internal/engine/engine.go 的 runMessagesLoop 调用，约 708 行）：先 compactContext 得到 nextMessages/nextState，再 staged.saveCheckpoint("compacted", ...)，随后提交 compression 与 messages，接着 appendContextNudge、mid-run 预算守卫、saveCheckpoint("request")，最后 e.config.Client.Create。工具证据显示压缩在主模型、非流式下进行，日志候选为 ~/.solcode/projects 下的 compact.log。当前状态：三项 todo 中“定位压缩后停滞的位置及本地运行证据”为 in_progress，“修复恢复流程并补充回归验证”和“验证修复并更新本地安装”仍为 pending，尚未提交修复，也尚未重新构建安装。
+
+## 2026-11-07 23:49:54 · session acp-1793790580996458000-1 · turn 30 · importance 0.40
+- keywords: turn, todolist
+- files: README.md, cmd/solcode/main.go, docs/acp-subagents.md, docs/context-compression.md, docs/persistent-subagents.md, examples/settings/README.md, examples/settings/settings.models.api.example.json, internal/acp/server.go, internal/acp/subagent_replay.go, internal/acp/subagent_replay_test.go, internal/acp/subagents.go, internal/agent/coordinator.go, internal/agent/fork_parallel_test.go, internal/agent/fork_window.go, internal/agent/fork_window_test.go, internal/agent/lifecycle.go, internal/agent/parent_requests.go, internal/agent/parent_requests_test.go, internal/agent/parent_wait.go, internal/agent/session_store.go, internal/agent/session_store_test.go, internal/agent/state_view.go, internal/agentsession/parent_recovery_test.go, internal/app/app.go, internal/app/app_compaction_test.go, internal/app/context_search_test.go, internal/app/goal.go, internal/app/jev_test.go, internal/app/live_model.go, internal/app/memory_writer.go, internal/app/organizer_api_test.go, internal/app/organizer_bridge.go, internal/app/session_summary.go, internal/app/session_summary_test.go, internal/app/shared_summary_test.go, internal/config/config.go, internal/config/local_models.go, internal/config/model_backends_test.go, internal/config/model_context.go, internal/config/model_context_test.go
+
+Turn memory: 继续
+
+## 2026-11-07 23:51:40 · session acp-1793790580996458000-1 · turn 31 · importance 0.40
+- keywords: turn, todolist
+- files: README.md, cmd/solcode/main.go, docs/acp-subagents.md, docs/context-compression.md, docs/persistent-subagents.md, examples/settings/README.md, examples/settings/settings.models.api.example.json, internal/acp/server.go, internal/acp/subagent_replay.go, internal/acp/subagent_replay_test.go, internal/acp/subagents.go, internal/agent/coordinator.go, internal/agent/fork_parallel_test.go, internal/agent/fork_window.go, internal/agent/fork_window_test.go, internal/agent/lifecycle.go, internal/agent/parent_requests.go, internal/agent/parent_requests_test.go, internal/agent/parent_wait.go, internal/agent/session_store.go, internal/agent/session_store_test.go, internal/agent/state_view.go, internal/agentsession/parent_recovery_test.go, internal/app/app.go, internal/app/app_compaction_test.go, internal/app/context_search_test.go, internal/app/goal.go, internal/app/jev_test.go, internal/app/live_model.go, internal/app/memory_writer.go, internal/app/organizer_api_test.go, internal/app/organizer_bridge.go, internal/app/session_summary.go, internal/app/session_summary_test.go, internal/app/shared_summary_test.go, internal/config/config.go, internal/config/local_models.go, internal/config/model_backends_test.go, internal/config/model_context.go, internal/config/model_context_test.go
+
+Turn memory: 继续

@@ -18,13 +18,15 @@ import (
 // transport. Only fields we emit or consume are modeled.
 
 type openAIChatRequest struct {
-	Model           string              `json:"model"`
-	Messages        []openAIChatMessage `json:"messages"`
-	Tools           []openAITool        `json:"tools,omitempty"`
-	MaxTokens       int64               `json:"max_tokens,omitempty"`
-	Stream          bool                `json:"stream,omitempty"`
-	StreamOptions   *openAIStreamOpts   `json:"stream_options,omitempty"`
-	ReasoningEffort string              `json:"reasoning_effort,omitempty"`
+	Model             string              `json:"model"`
+	Messages          []openAIChatMessage `json:"messages"`
+	Tools             []openAITool        `json:"tools,omitempty"`
+	ToolChoice        any                 `json:"tool_choice,omitempty"`
+	ParallelToolCalls *bool               `json:"parallel_tool_calls,omitempty"`
+	MaxTokens         int64               `json:"max_tokens,omitempty"`
+	Stream            bool                `json:"stream,omitempty"`
+	StreamOptions     *openAIStreamOpts   `json:"stream_options,omitempty"`
+	ReasoningEffort   string              `json:"reasoning_effort,omitempty"`
 	// Extra passthrough for gateways that accept Anthropic-ish extensions.
 	Thinking *openAIThinking `json:"thinking,omitempty"`
 }
@@ -231,6 +233,11 @@ func buildOpenAIRequest(req MessageRequest) (openAIChatRequest, error) {
 		Tools:     toOpenAITools(req.Tools),
 		MaxTokens: maxTokens,
 		Stream:    req.Stream,
+	}
+	if req.ForceTool != "" {
+		out.ToolChoice = map[string]any{"type": "function", "function": map[string]string{"name": req.ForceTool}}
+		parallel := false
+		out.ParallelToolCalls = &parallel
 	}
 	if req.Stream {
 		out.StreamOptions = &openAIStreamOpts{IncludeUsage: true}

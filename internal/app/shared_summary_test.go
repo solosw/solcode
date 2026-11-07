@@ -1,22 +1,20 @@
 package app
 
 import (
-	sdk "github.com/anthropics/anthropic-sdk-go"
 	"github.com/solosw/solcode/internal/config"
 	"github.com/solosw/solcode/internal/session"
 	"strings"
 	"testing"
 )
 
-func TestUnconfiguredOrganizerDoesNotDiscardHistoryOrUseChatModel(t *testing.T) {
+func TestUnconfiguredMainModelDoesNotDiscardHistory(t *testing.T) {
 	cfg := config.Default()
 	cfg.Model = "chat"
 	cfg.FastModel = "fast"
 	app := &App{Config: cfg}
-	current := session.NewSession("main", t.TempDir(), cfg.Model)
-	current.Append(sdk.NewUserMessage(sdk.NewTextBlock("user request")), sdk.NewAssistantMessage(sdk.NewTextBlock("completed work")))
+	current := compressionTestSession(t)
 	before := session.Transcript(current.Messages)
-	if _, err := app.compactSession(t.Context(), current, true); err == nil || !strings.Contains(err.Error(), "memory.organizer") {
+	if _, err := app.compactSession(t.Context(), current, true); err == nil || !strings.Contains(err.Error(), "main model") {
 		t.Fatalf("missing shared backend accepted: %v", err)
 	}
 	if session.Transcript(current.Messages) != before {
@@ -24,10 +22,8 @@ func TestUnconfiguredOrganizerDoesNotDiscardHistoryOrUseChatModel(t *testing.T) 
 	}
 }
 func TestExplicitCompactArchiveSurvivesSessionReload(t *testing.T) {
-	cfg := config.Default()
-	app := &App{Config: cfg, summaryWriter: &recordingSummaryWriter{summary: "Finished task; more work remains."}}
-	current := session.NewSession("main", t.TempDir(), cfg.Model)
-	current.Append(sdk.NewUserMessage(sdk.NewTextBlock("ORIGINAL_REQUEST")), sdk.NewAssistantMessage(sdk.NewTextBlock("EXACT_TOOL_EVIDENCE")))
+	app, _ := newCompressionTestApp(t, "Finished task; more work remains.", nil)
+	current := compressionTestSession(t)
 	if _, err := app.compactSession(t.Context(), current, true); err != nil {
 		t.Fatal(err)
 	}

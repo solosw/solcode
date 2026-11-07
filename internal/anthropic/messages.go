@@ -9,11 +9,13 @@ import (
 )
 
 type MessageRequest struct {
-	Model           string
-	MaxTokens       int64
-	System          string
-	Messages        []sdk.MessageParam
-	Tools           []sdk.ToolUnionParam
+	Model     string
+	MaxTokens int64
+	System    string
+	Messages  []sdk.MessageParam
+	Tools     []sdk.ToolUnionParam
+	// ForceTool requires exactly one call to the named tool.
+	ForceTool       string
 	Thinking        bool
 	ThinkingText    bool
 	Effort          string
@@ -48,6 +50,7 @@ func (r MessageRequest) MarshalJSON() ([]byte, error) {
 		Messages     []sdk.MessageParam   `json:"messages"`
 		Tools        []sdk.ToolUnionParam `json:"tools,omitempty"`
 		System       []systemBlock        `json:"system,omitempty"`
+		ToolChoice   any                  `json:"tool_choice,omitempty"`
 		Thinking     any                  `json:"thinking,omitempty"`
 		OutputConfig map[string]string    `json:"output_config,omitempty"`
 		Stream       bool                 `json:"stream,omitempty"`
@@ -59,6 +62,9 @@ func (r MessageRequest) MarshalJSON() ([]byte, error) {
 		Tools:        withLastToolCacheBreakpoint(r.Tools),
 		Stream:       r.Stream,
 		CacheControl: cacheControl{Type: "ephemeral", TTL: "1h"},
+	}
+	if r.ForceTool != "" {
+		body.ToolChoice = map[string]any{"type": "tool", "name": r.ForceTool, "disable_parallel_tool_use": true}
 	}
 	if r.System != "" {
 		body.System = []systemBlock{{Type: "text", Text: r.System, CacheControl: cacheControl{Type: "ephemeral", TTL: "1h"}}}
@@ -98,6 +104,9 @@ func (r MessageRequest) ToSDKParams() sdk.MessageNewParams {
 		Messages:     r.Messages,
 		Tools:        withLastToolCacheBreakpoint(r.Tools),
 		CacheControl: ephemeralCacheControl(),
+	}
+	if r.ForceTool != "" {
+		params.ToolChoice = sdk.ToolChoiceUnionParam{OfTool: &sdk.ToolChoiceToolParam{Name: r.ForceTool, DisableParallelToolUse: sdk.Bool(true)}}
 	}
 	if r.System != "" {
 		params.System = []sdk.TextBlockParam{{

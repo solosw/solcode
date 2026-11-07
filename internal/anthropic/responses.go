@@ -19,15 +19,17 @@ import (
 const responsesReasoningSignaturePrefix = "solcode:responses:"
 
 type responsesRequest struct {
-	Model           string               `json:"model"`
-	Instructions    string               `json:"instructions,omitempty"`
-	Input           []responsesInputItem `json:"input"`
-	Tools           []responsesTool      `json:"tools,omitempty"`
-	MaxOutputTokens int64                `json:"max_output_tokens"`
-	Stream          bool                 `json:"stream"`
-	Store           bool                 `json:"store"`
-	Include         []string             `json:"include,omitempty"`
-	Reasoning       *responsesReasoning  `json:"reasoning,omitempty"`
+	Model             string               `json:"model"`
+	Instructions      string               `json:"instructions,omitempty"`
+	Input             []responsesInputItem `json:"input"`
+	Tools             []responsesTool      `json:"tools,omitempty"`
+	ToolChoice        any                  `json:"tool_choice,omitempty"`
+	ParallelToolCalls *bool                `json:"parallel_tool_calls,omitempty"`
+	MaxOutputTokens   int64                `json:"max_output_tokens"`
+	Stream            bool                 `json:"stream"`
+	Store             bool                 `json:"store"`
+	Include           []string             `json:"include,omitempty"`
+	Reasoning         *responsesReasoning  `json:"reasoning,omitempty"`
 }
 
 type responsesReasoning struct {
@@ -174,6 +176,11 @@ func buildResponsesRequest(req MessageRequest) (responsesRequest, error) {
 		Model: model, Instructions: req.System, MaxOutputTokens: maxTokens,
 		Input: make([]responsesInputItem, 0, len(req.Messages)), Stream: req.Stream,
 		Include: []string{"reasoning.encrypted_content"},
+	}
+	if req.ForceTool != "" {
+		out.ToolChoice = map[string]string{"type": "function", "name": req.ForceTool}
+		parallel := false
+		out.ParallelToolCalls = &parallel
 	}
 	for _, tool := range toOpenAITools(req.Tools) {
 		out.Tools = append(out.Tools, responsesTool{

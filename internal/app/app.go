@@ -282,7 +282,7 @@ func New(cfg config.Config, opts ...Option) (*App, error) {
 	engineCfg.ShouldInjectWorkingSet = jev.shouldInjectWorkingSet()
 	engineCfg.Guardrail = jev.guardrail()
 	engineCfg.TerminalRunner = options.terminalRunner
-	application.configureContextSummary(&engineCfg)
+	application.configureContextCompression(&engineCfg)
 	engineCfg.AskUserAutoSelect = application.askUserAutoSelect
 	// Snapshot todolist on every TodoWrite so mid-turn updates are not lost;
 	// turn-end recording still captures the final state plus pruned files.
@@ -652,7 +652,7 @@ func (a *App) SwitchModel(cfg config.Config) error {
 		}}).WithRetrievalBudget(cfg.Memory.RetrievalM2Limit, cfg.Memory.RetrievalM3Limit, cfg.Memory.RetrievalM4Limit, cfg.Memory.RetrievalM5Limit)
 	}
 	ec := engineConfig(cfg, client, a.Hooks, a.Tools, a.Permissions, a.onTextDelta, a.onThinkingDelta, a.onToolStart, a.onToolDone, a.emitUsage, a.onStatus, a.onAgentProgress, a.onAskUser, a.textFileSystem, a.queuedPrompts, newFileChangeRecorder(a.ChangeGraph), a.captureCheckpoint, a.uncaptureCheckpoint, a.listCheckpointPaths, a.fingerprintBaseline, a.compactMessagesMidRun)
-	a.configureContextSummary(&ec)
+	a.configureContextCompression(&ec)
 	ec.TerminalRunner = a.terminalRunner
 	ec.OnTodosUpdated = a.recordTodoSessionMemory
 	ec.AskUserAutoSelect = a.askUserAutoSelect
@@ -756,7 +756,7 @@ func (a *App) ReloadFeatures(cfg config.Config, mcpFactory mcp.ClientFactory) er
 	registry.Register(tool.ContextTools(contextMemory, a)...)
 	registry.Register(tool.NewReadSessionMemoryTool(a)) // legacy execution only
 	engineCfg := engineConfig(cfg, a.Client, a.Hooks, a.Tools, a.Permissions, a.onTextDelta, a.onThinkingDelta, a.onToolStart, a.onToolDone, a.emitUsage, a.onStatus, a.onAgentProgress, a.onAskUser, a.textFileSystem, a.queuedPrompts, newFileChangeRecorder(a.ChangeGraph), a.captureCheckpoint, a.uncaptureCheckpoint, a.listCheckpointPaths, a.fingerprintBaseline, a.compactMessagesMidRun)
-	a.configureContextSummary(&engineCfg)
+	a.configureContextCompression(&engineCfg)
 	engineCfg.TerminalRunner = a.terminalRunner
 	engineCfg.Router = jev.router()
 	engineCfg.ShouldInjectWorkingSet = jev.shouldInjectWorkingSet()
@@ -942,17 +942,6 @@ func (a *App) RunPromptWithSession(ctx context.Context, sessionID, prompt, workD
 	unbindUsage := a.bindUsageSession(current)
 	defer unbindUsage()
 	sessionStateChanged := a.SanitizeLoadedSession(current)
-	if a.shouldCompact(ctx, current) && (a.Tools == nil || a.Tools.Find(tool.CompressToolName) == nil) {
-		changed, err := a.compactSession(ctx, current, false)
-		if err != nil {
-			return agent.AgentResult{}, fmt.Errorf("compact session with AI summary: %w", err)
-		}
-		if changed {
-			current.Metadata.MemoryCompactionCompleted = true
-			current.Metadata.MemoryCompactionMessageCount = len(current.Messages)
-			sessionStateChanged = true
-		}
-	}
 	if sessionStateChanged {
 		if err := a.Sessions.Save(context.WithoutCancel(ctx), current); err != nil {
 			return agent.AgentResult{}, fmt.Errorf("save session after compaction: %w", err)
@@ -1822,180 +1811,61 @@ func (a *App) ReadObservation(ctx context.Context, req tool.ObservationReadReque
 	return "", fmt.Errorf("observation %q not found", id)
 }
 
+// compactSession uses the same compress tool and archive as the agent loop.
 func (a *App) compactSession(ctx context.Context, current *session.Session, force bool) (bool, error) {
 	if a == nil || current == nil {
 		return false, nil
 	}
-	cleanedMessages := session.StripEphemeralContextMessages(current.CopyMessages())
-	cleanedHistory := len(cleanedMessages) != len(current.Messages)
-	if cleanedHistory {
-		current.ReplaceMessages(cleanedMessages)
+	if !force && !a.shouldCompact(ctx, current) {
+		return false, nil
 	}
-	// The durable summary is the checkpoint actually visible to the model.
-	// In-flight compaction may not have a Session.Summary field populated.
-	previousSummary := session.CompactedSummary(cleanedMessages)
-	if previousSummary == "" {
-		previousSummary = current.Summary
+	state := current.Compression.Clone()
+	messages := current.CopyMessages()
+	if err := state.Sync(messages); err != nil {
+		return false, err
 	}
-	previousSummary = sanitizeLoadedSessionSummary(previousSummary)
-	messagesToCompact := session.StripCompactedContextMessages(cleanedMessages)
-	if len(contextmessage.WithoutDynamicContext(messagesToCompact)) == 0 {
-		return cleanedHistory, nil
+	if state.Overview(int(a.Config.MaxContextTokens), 0).TotalCompressibleRanges == 0 {
+		return false, nil
+	}
+	if a.Engine == nil || a.Tools == nil || a.Tools.Find(tool.CompressToolName) == nil {
+		return false, fmt.Errorf("configure the main model and compress tool to compact the session")
 	}
 	if a.onStatus != nil {
 		a.onStatus("Compacting...")
 		defer a.onStatus("Ready")
 	}
-	trigger := a.compactionTriggerTokens()
-	estimated := a.estimateSessionContextTokens(ctx, current)
-	a.recordCompactEvent("compact_started", map[string]any{
-		"session_id":       string(current.Metadata.ID),
-		"estimated_tokens": estimated,
-		"trigger_tokens":   trigger,
-		"messages_before":  len(current.Messages),
-		"summary_runes":    len([]rune(current.Summary)),
-	})
-	target := 0
-	if a.Config.MaxContextTokens > 0 && a.Config.Memory.CompactionTargetPercent > 0 {
-		target = int(a.Config.MaxContextTokens) * a.Config.Memory.CompactionTargetPercent / 100
-	}
-	if target <= 0 {
-		target = trigger * a.Config.Memory.CompactionTargetPercent / 100
-	}
-	if target <= 0 {
-		target = trigger * 15 / 100
-	}
-	summaryGate := a.memorySummaryTriggerTokens()
-	if summaryGate <= 0 {
-		summaryGate = trigger
-	}
-	writer := a.sessionSummaryWriter()
-	if writer == nil {
-		return false, fmt.Errorf("configure and enable memory.organizer to generate a session summary; compress accepts a model-authored summary without this backend")
-	}
-	result, err := session.Compact(ctx, previousSummary, messagesToCompact, writer, session.CompactOptions{
-		MaxRecentTurns:         a.Config.Memory.MaxRecentTurns,
-		SummaryThresholdTokens: trigger,
-		TargetTokens:           target,
-		EstimatedTokens:        estimated,
-		Force:                  force,
-		ObservationStore:       nil, // new summaries archive original messages instead of masking observations
-		// Zero uses session.defaultRecentUnmasked (newest 2 user turns).
-		ObservationKeepTurns: 0,
-		SummaryIfAboveTokens: summaryGate,
-	})
-	if err != nil {
-		a.recordCompactEvent("compact_failed", map[string]any{
-			"session_id": string(current.Metadata.ID),
-			"error":      err.Error(),
-		})
-		return false, err
-	}
-	maskedOnly := result.ObservationsOnly
-	if !maskedOnly && !result.SummaryGenerated && (result.Changed || estimated >= trigger || force) {
-		// A composed request can exceed the trigger even when the transcript
-		// alone does not. Never discard that history using a stale summary.
-		transcript := session.Transcript(contextmessage.WithoutDynamicContext(messagesToCompact))
-		if writer != nil && strings.TrimSpace(transcript) != "" {
-			generated, err := writer.Summarize(ctx, previousSummary, transcript)
-			if err != nil {
-				return false, fmt.Errorf("generate session summary with AI: %w", err)
+	revision := state.Revision
+	a.recordCompactEvent("compact_started", map[string]any{"session_id": string(current.Metadata.ID), "method": "compress", "messages_before": len(messages)})
+	result := a.Engine.RunWithHistory(ctx, engine.RunRequest{
+		AgentConfig: agent.AgentConfig{ID: agent.AgentID(current.Metadata.ID), Role: agent.AgentRoleMain, WorkDir: current.Metadata.WorkDir, MaxTurns: 1},
+		SessionID:   string(current.Metadata.ID), Messages: messages, Compression: state, SkipPrompt: true, CompactOnly: true,
+		Checkpoint: func(cp agent.Checkpoint) error {
+			// Only a validated compress operation can replace the saved history.
+			if cp.Compression.Revision <= revision {
+				return nil
 			}
-			result.Summary = strings.TrimSpace(generated)
-			if result.Summary == "" {
-				return false, fmt.Errorf("generate session summary with AI: empty response")
+			staged := *current
+			staged.ReplaceMessages(cp.Messages)
+			staged.Compression = cp.Compression.Clone()
+			if a.Sessions != nil {
+				if err := a.Sessions.Save(context.WithoutCancel(ctx), &staged); err != nil {
+					return err
+				}
 			}
-			result.SummaryGenerated = true
-		} else {
-			result.Summary = conciseSessionSummary(transcript, previousSummary)
-		}
-	}
-	if !result.Changed {
-		if estimated < trigger && !force {
-			a.recordCompactEvent("compact_skipped", map[string]any{
-				"session_id":       string(current.Metadata.ID),
-				"estimated_tokens": estimated,
-				"trigger_tokens":   trigger,
-			})
-			return cleanedHistory, nil
-		}
-		// The total request can cross the threshold because session history,
-		// project knowledge, tools, and the system prompt are composed together.
-		// Even when Headroom does not rewrite the message slice, fold the old
-		// session history into Summary so the next request is exactly:
-		// project knowledge + session summary + latest user prompt.
-		current.Summary = result.Summary
-		if strings.TrimSpace(current.Summary) == "" {
-			a.recordCompactEvent("compact_skipped", map[string]any{
-				"session_id": string(current.Metadata.ID),
-				"reason":     "no substantive session summary",
-			})
-			return cleanedHistory, nil
-		}
-		if err := a.rememberCompactedSession(ctx, current, previousSummary, current.Summary, result, estimated); err != nil {
-			a.recordCompactEvent("memory_extract_failed", map[string]any{
-				"session_id": string(current.Metadata.ID),
-				"reason":     "compaction",
-				"error":      err.Error(),
-			})
-		}
-		if err := persistCompactedContext(current, current.Summary, a.compactedProjectKnowledge(ctx, current, current.Summary)); err != nil {
-			return false, err
-		}
-		a.recordCompactEvent("compact_succeeded", map[string]any{
-			"session_id":      string(current.Metadata.ID),
-			"messages_before": len(cleanedMessages),
-			"messages_after":  len(current.Messages),
-			"summary_runes":   len([]rune(current.Summary)),
-			"trigger_source":  "composed_context",
-		})
-		return true, nil
-	}
-	beforeMessages := len(current.Messages)
-	if maskedOnly {
-		current.ReplaceMessages(session.MergeCompactedContext(result.Messages, current.CopyMessages()))
-		a.recordCompactEvent("compact_succeeded", map[string]any{
-			"session_id":      string(current.Metadata.ID),
-			"messages_before": beforeMessages,
-			"messages_after":  len(current.Messages),
-			"method":          "observation_masking",
-			"summary_runes":   len([]rune(current.Summary)),
-			"original_runes":  len([]rune(result.OriginalTranscript)),
-			"retained_runes":  len([]rune(result.RetainedTranscript)),
-		})
-		return true, nil
-	}
-	nextSummary := strings.TrimSpace(result.Summary)
-	if strings.TrimSpace(nextSummary) == "" {
-		a.recordCompactEvent("compact_skipped", map[string]any{
-			"session_id": string(current.Metadata.ID),
-			"reason":     "no substantive session summary",
-		})
-		return cleanedHistory, nil
-	}
-	if err := a.rememberCompactedSession(ctx, current, previousSummary, nextSummary, result, estimated); err != nil {
-		a.recordCompactEvent("memory_extract_failed", map[string]any{
-			"session_id": string(current.Metadata.ID),
-			"reason":     "compaction",
-			"error":      err.Error(),
-		})
-	}
-	if err := persistCompactedContext(current, nextSummary, a.compactedProjectKnowledge(ctx, current, nextSummary)); err != nil {
-		return false, err
-	}
-	retainedTokens := a.estimateSessionContextTokens(ctx, current)
-	a.recordCompactEvent("compact_succeeded", map[string]any{
-		"session_id":          string(current.Metadata.ID),
-		"messages_before":     beforeMessages,
-		"messages_after":      len(current.Messages),
-		"summary_runes":       len([]rune(current.Summary)),
-		"original_runes":      len([]rune(result.OriginalTranscript)),
-		"compacted_runes":     len([]rune(result.CompactedTranscript)),
-		"retained_runes":      len([]rune(result.RetainedTranscript)),
-		"discarded_runes":     len([]rune(result.DiscardedTranscript)),
-		"retained_tokens":     retainedTokens,
-		"used_local_fallback": !result.SummaryGenerated,
+			*current = staged
+			return nil
+		},
 	})
+	if result.AgentResult.Error != "" {
+		a.recordCompactEvent("compact_failed", map[string]any{"session_id": string(current.Metadata.ID), "method": "compress", "error": result.AgentResult.Error})
+		return false, fmt.Errorf("compress: %s", result.AgentResult.Error)
+	}
+	if result.Compression == nil || result.Compression.Revision == revision {
+		return false, nil
+	}
+	current.ReplaceMessages(result.Messages)
+	current.Compression = result.Compression
+	a.recordCompactEvent("compact_succeeded", map[string]any{"session_id": string(current.Metadata.ID), "method": "compress", "revision": result.Compression.Revision, "messages_after": len(result.Messages)})
 	return true, nil
 }
 

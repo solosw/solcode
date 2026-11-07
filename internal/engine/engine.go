@@ -116,9 +116,7 @@ type Config struct {
 	// CompactMessages is invoked mid-run when estimated context reaches MaxContextTokens (100%).
 	// It must return a shorter message list. Nil disables mid-run compaction.
 	CompactMessages func(ctx context.Context, messages []sdk.MessageParam) ([]sdk.MessageParam, error)
-	// ContextSummary uses the configured organizer for automatic, reversible folds.
-	// Nil leaves compression to the working model.
-	ContextSummary           func(ctx context.Context, transcript string) (string, error)
+	// CompactionTriggerPercent forces the current model to call compress.
 	CompactionTriggerPercent int
 	// Router optionally adds a semantic fallback to lexical tool selection.
 	// Nil keeps selection purely lexical.
@@ -243,11 +241,13 @@ func orderedSkillRoots(active string, roots []string) []string {
 }
 
 type RunRequest struct {
-	Compression      *contextcompression.State
-	WorkingSet       json.RawMessage
-	Checkpoint       func(agent.Checkpoint) error
-	CompactMessages  func(context.Context, []sdk.MessageParam) ([]sdk.MessageParam, error)
-	SkipPrompt       bool
+	Compression     *contextcompression.State
+	WorkingSet      json.RawMessage
+	Checkpoint      func(agent.Checkpoint) error
+	CompactMessages func(context.Context, []sdk.MessageParam) ([]sdk.MessageParam, error)
+	SkipPrompt      bool
+	// CompactOnly runs compress without continuing the task.
+	CompactOnly      bool
 	AgentConfig      agent.AgentConfig
 	SessionID        string
 	Messages         []sdk.MessageParam
@@ -402,6 +402,7 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 	workingSet.SetGoal(prompt)
 	var runUsage agent.TokenUsage
 	var issuedTool bool
+	compressionFailures := 0
 	defer func() {
 		if result.AgentResult.Error != "" && issuedTool {
 			result.AgentResult.NoRetry = true
@@ -704,23 +705,22 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 			Effort:       e.config.Effort,
 			Stream:       e.config.Stream,
 		}
-		if contextEnabled && isMain && e.config.ContextSummary != nil {
-			nextMessages, nextState, compactErr := e.compactContext(ctx, compression, messages, requestBuilder, buildReq)
+		forceCompress := false
+		if contextEnabled && isMain {
+			var compactErr error
+			messages, forceCompress, compactErr = e.prepareForcedCompression(compression, messages, requestBuilder, buildReq, runReq.CompactOnly)
 			if compactErr != nil {
 				return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: compactErr.Error(), NoRetry: true}, Messages: messages}
 			}
-			if nextState != nil {
-				staged := runReq
-				staged.Compression = nextState
-				if err := staged.saveCheckpoint("compacted", nextMessages, workingSet, runUsage, true); err != nil {
-					return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: err.Error(), NoRetry: true}, Messages: messages}
-				}
-				*compression = *nextState
-				messages = nextMessages
-				buildReq.Messages = messages
-			}
+			buildReq.Messages = messages
 		}
-		if contextEnabled {
+		if runReq.CompactOnly && !forceCompress {
+			return RunResult{Messages: messages}
+		}
+		if forceCompress && compressionFailures >= 3 {
+			return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: "mandatory compress failed after 3 attempts; history is preserved; inspect compress tool errors", NoRetry: true}, Messages: messages}
+		}
+		if contextEnabled && !forceCompress {
 			var nudgeErr error
 			messages, nudgeErr = e.appendContextNudge(compression, messages, requestBuilder, buildReq)
 			if nudgeErr != nil {
@@ -764,7 +764,7 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 			}
 		}
 		if (contextEnabled || runReq.Checkpoint != nil) && e.config.MaxContextTokens > 0 && requestBuilder.EstimateContextTokens(buildReq) >= e.config.MaxContextTokens {
-			return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: "context exceeds the configured budget; history is preserved. Use /compact with the configured memory organizer, or resume after reducing context", NoRetry: true}, Messages: messages}
+			return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: "context exceeds the configured budget; history is preserved. Resume after reducing protected context or increasing the configured budget", NoRetry: true}, Messages: messages}
 		}
 		if err := runReq.saveCheckpoint("request", messages, workingSet, runUsage, false); err != nil {
 			return RunResult{AgentResult: agent.AgentResult{Error: err.Error(), NoRetry: true}, Messages: messages}
@@ -780,8 +780,16 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 			buildReq.Effort, buildReq.Stream = e.config.Effort, e.config.Stream
 		}
 		req := requestBuilder.Build(buildReq)
+		if forceCompress {
+			req.ForceTool = tool.CompressToolName
+			req.Stream, req.Thinking, req.ThinkingText, req.Effort = false, false, false, ""
+			if e.config.OnStatus != nil {
+				e.config.OnStatus("Compacting...")
+			}
+		}
+		compressionRevision := compression.Revision
 		textStreamed, thinkingStreamed := false, false
-		if isMain {
+		if isMain && !forceCompress {
 			req.OnTextDelta = e.config.OnTextDelta
 			req.OnThinkingDelta = e.config.OnThinkingDelta
 		} else if isTask && e.config.OnAgentProgress != nil {
@@ -800,7 +808,13 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 		}
 		message, err := e.config.Client.Create(ctx, req)
 		if err != nil {
-			return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: err.Error()}, Messages: messages}
+			return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: err.Error(), NoRetry: forceCompress}, Messages: messages}
+		}
+		if forceCompress {
+			uses := cpanthropic.ToolUseBlocks(message)
+			if message.StopReason != sdk.StopReasonToolUse || len(uses) != 1 || uses[0].Name != tool.CompressToolName {
+				return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: "model did not honor mandatory compress tool_choice; history is preserved", NoRetry: true}, Messages: messages}
+			}
 		}
 		// Non-streaming providers still expose child messages, without replaying
 		// blocks already delivered by streaming callbacks.
@@ -1098,6 +1112,21 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 			}
 		}
 		messages = append(messages, sdk.NewUserMessage(cpanthropic.ToolResultBlocks(results)...))
+		if forceCompress {
+			if compression.Revision == compressionRevision {
+				compressionFailures++
+			} else {
+				compressionFailures = 0
+				if runReq.CompactOnly {
+					return RunResult{Messages: messages}
+				}
+			}
+			if e.config.OnStatus != nil {
+				e.config.OnStatus("Thinking…")
+			}
+			// Maintenance preserves the original task's turn budget.
+			turn--
+		}
 	}
 
 	if background.hasPending() {

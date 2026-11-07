@@ -1,124 +1,132 @@
 package engine
 
 import (
-	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
 	"github.com/solosw/solcode/internal/agent"
+	cpanthropic "github.com/solosw/solcode/internal/anthropic"
 	"github.com/solosw/solcode/internal/contextcompression"
+	"github.com/solosw/solcode/internal/permission"
 	"github.com/solosw/solcode/internal/session"
 	"github.com/solosw/solcode/internal/tool"
 )
 
-func TestAutomaticContextSummaryWithContextTools(t *testing.T) {
-	for _, failure := range []string{"", "api", "checkpoint", "nonreducing"} {
-		t.Run("failure="+failure, func(t *testing.T) {
+func TestMandatoryCompressContinuesOriginalTask(t *testing.T) {
+	for _, failure := range []string{"", "api", "checkpoint", "nonreducing", "ignored", "other tool", "stale once"} {
+		t.Run(failure, func(t *testing.T) {
 			reg := tool.NewRegistry()
 			reg.Register(tool.ContextTools(nil, nil)...)
-			evidence := strings.Repeat("ARCHIVED_EXACT_EVIDENCE ", 15000) + "END_EXACT_EVIDENCE"
-			history := []sdk.MessageParam{
-				sdk.NewUserMessage(sdk.NewTextBlock("old request")),
-				sdk.NewAssistantMessage(sdk.NewTextBlock(evidence)),
-				sdk.NewUserMessage(sdk.NewTextBlock("previous task")),
-				sdk.NewAssistantMessage(sdk.NewTextBlock("previous task done")),
-			}
-			state := contextcompression.New()
-			if err := state.Sync(history); err != nil {
-				t.Fatal(err)
-			}
-			client := &midRunClient{}
-			summaries, committed := 0, false
-			eng := NewEngine(Config{
-				Client: client, Tools: reg, ModelName: "chat", MaxTokens: 128, MaxTurns: 1, MaxContextTokens: 30000,
-				ContextSummary: func(ctx context.Context, transcript string) (string, error) {
-					summaries++
-					if !strings.Contains(transcript, evidence) || strings.Contains(transcript, "CURRENT_REQUEST") {
-						t.Fatal("summary input lost evidence or included the protected request")
+			evidence := strings.Repeat("ARCHIVED_EXACT_EVIDENCE ", 5000) + "END_EXACT_EVIDENCE"
+			history := []sdk.MessageParam{sdk.NewUserMessage(sdk.NewTextBlock("stable prefix")), sdk.NewAssistantMessage(sdk.NewTextBlock(evidence)), sdk.NewUserMessage(sdk.NewTextBlock("previous task")), sdk.NewAssistantMessage(sdk.NewTextBlock("previous task done"))}
+			committed, resumed, forced := false, false, 0
+			client := &persistentClient{respond: func(index int, req cpanthropic.MessageRequest) (*sdk.Message, error) {
+				if req.ForceTool == "" {
+					resumed = true
+					if !committed || !req.Stream || !req.Thinking || req.Effort != "high" {
+						t.Fatal("task resumed before commit or lost original model settings")
 					}
-					if failure == "api" {
-						return "", errors.New("summary endpoint rejected request")
+					if !strings.Contains(session.Transcript(req.Messages), "CURRENT_REQUEST") || strings.Contains(session.Transcript(req.Messages), evidence) {
+						t.Fatal("continuation lost task or kept folded history")
 					}
-					if failure == "nonreducing" {
-						return transcript + transcript, nil
-					}
-					return "Previous investigation complete; exact evidence is archived.", nil
-				},
-			})
-			result := eng.RunWithHistory(t.Context(), RunRequest{
-				AgentConfig: agent.AgentConfig{ID: "main", WorkDir: t.TempDir(), Prompt: "CURRENT_REQUEST"},
-				Messages:    history, Compression: state,
-				Checkpoint: func(cp agent.Checkpoint) error {
-					if cp.Stage == "compacted" {
-						if failure == "checkpoint" {
-							return errors.New("disk unavailable")
-						}
-						if cp.Compression == nil || cp.Compression.Revision != 1 {
-							t.Fatal("fold missing from checkpoint")
-						}
-						committed = true
-					}
-					return nil
-				},
-			})
-			if summaries != 1 {
-				t.Fatalf("summary calls=%d, want 1", summaries)
-			}
-			if !strings.Contains(session.Transcript(result.Messages), "CURRENT_REQUEST") {
-				t.Fatal("latest request lost")
-			}
-			if state.Revision != 0 {
-				t.Fatal("caller's state mutated")
-			}
-			if failure != "" {
-				if result.AgentResult.Error == "" || !result.AgentResult.NoRetry || client.creates != 0 || committed {
-					t.Fatalf("failure was not preserved: %+v creates=%d committed=%v", result.AgentResult, client.creates, committed)
+					return &sdk.Message{Role: "assistant", StopReason: sdk.StopReasonEndTurn, Content: []sdk.ContentBlockUnion{{Type: "text", Text: "Original task completed"}}}, nil
 				}
-				if result.Compression.Revision != 0 || !strings.Contains(session.Transcript(result.Messages), evidence) {
-					t.Fatal("failed compaction changed active history")
+				forced++
+				if req.ForceTool != "compress" || req.Stream || req.Thinking || req.Effort != "" {
+					t.Fatal("compression must force compress, synchronously without thinking")
+				}
+				if failure == "api" {
+					return nil, errors.New("endpoint unavailable")
+				}
+				if failure == "ignored" {
+					return backgroundMessage(t), nil
+				}
+				if failure == "other tool" {
+					return backgroundMessage(t, backgroundCall("wrong", "acp_status", map[string]any{})), nil
+				}
+				summary := "Previous investigation complete; exact evidence is archived. Continue the active task."
+				start := "m2"
+				if failure == "nonreducing" {
+					start, summary = "m3", strings.Repeat("cannot reduce ", 100)
+				}
+				revision := 0
+				if failure == "stale once" && forced == 1 {
+					revision = 99
+				}
+				return backgroundMessage(t, backgroundCall("fold", "compress", map[string]any{"start": start, "end": "m4", "summary": summary, "revision": revision})), nil
+			}}
+			eng := NewEngine(Config{Client: client, Tools: reg, ModelName: "chat", SystemPrompt: "stable system", MaxTokens: 1024, MaxTurns: 1, MaxContextTokens: 120000, CompactionTriggerPercent: 10, Stream: true, Thinking: true, Effort: "high", Permissions: permission.NewService(permission.ModeBypass)})
+			state := contextcompression.New()
+			_ = state.Sync(history)
+			result := eng.RunWithHistory(t.Context(), RunRequest{AgentConfig: agent.AgentConfig{ID: "main", WorkDir: t.TempDir(), Prompt: "CURRENT_REQUEST", MaxTurns: 1}, Messages: history, Compression: state, Checkpoint: func(cp agent.Checkpoint) error {
+				if cp.Stage == "context_compress" {
+					if failure == "checkpoint" {
+						return errors.New("disk unavailable")
+					}
+					if cp.Compression.Revision != 1 {
+						t.Fatal("missing archive checkpoint")
+					}
+					committed = true
+				}
+				return nil
+			}})
+			if state.Revision != 0 {
+				t.Fatal("caller state changed")
+			}
+			if failure != "" && failure != "stale once" {
+				if result.AgentResult.Error == "" || !result.AgentResult.NoRetry || committed || resumed {
+					t.Fatalf("failure not preserved: %+v", result.AgentResult)
+				}
+				if !strings.Contains(session.Transcript(result.Messages), evidence) || result.Compression.Revision != 0 {
+					t.Fatalf("failure lost history: revision=%d evidence=%v error=%s", result.Compression.Revision, strings.Contains(session.Transcript(result.Messages), evidence), result.AgentResult.Error)
+				}
+				want := 1
+				if failure == "checkpoint" || failure == "nonreducing" {
+					want = 3
+				}
+				if forced != want {
+					t.Fatalf("forced calls=%d want %d", forced, want)
 				}
 				return
 			}
-			if result.AgentResult.Error != "" || client.creates != 1 || !committed {
-				t.Fatalf("result=%+v creates=%d committed=%v", result.AgentResult, client.creates, committed)
+			if result.AgentResult.Error != "" || result.AgentResult.Output != "Original task completed" || !resumed || !committed {
+				t.Fatalf("no task continuation: %+v forced=%d", result.AgentResult, forced)
 			}
-			if strings.Contains(session.Transcript(result.Messages), evidence) {
-				t.Fatal("raw evidence still active")
+			if failure == "stale once" && forced != 2 {
+				t.Fatal("invalid compress was not retried")
 			}
 			found, err := result.Compression.Search("ARCHIVED_EXACT_EVIDENCE", 0, 10)
-			if err != nil || found["total"].(int) < 1 {
+			if err != nil || found["total"].(int) == 0 {
 				t.Fatal("original evidence lost", err)
+			}
+			first, last := client.requests[0], client.requests[len(client.requests)-1]
+			a, _ := json.Marshal(first.Tools)
+			b, _ := json.Marshal(last.Tools)
+			if string(a) != string(b) || first.System != last.System {
+				t.Fatal("stable tool/system prefix changed")
 			}
 		})
 	}
 }
 
-func TestAutomaticContextSummaryHonorsTrigger(t *testing.T) {
-	messages := []sdk.MessageParam{
-		sdk.NewUserMessage(sdk.NewTextBlock("old request")),
-		sdk.NewAssistantMessage(sdk.NewTextBlock(strings.Repeat("completed evidence ", 3000))),
-		sdk.NewUserMessage(sdk.NewTextBlock("CURRENT_REQUEST")),
-		sdk.NewAssistantMessage(sdk.NewTextBlock("working")),
-	}
+func TestMandatoryCompressHonorsTriggerAndExplicitRequest(t *testing.T) {
+	messages := []sdk.MessageParam{sdk.NewUserMessage(sdk.NewTextBlock("old request")), sdk.NewAssistantMessage(sdk.NewTextBlock(strings.Repeat("completed evidence ", 3000))), sdk.NewUserMessage(sdk.NewTextBlock("CURRENT_REQUEST")), sdk.NewAssistantMessage(sdk.NewTextBlock("working"))}
 	builder := ContextBuilder{}
 	req := BuildRequest{Messages: messages}
 	estimate := builder.EstimateContextTokens(req)
-	for _, percent := range []int{80, 95} {
-		calls := 0
-		eng := NewEngine(Config{MaxContextTokens: estimate * 100 / 90, CompactionTriggerPercent: percent,
-			ContextSummary: func(context.Context, string) (string, error) { calls++; return "Completed previous work.", nil },
-		})
-		_, state, err := eng.compactContext(t.Context(), contextcompression.New(), messages, builder, req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if percent == 80 && (calls != 1 || state == nil) {
-			t.Fatal("configured trigger ignored")
-		}
-		if percent == 95 && (calls != 0 || state != nil) {
-			t.Fatal("compaction started below trigger")
+	for _, tc := range []struct {
+		percent        int
+		explicit, want bool
+	}{{80, false, true}, {95, false, false}, {95, true, true}} {
+		eng := NewEngine(Config{MaxContextTokens: estimate * 100 / 90, CompactionTriggerPercent: tc.percent})
+		state := contextcompression.New()
+		state.Nudge = contextcompression.NudgeState{Initialized: true, LastLevel: "compressed", BaselineTokens: int(estimate)}
+		_, forced, err := eng.prepareForcedCompression(state, messages, builder, req, tc.explicit)
+		if err != nil || forced != tc.want {
+			t.Fatalf("case=%+v forced=%v error=%v", tc, forced, err)
 		}
 	}
 }
