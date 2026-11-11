@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -565,6 +566,8 @@ type ResolvedProvider struct {
 }
 
 type ModelConfig struct {
+	// discovered models are runtime catalog entries, not local settings.
+	discovered bool
 	// Nil uses compatibility defaults; an empty list disables effort selection.
 	SupportedEfforts []string                   `json:"supported_efforts"`
 	Name             string                     `json:"name"`
@@ -645,10 +648,23 @@ func Default() Config {
 }
 
 func Load(path string) (Config, error) {
+	return load(path, nil)
+}
+
+// LoadForStartup refreshes provider catalogs before resolving the active model.
+// Ordinary Load and Normalize remain local operations.
+func LoadForStartup(ctx context.Context, path string) (Config, error) {
+	return load(path, func(cfg *Config) { cfg.discoverProviderModels(ctx) })
+}
+
+func load(path string, discover func(*Config)) (Config, error) {
 	cfg := Default()
 	if path != "" {
 		if err := loadFile(&cfg, path); err != nil {
 			return cfg, err
+		}
+		if discover != nil {
+			discover(&cfg)
 		}
 		if err := cfg.Normalize(); err != nil {
 			return cfg, err
@@ -665,6 +681,9 @@ func Load(path string) (Config, error) {
 		}
 	}
 
+	if discover != nil {
+		discover(&cfg)
+	}
 	if err := cfg.Normalize(); err != nil {
 		return cfg, err
 	}

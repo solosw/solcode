@@ -766,6 +766,8 @@ All configuration lives in a JSON file. Example:
 }
 ```
 
+At each application startup, SolCode requests `GET /v1/models` from every configured provider and merges the returned IDs into its available models. Local entries stay first and take precedence when a remote ID matches a local model name or ID, preserving all local model parameters. Discovery uses each provider's credentials, API format, environment overrides, and the configured proxy. Requests run with at most four concurrent providers and a five-second timeout per request; failures keep the local list usable. Discovered entries are runtime-only, unless explicitly edited in settings to create a local override.
+
 ### Key configuration fields
 
 | Field | Type | Description |

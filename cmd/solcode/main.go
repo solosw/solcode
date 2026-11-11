@@ -82,7 +82,7 @@ func main() {
 		}
 	}
 
-	cfg, err := config.Load(configPath)
+	cfg, err := config.LoadForStartup(context.Background(), configPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "load config: %v\n", err)
 		os.Exit(1)
@@ -1107,6 +1107,11 @@ func handleCustomProvider(cfg *config.Config, application *app.App, values []str
 		return tui.SelectResult{Message: fmt.Sprintf("Could not reload custom provider %q: %v", name, err)}
 	}
 	*cfg = loaded
+	for _, provider := range loaded.Providers {
+		if provider.Name == name && len(provider.Models) > 0 {
+			return tui.SelectResult{Message: fmt.Sprintf("Added custom provider %s (%s) and discovered %d available models. Select it with /provider.", name, apiFormat, len(provider.Models))}
+		}
+	}
 	return tui.SelectResult{Message: fmt.Sprintf("Added custom provider %s (%s) and reloaded settings. Add a model for it with /model.", name, apiFormat)}
 }
 
@@ -1187,7 +1192,7 @@ func saveAndReloadConfig(current config.Config, persistencePath, configPath stri
 	if err := config.SaveLocalOverrides(persistencePath, updates); err != nil {
 		return config.Config{}, err
 	}
-	loaded, err := config.Load(configPath)
+	loaded, err := config.LoadForStartup(context.Background(), configPath)
 	if err != nil {
 		return config.Config{}, err
 	}

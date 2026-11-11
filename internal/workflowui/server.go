@@ -1162,6 +1162,9 @@ func applyActiveModelSettings(cfg *config.Config, req settingsUpdate) {
 			if model.Name != cfg.Model && model.ID != cfg.Model {
 				continue
 			}
+			if req.MaxContext != nil || req.MaxTurns != nil || req.Effort != nil {
+				model.KeepLocal()
+			}
 			if req.MaxContext != nil {
 				model.MaxContextTokens = *req.MaxContext
 			}
