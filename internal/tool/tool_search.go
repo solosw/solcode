@@ -124,7 +124,7 @@ func SearchCapabilities(registry *Registry, skills *skill.Registry, input json.R
 				if candidate.Name() == ToolSearchToolName {
 					continue
 				}
-				if candidate.Name() == WaitToolName || candidate.Name() == SubagentToolName {
+				if candidate.Name() == WaitToolName || candidate.Name() == SubagentToolName || candidate.Name() == WriteSessionMemoryToolName {
 					// Wait/Subagent are internal helpers, not model-facing tools.
 					continue
 				}

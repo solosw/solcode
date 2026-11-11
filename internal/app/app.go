@@ -363,9 +363,6 @@ func New(cfg config.Config, opts ...Option) (*App, error) {
 		// Keep legacy read execution for existing calls; model discovery uses search_context.
 		// Write tools are hidden when the organizer owns archival writes.
 		registry.Register(tool.NewReadMemoryTool(application))
-		if !cfg.OrganizerEnabled() {
-			registry.Register(tool.NewWriteMemoryTool(application))
-		}
 	}
 	registry.Register(tool.NewReadObservationTool(application)) // legacy execution only; hidden from the model
 	var contextMemory tool.MemoryReader
@@ -377,9 +374,7 @@ func New(cfg config.Config, opts ...Option) (*App, error) {
 	}
 	// Legacy session recall execution; reads are exposed through search_context.
 	registry.Register(tool.NewReadSessionMemoryTool(application))
-	if !cfg.OrganizerEnabled() {
-		registry.Register(tool.NewWriteSessionMemoryTool(application))
-	}
+	registerMemoryWriters(registry, application, cfg)
 	if cfg.OrganizerEnabled() {
 		application.organizer = newOrganizerRuntime(cfg)
 	}
@@ -745,7 +740,7 @@ func (a *App) ReloadFeatures(cfg config.Config, mcpFactory mcp.ClientFactory) er
 			PromotionAccessThreshold: cfg.Memory.PromotionAccessThreshold,
 			PromotionConfidence:      cfg.Memory.PromotionConfidence,
 		}}).WithRetrievalBudget(cfg.Memory.RetrievalM2Limit, cfg.Memory.RetrievalM3Limit, cfg.Memory.RetrievalM4Limit, cfg.Memory.RetrievalM5Limit)
-		registry.Register(tool.NewWriteMemoryTool(a), tool.NewReadMemoryTool(a))
+		registry.Register(tool.NewReadMemoryTool(a))
 	} else {
 		a.MemoryManager = nil
 	}
@@ -755,6 +750,7 @@ func (a *App) ReloadFeatures(cfg config.Config, mcpFactory mcp.ClientFactory) er
 	}
 	registry.Register(tool.ContextTools(contextMemory, a)...)
 	registry.Register(tool.NewReadSessionMemoryTool(a)) // legacy execution only
+	registerMemoryWriters(registry, a, cfg)
 	engineCfg := engineConfig(cfg, a.Client, a.Hooks, a.Tools, a.Permissions, a.onTextDelta, a.onThinkingDelta, a.onToolStart, a.onToolDone, a.emitUsage, a.onStatus, a.onAgentProgress, a.onAskUser, a.textFileSystem, a.queuedPrompts, newFileChangeRecorder(a.ChangeGraph), a.captureCheckpoint, a.uncaptureCheckpoint, a.listCheckpointPaths, a.fingerprintBaseline, a.compactMessagesMidRun)
 	a.configureContextCompression(&engineCfg)
 	engineCfg.TerminalRunner = a.terminalRunner

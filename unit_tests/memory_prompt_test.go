@@ -20,7 +20,7 @@ func TestDefaultSystemPromptDocumentsMemoryTools(t *testing.T) {
 		"# Memory",
 		"WriteMemory",
 		"search_context",
-		"WriteSessionMemory",
+		"WriteMemory(source=\"session_memory\")",
 		"source=\"session_memory\"",
 		".solcode/solcode.md",
 		"not interchangeable",

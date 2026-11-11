@@ -48,6 +48,7 @@ type MemoryWriter interface {
 
 // WriteMemoryParams is the input schema for the WriteMemory tool.
 type WriteMemoryParams struct {
+	Source     string   `json:"source,omitempty"`
 	Memory     string   `json:"memory"`
 	Kind       string   `json:"kind,omitempty"`
 	Scope      string   `json:"scope,omitempty"`
@@ -63,18 +64,28 @@ var (
 
 type writeMemoryTool struct {
 	BaseTool
-	writer MemoryWriter
+	writer        MemoryWriter
+	sessionWriter SessionMemoryWriter
 }
 
 // NewWriteMemoryTool creates the model-driven memory write tool.
-func NewWriteMemoryTool(writer MemoryWriter) Tool {
-	return &writeMemoryTool{writer: writer}
+func NewWriteMemoryTool(writer MemoryWriter, sessionWriter ...SessionMemoryWriter) Tool {
+	t := &writeMemoryTool{writer: writer}
+	if len(sessionWriter) > 0 {
+		t.sessionWriter = sessionWriter[0]
+	}
+	return t
 }
 
 func (t *writeMemoryTool) Name() string { return WriteMemoryToolName }
 
 func (t *writeMemoryTool) Description() string {
-	return `Save one durable fact to memory. You decide what is worth saving, and when.
+	return `Write a durable fact or a session log through one shared entry point.
+- source="memory" (default): save one durable fact; memory storage must be enabled.
+- source="session_memory": save the session log in .solcode/solcode.md, even when durable memory is disabled. Pass the problem, outcome, verification and unfinished work in memory, and retrieval keywords in tags. Write once at session end; the runtime attaches the checkpoint turn, changed files, timestamp and session id. kind, scope and reason apply only to source="memory".
+Read entries with search_context using the same source. scope="session" still means a fact in durable storage, not the session log.
+
+For durable facts, you decide what is worth saving, and when.
 
 Use this as a normal task-lifecycle action, not only when the user explicitly
 asks you to remember something. Call it immediately after a meaningful milestone
@@ -114,9 +125,14 @@ func (t *writeMemoryTool) InputSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
+			"source": map[string]any{
+				"type":        "string",
+				"enum":        []string{"memory", "session_memory"},
+				"description": "Destination: memory for a durable fact (default), session_memory for this session log. Separate from scope.",
+			},
 			"memory": map[string]any{
 				"type":        "string",
-				"description": "The memory to store: one or two self-contained sentences, no code or transcript text.",
+				"description": "A durable fact (max 1200 characters), or session log with problem, status, validation and unfinished work (max 2000 characters). Complete sentences; no secrets or raw transcript.",
 			},
 			"kind": map[string]any{
 				"type":        "string",
@@ -156,6 +172,20 @@ func (t *writeMemoryTool) Invoke(ctx context.Context, uctx *UseContext, input js
 	var params WriteMemoryParams
 	if err := json.Unmarshal(input, &params); err != nil {
 		return ErrorResult("invalid parameters: " + err.Error()), nil
+	}
+	source, err := normalizeEnumValue(params.Source, []string{"memory", "session_memory"}, "memory", "source")
+	if err != nil {
+		return ErrorResult(err.Error()), nil
+	}
+	if source == "session_memory" {
+		if params.Kind != "" || params.Scope != "" || params.Reason != "" {
+			return ErrorResult("kind, scope and reason apply only to source=memory"), nil
+		}
+		payload, err := json.Marshal(WriteSessionMemoryParams{Summary: params.Memory, Keywords: params.Tags, Importance: params.Importance})
+		if err != nil {
+			return ErrorResult("invalid session memory parameters: " + err.Error()), nil
+		}
+		return NewWriteSessionMemoryTool(t.sessionWriter).Invoke(ctx, uctx, payload)
 	}
 	if t.writer == nil {
 		return ErrorResult("memory is not enabled for this session"), nil
