@@ -802,6 +802,7 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 				updates := map[string]any{
 					"permissions":        map[string]any{"bypass_subagents": next.Permissions.BypassSubagents},
 					"subagents":          next.Subagents,
+					"tool_search":        map[string]any{"enabled": next.ToolSearchEnabled()},
 					"provider":           next.Provider,
 					"model":              next.Model,
 					"providers":          next.Providers,

@@ -66,6 +66,10 @@ type Config struct {
 	MaxContextTokens   int64
 	MaxTokens          int64
 	SystemPrompt       string
+
+	// DisableToolSearch exposes the full model-visible catalog without routing.
+	DisableToolSearch bool
+
 	// ProjectRules are project-only instructions loaded from
 	// <workDir>/.solcode (rules.md and rules/*.md) at startup.
 	ProjectRules     string
@@ -390,6 +394,7 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 		WithAllowedTools(cfg.AllowedTools)
 	builder := ContextBuilder{
 		SystemPrompt:      e.config.SystemPrompt,
+		DisableToolSearch: e.config.DisableToolSearch,
 		AgentInstructions: cfg.RoleInstructions,
 		ProjectRules:      e.config.ProjectRules,
 		Skills:            e.config.Skills,
@@ -572,9 +577,8 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 		if modelName == "" {
 			modelName = e.config.ModelName
 		}
-		// Compact schemas each turn: full registry stays available to the
-		// executor and ToolSearch, while only core + sticky + live matches
-		// are sent to the model.
+		// With search enabled send core + sticky + live matches; otherwise send
+		// the full model-visible catalog. The executor always has the registry.
 		//
 		// AllowedTools is an EXECUTOR permission, not a schema filter. The
 		// tools list on the wire always starts from the shared core prefix so
@@ -594,7 +598,7 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 			}
 			visibleTools = append(visibleTools, candidate)
 		}
-		tools := SelectToolsForTurn(visibleTools, nil, selectionQuery(prompt, ""), enabledTools)
+		tools := SelectToolsForTurn(visibleTools, nil, selectionQuery(prompt, ""), enabledTools, !e.config.DisableToolSearch)
 		// When lexical matching resolved nothing beyond the core set, ask Jev
 		// which capability the request is actually describing. This only runs on
 		// the miss path, so prompts that name a tool keep their current behavior
@@ -604,7 +608,7 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 		// resolve would otherwise be re-asked on every turn of the loop.
 		// Sub/task agents skip Jev tool routing so they do not grow a different
 		// extras set from main on the same session prefix.
-		if e.config.Router != nil && !routingAttempted && isMain {
+		if !e.config.DisableToolSearch && e.config.Router != nil && !routingAttempted && isMain {
 			if misses := routerMisses(visibleTools, selectionQuery(prompt, ""), enabledTools, tools); len(misses) > 0 {
 				routingAttempted = true
 				for _, name := range e.config.Router.RouteTools(ctx, prompt, misses) {
@@ -656,7 +660,10 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 		// Tell the model what exists beyond this turn's schema list. Without
 		// this it cannot know a capability is merely unloaded rather than
 		// absent, so it will not think to search for it.
-		builder.FoldedTools = foldedToolsSummary(visibleTools, tools)
+		builder.FoldedTools = ""
+		if !e.config.DisableToolSearch {
+			builder.FoldedTools = foldedToolsSummary(visibleTools, tools)
+		}
 		workingSet.BeginTurn(turn)
 		efficiency.BeginTurn(turn)
 		builder.WorkingSet = ""

@@ -123,7 +123,9 @@ func buildToolState(cfg config.Config, mcpFactory mcp.ClientFactory) (*tool.Regi
 	}
 	// ToolSearch queries live registries at invocation time, so dynamic MCP and
 	// Skill capabilities remain discoverable without all schemas being sent.
-	registry.Register(tool.NewToolSearchTool(registry, skillRegistry))
+	if cfg.ToolSearchEnabled() {
+		registry.Register(tool.NewToolSearchTool(registry, skillRegistry))
+	}
 
 	mcpRegistry := mcp.NewRegistry(cfg.MCP.Servers)
 	if mcpFactory != nil {
@@ -1511,17 +1513,17 @@ func (a *App) estimateSessionContextTokens(ctx context.Context, current *session
 	}
 	messages := session.StripEphemeralContextMessages(current.CopyMessages())
 	builder := engine.ContextBuilder{
-		SystemPrompt: a.Config.SystemPrompt,
-		ProjectRules: config.FormatProjectRulesPrompt(config.LoadProjectRules(a.Config.WorkDir)),
-		Skills:       skillInfos(a.SkillRegistry),
-		SkillNames:   skillNames(a.SkillRegistry),
-		PlanMode:     a.Permissions != nil && a.Permissions.Mode() == permission.ModePlan,
+		SystemPrompt:      a.Config.SystemPrompt,
+		DisableToolSearch: !a.Config.ToolSearchEnabled(),
+		ProjectRules:      config.FormatProjectRulesPrompt(config.LoadProjectRules(a.Config.WorkDir)),
+		Skills:            skillInfos(a.SkillRegistry),
+		SkillNames:        skillNames(a.SkillRegistry),
+		PlanMode:          a.Permissions != nil && a.Permissions.Mode() == permission.ModePlan,
 	}
 	tools := []tool.Tool(nil)
 	if a.Tools != nil {
-		// Estimate with the compact dynamic set so the status bar matches
-		// what the next model request will actually send.
-		tools = engine.SelectToolsForTurn(a.Tools.All(), nil, "", nil)
+		// Include the configured compact or full tool catalog in the estimate.
+		tools = engine.SelectToolsForTurn(a.Tools.All(), nil, "", nil, a.Config.ToolSearchEnabled())
 	}
 	return int(builder.EstimateContextTokens(engine.BuildRequest{
 		Model:            a.Config.Model,
@@ -3414,6 +3416,7 @@ func engineConfig(cfg config.Config, client *cpanthropic.Client, runtime *hook.R
 		Client:                 client,
 		Hooks:                  runtime,
 		Tools:                  registry,
+		DisableToolSearch:      !cfg.ToolSearchEnabled(),
 		Permissions:            permissions,
 		ModelName:              cfg.Model,
 		SubagentModelName:      strings.TrimSpace(cfg.Subagents.Model),

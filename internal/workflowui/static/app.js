@@ -66,6 +66,7 @@
     newMcpHeaders: document.getElementById("new-mcp-headers"),
     // features (bypass sub-agents + computer use)
     setBypassSubagents: document.getElementById("set-bypass-subagents"),
+    setToolSearch: document.getElementById("set-tool-search"),
     setSubagentModel: document.getElementById("set-subagent-model"),
     setComputerUse: document.getElementById("set-computer-use"),
     // jev
@@ -899,6 +900,7 @@
 
   function syncFeatureSettings(d) {
     d.bypass_subagents_enabled = Boolean(el.setBypassSubagents.checked);
+    d.tool_search_enabled = Boolean(el.setToolSearch.checked);
     d.subagent_model = el.setSubagentModel.value.trim();
     d.computer_use = { ...d.computer_use, enabled: Boolean(el.setComputerUse.checked) };
     const jev = d.jev || (d.jev = {});
@@ -1088,6 +1090,7 @@
 
   function renderFeatureSettings(d) {
     el.setBypassSubagents.checked = Boolean(d.bypass_subagents_enabled);
+    el.setToolSearch.checked = d.tool_search_enabled !== false;
     el.setSubagentModel.value = d.subagent_model || "";
     el.setComputerUse.checked = Boolean(d.computer_use?.enabled);
 
@@ -1368,6 +1371,7 @@
       skills_enabled: Object.fromEntries((d.skills || []).filter((s) => s.enabled).map((s) => [s.name, true])),
       skills_disabled: Object.fromEntries((d.skills || []).filter((s) => !s.enabled).map((s) => [s.name, true])),
       bypass_subagents_enabled: Boolean(d.bypass_subagents_enabled),
+      tool_search_enabled: d.tool_search_enabled !== false,
       subagent_model: d.subagent_model || "",
       computer_use_enabled: Boolean(d.computer_use?.enabled),
       jev_enabled: Boolean(d.jev?.enabled),
@@ -1660,6 +1664,7 @@
     // always built from what the user currently sees.
     [
       el.setBypassSubagents,
+      el.setToolSearch,
       el.setComputerUse,
       el.setJevEnabled,
       el.setJevType,

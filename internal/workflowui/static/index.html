@@ -255,6 +255,16 @@
                 </div>
                 <input type="checkbox" id="set-bypass-subagents" />
               </label>
+              <label class="settings-row settings-toggle-row">
+                <div class="settings-row-main">
+                  <strong>ToolSearch</strong>
+                  <div class="settings-row-detail">
+                    Enabled by default: discover additional tools on demand. Turn off to give
+                    the model all enabled tools directly, without keyword or Jev tool filtering.
+                  </div>
+                </div>
+                <input type="checkbox" id="set-tool-search" />
+              </label>
               <label class="settings-field">Default sub-agent model
                 <input id="set-subagent-model" type="text" placeholder="Inherit main model (or enter model id / fast)" />
                 <span class="settings-hint">User-controlled only. Role TOML model overrides this default; uses the chat provider.</span>
@@ -338,8 +348,8 @@
                 <div class="settings-row-main">
                   <strong>Skill &amp; tool routing</strong>
                   <div class="settings-row-detail">
-                    Picks the skill for each prompt and fills in tools lexical matching
-                    missed. Also registers the bundled workflow skills
+                    Picks the skill for each prompt. With ToolSearch enabled, also fills in
+                    tools lexical matching missed. Also registers the bundled workflow skills
                     (explore, implement, verify, research, debug, review).
                   </div>
                 </div>

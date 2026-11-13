@@ -20,6 +20,7 @@ type SkillInfo struct {
 
 type ContextBuilder struct {
 	SystemPrompt      string
+	DisableToolSearch bool
 	AgentInstructions string
 	// ProjectRules are project-only instructions from <workDir>/.solcode,
 	// injected into the system prompt at startup.
@@ -417,7 +418,7 @@ func (b ContextBuilder) systemPrompt(workDir string) string {
 		parts = append(parts, stripPlanModeFromText(text))
 	}
 	parts = append(parts, defaultSystemPrompt())
-	parts = append(parts, toolUsagePrompt())
+	parts = append(parts, toolUsagePrompt(b.DisableToolSearch))
 	parts = append(parts, skillsPrompt(b.skillCatalog()))
 	// Compact plan-mode rules are appended EXACTLY ONCE, at the end of the
 	// stable system prompt. They apply only while the dynamic mode is plan
@@ -462,7 +463,20 @@ func MemoryContextTokens(items []ContextItem) int {
 	return tokenest.Text(formatMemoryContext(items))
 }
 
-func toolUsagePrompt() string {
+func toolDiscoveryPrompt(disableSearch bool) string {
+	if disableSearch {
+		return "- All enabled model-visible tools are provided directly. Use the supplied tool names and schemas; earlier folded-tools hints are superseded. Skills remain available through the skills catalog and Skill tool. Runtime permissions still govern execution."
+	}
+	return strings.Join([]string{
+		"- Only a compact core of tools is listed each turn. Additional MCP tools and less common builtins stay in a live registry and are not all sent as schemas.",
+		"- Treat the current tool list as incomplete. Do not assume a capability is unavailable just because it is not listed this turn.",
+		"- Call ToolSearch as soon as the task needs a capability that is not in the current list (for example web search, fetch, image generation/edit, browser/MCP servers, or a named skill). Use a short capability query, not a full sentence.",
+		"- After ToolSearch, wait for the next turn: matching tools are enabled then, and you must use the exact returned tool name. Do not invent tool names.",
+		"- Prefer ToolSearch over guessing, skipping the capability, or asking the user which hidden tool to use.",
+	}, "\n")
+}
+
+func toolUsagePrompt(disableSearch bool) string {
 	return strings.Join([]string{
 		"Tool usage:",
 		"Minimize unnecessary model round trips while preserving correctness and required verification. A few sufficient calls beat many small sequential ones; never skip necessary work to save requests.",
@@ -483,16 +497,12 @@ func toolUsagePrompt() string {
 		"- If a Bash/Task result reports running_in_background, it is an acknowledgement, not successful completion. Continue independent work, but wait for its completion notification before dependent actions; do not poll or relaunch the same work.",
 		"- Keep routine tasks in the main agent. Delegate with Task only independent, substantial work when parallel execution clearly helps; do not delegate trivial exploration or file reads.",
 		"- Avoid repeated polling, redundant planning, and unnecessary tool discovery.",
-		"- Only a compact core of tools is listed each turn. Additional MCP tools and less common builtins stay in a live registry and are not all sent as schemas.",
-		"- Treat the current tool list as incomplete. Do not assume a capability is unavailable just because it is not listed this turn.",
-		"- Call ToolSearch as soon as the task needs a capability that is not in the current list (for example web search, fetch, image generation/edit, browser/MCP servers, or a named skill). Use a short capability query, not a full sentence.",
-		"- After ToolSearch, wait for the next turn: matching tools are enabled then, and you must use the exact returned tool name. Do not invent tool names.",
-		"- Prefer ToolSearch over guessing, skipping the capability, or asking the user which hidden tool to use.",
+		toolDiscoveryPrompt(disableSearch),
 		"- File tools may read and write any directory. Relative paths still resolve against the project WorkDir, then configured skill roots.",
-		"- Prefer specialized operations over Bash: use View/Grep/Glob/LS/LSP as BatchTool operations for files and code intelligence, and WebSearch/Fetch (via ToolSearch if hidden) for the network. Bash is banned from curl/wget and similar downloaders.",
+		"- Prefer specialized operations over Bash: use View/Grep/Glob/LS/LSP as BatchTool operations for files and code intelligence, and WebSearch/Fetch for the network. Bash is banned from curl/wget and similar downloaders.",
 		"- Use AskUser for real product/requirement choices (2-4 options). Do not use it for facts you can discover with tools.",
 		"- Use ModeSwitch only when the user wants plan/bypass/goal/ultra, or when a large design should be planned before edits. Do not switch modes unprompted for ordinary coding. In bypass, Task requires permissions.bypass_subagents=true (default false) and is limited to explorer/worker/reviewer. Ultra also permits configured custom roles. When Task is unavailable, perform the work in the main agent. agent_type selects the role; agent_id identifies a persistent instance. Explicit spawn/resume submit asynchronously and return agent_id/run_id; continue independent work, then use Task wait with those IDs when a result is needed. A wait timeout does not cancel the agent. Resume with the same agent_id to reuse its history. Use action=run for legacy result-waiting Task dependency graphs.",
-		"- When a reusable workflow matches the task, use the Skill tool before continuing with other tools. Skill names may also be found via ToolSearch.",
+		"- When a reusable workflow matches the task, use the Skill tool before continuing with other tools. Available skill names are listed in the skills catalog.",
 	}, "\n")
 }
 

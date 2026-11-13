@@ -182,8 +182,9 @@ type Config struct {
 	// Normalize migrates it into Memory.Embedding when the nested field is empty.
 	DeprecatedEmbedding EmbeddingConfig `json:"embedding,omitempty"`
 
-	Provider  string           `json:"provider,omitempty"`
-	Providers []ProviderConfig `json:"providers,omitempty"`
+	Provider   string           `json:"provider,omitempty"`
+	Providers  []ProviderConfig `json:"providers,omitempty"`
+	ToolSearch ToolSearchConfig `json:"tool_search,omitempty"`
 }
 
 // SubagentsConfig selects the default child model. Role TOML model settings override it.
@@ -1507,6 +1508,10 @@ func applyJSONConfig(cfg *Config, data []byte) error {
 			}
 		case "image":
 			if err := json.Unmarshal(value, &cfg.Image); err != nil {
+				return err
+			}
+		case "tool_search":
+			if err := json.Unmarshal(value, &cfg.ToolSearch); err != nil {
 				return err
 			}
 		case "codegraph":

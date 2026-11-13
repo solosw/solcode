@@ -62,8 +62,23 @@ var hiddenFromModel = map[string]bool{
 //     prompt cache; allowed only narrows or extends beyond core, it never
 //     replaces the public prefix with a free-form subset.
 //
+// With optional searchEnabled=false, all model-visible tools except ToolSearch
+// are returned in stable order without lexical/sticky routing. Runtime allowlists
+// continue to be enforced by the executor. Omitted preserves dynamic routing.
 // Wait and Subagent are never model-visible (see hiddenFromModel).
-func SelectToolsForTurn(all []tool.Tool, allowed []string, query string, enabled map[string]bool) []tool.Tool {
+func SelectToolsForTurn(all []tool.Tool, allowed []string, query string, enabled map[string]bool, searchEnabled ...bool) []tool.Tool {
+	if len(searchEnabled) > 0 && !searchEnabled[0] {
+		selected := make(map[string]bool, len(all))
+		for _, candidate := range all {
+			name := candidate.Name()
+			if !hiddenFromModel[name] && name != tool.ToolSearchToolName {
+				selected[name] = true
+			}
+		}
+		// AllowedTools remains an executor permission, even with full schemas.
+		tools, _ := orderSelectedTools(all, selected)
+		return tools
+	}
 	selected, _ := selectToolsForTurn(all, allowed, query, enabled)
 	return selected
 }

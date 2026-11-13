@@ -317,6 +317,7 @@ type settingsResponse struct {
 	// BypassSubagentsEnabled opts bypass into built-in sub-agents (default off).
 	BypassSubagentsEnabled bool   `json:"bypass_subagents_enabled"`
 	SubagentModel          string `json:"subagent_model"`
+	ToolSearchEnabled      bool   `json:"tool_search_enabled"`
 
 	Provider   string                   `json:"provider"`
 	Model      string                   `json:"model"`
@@ -616,6 +617,7 @@ func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
 	cfg.NormalizeLocalModels()
 	resp := settingsResponse{
 		BypassSubagentsEnabled: cfg.Permissions.BypassSubagents,
+		ToolSearchEnabled:      cfg.ToolSearchEnabled(),
 
 		Provider:   cfg.Provider,
 		Model:      settingsModelName(cfg),
@@ -792,6 +794,7 @@ func settingsModelName(cfg config.Config) string {
 
 type settingsUpdate struct {
 	SubagentModel             *string `json:"subagent_model,omitempty"`
+	ToolSearchEnabled         *bool   `json:"tool_search_enabled,omitempty"`
 	MemoryOrganizerBaseURL    *string `json:"memory_organizer_base_url,omitempty"`
 	MemoryOrganizerBaseURLEnv *string `json:"memory_organizer_base_url_env,omitempty"`
 	MemoryOrganizerAPIKey     *string `json:"memory_organizer_api_key,omitempty"`
@@ -897,6 +900,9 @@ func (s *Server) postSettings(w http.ResponseWriter, r *http.Request) {
 	applyActiveModelSettings(&next, req)
 	if req.BypassSubagentsEnabled != nil {
 		next.Permissions.BypassSubagents = *req.BypassSubagentsEnabled
+	}
+	if req.ToolSearchEnabled != nil {
+		next.ToolSearch.Enabled = req.ToolSearchEnabled
 	}
 	if req.SubagentModel != nil {
 		next.Subagents.Model = strings.TrimSpace(*req.SubagentModel)

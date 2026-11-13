@@ -768,6 +768,16 @@ All configuration lives in a JSON file. Example:
 
 At each application startup, SolCode requests `GET /v1/models` from every configured provider and merges the returned IDs into its available models. Local entries stay first and take precedence when a remote ID matches a local model name or ID, preserving all local model parameters. Discovery uses each provider's credentials, API format, environment overrides, and the configured proxy. Requests run with at most four concurrent providers and a five-second timeout per request; failures keep the local list usable. Discovered entries are runtime-only, unless explicitly edited in settings to create a local override.
 
+Tool discovery is enabled by default. To send all enabled model-visible tools directly, set:
+
+```json
+{
+  "tool_search": { "enabled": false }
+}
+```
+
+The same switch is available under **Settings → Agents & tools → ToolSearch**. Turning it off removes the ToolSearch tool, keyword filtering, and Jev tool routing. Skill routing, tool permissions, and BatchTool remain in effect. The full tool catalog uses more context tokens. Set `enabled` back to `true` to restore on-demand discovery.
+
 ### Key configuration fields
 
 | Field | Type | Description |
