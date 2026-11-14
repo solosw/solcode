@@ -415,6 +415,9 @@ func consumeResponsesStream(body io.Reader, req MessageRequest) (*sdk.Message, e
 				item.Arguments = event.Arguments
 			} else {
 				item.Arguments += event.Delta
+				if req.OnToolInputDelta != nil {
+					req.OnToolInputDelta(event.Delta)
+				}
 			}
 		case "response.content_part.added", "response.content_part.done", "response.reasoning_summary_part.added", "response.reasoning_summary_part.done",
 			"response.output_text.delta", "response.refusal.delta", "response.reasoning_summary_text.delta", "response.reasoning_text.delta":

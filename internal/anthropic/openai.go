@@ -588,6 +588,9 @@ func (c *Client) consumeOpenAIStream(r io.Reader, req MessageRequest) (*sdk.Mess
 		// Some gateways stream reasoning under alternate keys; ignore if absent.
 		if len(delta.ToolCalls) > 0 {
 			for _, tc := range delta.ToolCalls {
+				if req.OnToolInputDelta != nil && tc.Function.Arguments != "" {
+					req.OnToolInputDelta(tc.Function.Arguments)
+				}
 				idx := 0
 				if tc.Index != nil {
 					idx = *tc.Index

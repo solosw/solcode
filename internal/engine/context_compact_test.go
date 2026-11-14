@@ -16,7 +16,7 @@ import (
 )
 
 func TestMandatoryCompressContinuesOriginalTask(t *testing.T) {
-	for _, failure := range []string{"", "api", "checkpoint", "nonreducing", "ignored", "other tool", "stale once"} {
+	for _, failure := range []string{"", "api", "checkpoint", "nonreducing", "ignored", "other tool", "stale once", "nil message", "truncated"} {
 		t.Run(failure, func(t *testing.T) {
 			reg := tool.NewRegistry()
 			reg.Register(tool.ContextTools(nil, nil)...)
@@ -35,8 +35,14 @@ func TestMandatoryCompressContinuesOriginalTask(t *testing.T) {
 					return &sdk.Message{Role: "assistant", StopReason: sdk.StopReasonEndTurn, Content: []sdk.ContentBlockUnion{{Type: "text", Text: "Original task completed"}}}, nil
 				}
 				forced++
-				if req.ForceTool != "compress" || req.Stream || req.Thinking || req.Effort != "" {
-					t.Fatal("compression must force compress, synchronously without thinking")
+				if req.ForceTool != "compress" || !req.Stream || req.Thinking || req.Effort != "" {
+					t.Fatal("compression must force compress and preserve streaming without thinking")
+				}
+				if failure == "nil message" {
+					return nil, nil
+				}
+				if failure == "truncated" {
+					return &sdk.Message{Role: "assistant", StopReason: sdk.StopReasonMaxTokens}, nil
 				}
 				if failure == "api" {
 					return nil, errors.New("endpoint unavailable")

@@ -789,7 +789,7 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 		req := requestBuilder.Build(buildReq)
 		if forceCompress {
 			req.ForceTool = tool.CompressToolName
-			req.Stream, req.Thinking, req.ThinkingText, req.Effort = false, false, false, ""
+			req.Thinking, req.ThinkingText, req.Effort = false, false, ""
 			if e.config.OnStatus != nil {
 				e.config.OnStatus("Compacting...")
 			}
@@ -813,11 +813,23 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 				}
 			}
 		}
-		message, err := e.config.Client.Create(ctx, req)
+		var message *sdk.Message
+		var err error
+		if forceCompress {
+			message, err = e.createForcedCompression(ctx, req, requestBuilder.EstimateContextTokens(buildReq), forcedCompressionTimeout)
+		} else {
+			message, err = e.config.Client.Create(ctx, req)
+		}
 		if err != nil {
 			return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: err.Error(), NoRetry: forceCompress}, Messages: messages}
 		}
 		if forceCompress {
+			if message == nil {
+				return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: "mandatory compress returned no message; history is preserved", NoRetry: true}, Messages: messages}
+			}
+			if message.StopReason == sdk.StopReasonMaxTokens {
+				return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: "mandatory compress output reached its token limit; history is preserved; retry compression with a shorter summary or smaller safe range", NoRetry: true}, Messages: messages}
+			}
 			uses := cpanthropic.ToolUseBlocks(message)
 			if message.StopReason != sdk.StopReasonToolUse || len(uses) != 1 || uses[0].Name != tool.CompressToolName {
 				return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: "model did not honor mandatory compress tool_choice; history is preserved", NoRetry: true}, Messages: messages}

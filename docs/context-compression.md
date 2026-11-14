@@ -170,7 +170,11 @@ provider's named `tool_choice` with parallel tool calls disabled. The engine als
 validates the response: plain final text or another tool cannot satisfy this
 request, and is reported as an explicit error without executing that response.
 
-The mandatory call is synchronous and non-streaming, with thinking disabled.
+The mandatory call preserves the chat streaming setting, with thinking disabled.
+Streamed tool arguments update compression status without appearing as chat text.
+Each compression request has a five-minute deadline, and reserves output headroom
+with an output cap of 8,192 tokens (or the lower configured limit). Timeout,
+truncated output, and transport failures stop explicitly and preserve history.
 The model writes the summary directly in the tool arguments. Only the normal
 `compress` executor can commit the fold, after checkpointing its archive and active
 view together. Failed tool calls can be corrected on up to three consecutive
@@ -198,7 +202,7 @@ call `compress`, using its configured context/output limits and API client. They
 do not create a separate summary-model request or use `fast_model` or
 `memory.organizer`. A live model switch applies at the next model boundary.
 The model can fold existing summaries into higher-level blocks through the same
-tool. Compression requests are non-streaming even when chat streaming is enabled.
+tool. Compression requests retain streaming when chat streaming is enabled.
 
 Background memory/session summaries and archival extraction continue to use
 `memory.organizer`. Both local GGUF and independently configured API runtimes are
