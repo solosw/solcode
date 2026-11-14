@@ -296,6 +296,9 @@ func decodeAnthropicStream(body io.Reader, req MessageRequest) (*sdk.Message, er
 				partial, _ := event.Delta["partial_json"].(string)
 				previous, _ := block["input"].(string)
 				block["input"] = previous + partial
+				if req.OnToolInputDelta != nil {
+					req.OnToolInputDelta(partial)
+				}
 			case "signature_delta":
 				block["signature"] = event.Delta["signature"]
 			}

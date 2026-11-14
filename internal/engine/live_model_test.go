@@ -20,13 +20,13 @@ func (c *modelCaptureClient) Create(_ context.Context, req cpanthropic.MessageRe
 func TestModelChangeDuringCompactionUsesConfirmedNextCall(t *testing.T) {
 	old, next := &modelCaptureClient{}, &modelCaptureClient{}
 	var eng *Engine
-	eng = NewEngine(Config{Client: old, ModelName: "old", ModelKey: "provider-a", MaxContextTokens: 1, MaxTokens: 40, Effort: "high", MaxTurns: 1,
-		CompactMessages: func(context.Context, []sdk.MessageParam) ([]sdk.MessageParam, error) {
+	eng = NewEngine(Config{Client: old, ModelName: "old", ModelKey: "provider-a", MaxContextTokens: 40000, MaxTokens: 40, Effort: "high", MaxTurns: 1})
+	result := eng.RunWithHistory(t.Context(), RunRequest{AgentConfig: agent.AgentConfig{ID: "main", Role: agent.AgentRoleMain, Prompt: "hello", WorkDir: t.TempDir()}, Messages: contextWindowHistory(), Checkpoint: func(cp agent.Checkpoint) error {
+		if cp.Stage == "context_window" {
 			eng.UpdateMainModel(Config{Client: next, ModelName: "new", ModelKey: "provider-b", MaxContextTokens: 200000, MaxTokens: 80, Effort: "low"})
-			return []sdk.MessageParam{sdk.NewUserMessage(sdk.NewTextBlock("retained summary"))}, nil
-		},
-	})
-	result := eng.RunWithHistory(t.Context(), RunRequest{AgentConfig: agent.AgentConfig{ID: "main", Role: agent.AgentRoleMain, Prompt: "hello", WorkDir: t.TempDir()}})
+		}
+		return nil
+	}})
 	if result.AgentResult.Error != "" {
 		t.Fatal(result.AgentResult.Error)
 	}

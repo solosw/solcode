@@ -161,8 +161,7 @@ fields use defaults):
 ```
 
 This is a native policy using local token estimates, not a byte-for-byte port of
-the proxy's provider-usage meters or tier promotion logic. Registering these
-tools disables the old automatic history truncation path. At
+the proxy's provider-usage meters or tier promotion logic. At
 `memory.compaction_trigger_percent` (default 85%) of the composed input budget,
 the host requires the active main model to call `compress`. The request includes
 a fresh revision and safe ranges, bypasses reminder cooldowns and uses the
@@ -170,18 +169,31 @@ provider's named `tool_choice` with parallel tool calls disabled. The engine als
 validates the response: plain final text or another tool cannot satisfy this
 request, and is reported as an explicit error without executing that response.
 
-The mandatory call is synchronous and non-streaming, with thinking disabled.
+The mandatory call preserves the chat streaming setting, with thinking disabled.
+Streamed tool arguments update compression status without appearing as chat text.
+Each compression request has a five-minute deadline, and reserves output headroom
+with an output cap of 8,192 tokens (or the lower configured limit). Timeout,
+truncated output, and transport failures stop explicitly and preserve history.
 The model writes the summary directly in the tool arguments. Only the normal
 `compress` executor can commit the fold, after checkpointing its archive and active
 view together. Failed tool calls can be corrected on up to three consecutive
 attempts; invalid summaries, stale revisions and failed saves preserve history.
 Successful compression continues the original task with its normal model settings
 and turn budget. If the request remains above the trigger, compression is required
-again before ordinary work. With no safe range, protected history stays intact;
-at the hard composed-request limit, the run stops with an explicit error.
+again before ordinary work. At the hard composed-request limit, the engine
+directly trims older messages and continues using recent history, without an AI
+summary call. The target is 70% of the context budget, reduced further when needed
+to reserve the configured output allowance. The latest real user request stays
+anchored, and parallel tool calls and results are kept or dropped as complete
+groups. A provider context-limit rejection also shrinks the window before retrying
+(up to three recoveries, without consuming task turns). The active references,
+revision and messages are checkpointed together; original sources remain in the
+local archive. A failed save leaves the active window unchanged. If the latest
+request, one required tool group, or static system/tools alone cannot fit, the
+engine reports that limit explicitly.
 
 Explicit `/compact` uses the same forced tool path even below the threshold, then
-returns after a successful fold. It leaves the latest real user request and
+returns after a successful fold or hard-limit window trim. Below the hard limit it leaves the latest real user request and
 protected history in place, and skips when no safe range exists.
 
 Tools and system prompts remain stable across folds. Source references are shown
@@ -198,7 +210,7 @@ call `compress`, using its configured context/output limits and API client. They
 do not create a separate summary-model request or use `fast_model` or
 `memory.organizer`. A live model switch applies at the next model boundary.
 The model can fold existing summaries into higher-level blocks through the same
-tool. Compression requests are non-streaming even when chat streaming is enabled.
+tool. Compression requests retain streaming when chat streaming is enabled.
 
 Background memory/session summaries and archival extraction continue to use
 `memory.organizer`. Both local GGUF and independently configured API runtimes are

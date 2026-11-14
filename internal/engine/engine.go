@@ -332,8 +332,9 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 	compression := runReq.Compression.Clone()
 	runReq.Compression = compression
 	contextEnabled := e.config.Tools != nil && e.config.Tools.Find(tool.CompressToolName) != nil
+	contextWindowChanged := false
 	defer func() {
-		if contextEnabled {
+		if contextEnabled || contextWindowChanged {
 			_ = compression.Sync(result.Messages)
 			result.Compression = compression
 		}
@@ -408,6 +409,7 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 	var runUsage agent.TokenUsage
 	var issuedTool bool
 	compressionFailures := 0
+	contextWindowRetries := 0
 	defer func() {
 		if result.AgentResult.Error != "" && issuedTool {
 			result.AgentResult.NoRetry = true
@@ -419,13 +421,6 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 	if err := runReq.saveCheckpoint("prompt", messages, workingSet, runUsage, false); err != nil {
 		return RunResult{AgentResult: agent.AgentResult{Error: err.Error(), NoRetry: true}, Messages: messages}
 	}
-	compactMessages := runReq.CompactMessages
-	if compactMessages == nil {
-		compactMessages = e.config.CompactMessages
-	}
-	if contextEnabled {
-		compactMessages = nil
-	} // autonomous folds replace automatic truncation
 	// Efficiency controller (§7): local anti-loop signals. Advisory only; it
 	// never issues requests, executes operations, or ends the run.
 	efficiency := NewRequestEfficiencyController()
@@ -712,12 +707,57 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 			Effort:       e.config.Effort,
 			Stream:       e.config.Stream,
 		}
+		windowTrimmed := false
+		trimWindow := func(rejected bool) error {
+			next, err := recentContextWindow(messages, requestBuilder, buildReq, e.config.MaxContextTokens, rejected)
+			if err != nil {
+				return err
+			}
+			staged := compression.Clone()
+			if err := staged.Sync(messages); err != nil {
+				return err
+			}
+			if err := staged.Sync(next); err != nil {
+				return err
+			}
+			staged.Revision++
+			staged.Nudge = contextcompression.NudgeState{}
+			checkpointReq := runReq
+			checkpointReq.Compression = staged
+			if err := checkpointReq.saveCheckpoint("context_window", next, workingSet, runUsage, true); err != nil {
+				return err
+			}
+			compression = staged
+			runReq.Compression = staged
+			messages, buildReq.Messages = next, next
+			runReq.SessionSummary, runReq.ProjectKnowledge, runReq.MemoryContext = "", "", nil
+			dynamic = newDynamicContext(next)
+			efficiency = NewRequestEfficiencyController()
+			efficiency.BeginTurn(turn)
+			advisory = efficiencyInjection{}
+			builder.EfficiencyNote = ""
+			windowTrimmed = true
+			contextWindowChanged = true
+			compressionFailures = 0
+			if e.config.OnStatus != nil {
+				e.config.OnStatus("Context window trimmed; continuing with recent messages")
+			}
+			return nil
+		}
+		if e.config.MaxContextTokens > 0 && requestBuilder.EstimateContextTokens(buildReq) >= e.config.MaxContextTokens {
+			if err := trimWindow(false); err != nil {
+				return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: err.Error(), NoRetry: true}, Messages: messages}
+			}
+		}
 		forceCompress := false
-		if contextEnabled && isMain {
+		if contextEnabled && isMain && !windowTrimmed {
 			var compactErr error
 			messages, forceCompress, compactErr = e.prepareForcedCompression(compression, messages, requestBuilder, buildReq, runReq.CompactOnly)
 			if compactErr != nil {
-				return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: compactErr.Error(), NoRetry: true}, Messages: messages}
+				if err := trimWindow(false); err != nil {
+					return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: err.Error(), NoRetry: true}, Messages: messages}
+				}
+				forceCompress = false
 			}
 			buildReq.Messages = messages
 		}
@@ -727,7 +767,7 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 		if forceCompress && compressionFailures >= 3 {
 			return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: "mandatory compress failed after 3 attempts; history is preserved; inspect compress tool errors", NoRetry: true}, Messages: messages}
 		}
-		if contextEnabled && !forceCompress {
+		if contextEnabled && !forceCompress && !windowTrimmed {
 			var nudgeErr error
 			messages, nudgeErr = e.appendContextNudge(compression, messages, requestBuilder, buildReq)
 			if nudgeErr != nil {
@@ -735,43 +775,11 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 			}
 			buildReq.Messages = messages
 		}
-		// Mid-run guard uses the actual materialized transcript, including all
-		// newly appended context. Recovery metadata is restored before Create.
-		if e.config.MaxContextTokens > 0 && compactMessages != nil {
-			est := requestBuilder.EstimateContextTokens(buildReq)
-			if est >= e.config.MaxContextTokens {
-				compacted, cerr := compactMessages(ctx, messages)
-				if cerr != nil {
-					return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: fmt.Sprintf("context full (%d/%d tokens) and compaction failed: %v", est, e.config.MaxContextTokens, cerr), NoRetry: runReq.Checkpoint != nil}, Messages: messages}
-				}
-				if len(compacted) > 0 {
-					messages = compacted
-					// The compactor materializes summary/knowledge. Forget the old
-					// request fields permanently, not just for this one request.
-					runReq.SessionSummary = ""
-					runReq.MemoryContext = nil
-					runReq.ProjectKnowledge = ""
-					dynamic = newDynamicContext(messages)
-					delete(dynamic.last, "efficiency")
-					builder.WorkingSet = ""
-					if workingSet.HasContext() {
-						builder.WorkingSet = workingSet.InjectionText()
-					}
-					// Reads from the discarded transcript are no longer reusable.
-					efficiency = NewRequestEfficiencyController()
-					efficiency.BeginTurn(turn)
-					advisory = efficiencyInjection{}
-					builder.EfficiencyNote = ""
-					messages = dynamic.append(messages, builder, runReq, false)
-					buildReq.Messages = messages
-					if err := runReq.saveCheckpoint("compacted", messages, workingSet, runUsage, true); err != nil {
-						return RunResult{AgentResult: agent.AgentResult{Error: err.Error(), NoRetry: true}, Messages: messages}
-					}
-				}
+		if e.config.MaxContextTokens > 0 && requestBuilder.EstimateContextTokens(buildReq) >= e.config.MaxContextTokens {
+			if err := trimWindow(false); err != nil {
+				return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: err.Error(), NoRetry: true}, Messages: messages}
 			}
-		}
-		if (contextEnabled || runReq.Checkpoint != nil) && e.config.MaxContextTokens > 0 && requestBuilder.EstimateContextTokens(buildReq) >= e.config.MaxContextTokens {
-			return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: "context exceeds the configured budget; history is preserved. Resume after reducing protected context or increasing the configured budget", NoRetry: true}, Messages: messages}
+			forceCompress = false
 		}
 		if err := runReq.saveCheckpoint("request", messages, workingSet, runUsage, false); err != nil {
 			return RunResult{AgentResult: agent.AgentResult{Error: err.Error(), NoRetry: true}, Messages: messages}
@@ -786,10 +794,16 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 			buildReq.Thinking, buildReq.ThinkingText = e.config.Thinking, e.config.ThinkingText
 			buildReq.Effort, buildReq.Stream = e.config.Effort, e.config.Stream
 		}
+		if e.config.MaxContextTokens > 0 && requestBuilder.EstimateContextTokens(buildReq) >= e.config.MaxContextTokens {
+			if err := trimWindow(false); err != nil {
+				return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: err.Error(), NoRetry: true}, Messages: messages}
+			}
+			forceCompress = false
+		}
 		req := requestBuilder.Build(buildReq)
 		if forceCompress {
 			req.ForceTool = tool.CompressToolName
-			req.Stream, req.Thinking, req.ThinkingText, req.Effort = false, false, false, ""
+			req.Thinking, req.ThinkingText, req.Effort = false, false, ""
 			if e.config.OnStatus != nil {
 				e.config.OnStatus("Compacting...")
 			}
@@ -813,11 +827,34 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 				}
 			}
 		}
-		message, err := e.config.Client.Create(ctx, req)
+		var message *sdk.Message
+		var err error
+		if forceCompress {
+			message, err = e.createForcedCompression(ctx, req, requestBuilder.EstimateContextTokens(buildReq), forcedCompressionTimeout)
+		} else {
+			message, err = e.config.Client.Create(ctx, req)
+		}
 		if err != nil {
-			return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: err.Error(), NoRetry: forceCompress}, Messages: messages}
+			if contextLimitError(err) && contextWindowRetries < 3 && ctx.Err() == nil {
+				if trimErr := trimWindow(true); trimErr != nil {
+					return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: fmt.Sprintf("%v; context window recovery failed: %v", err, trimErr), NoRetry: true}, Messages: messages}
+				}
+				contextWindowRetries++
+				if runReq.CompactOnly {
+					return RunResult{Messages: messages}
+				}
+				turn--
+				continue
+			}
+			return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: err.Error(), NoRetry: forceCompress || contextLimitError(err)}, Messages: messages}
 		}
 		if forceCompress {
+			if message == nil {
+				return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: "mandatory compress returned no message; history is preserved", NoRetry: true}, Messages: messages}
+			}
+			if message.StopReason == sdk.StopReasonMaxTokens {
+				return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: "mandatory compress output reached its token limit; history is preserved; retry compression with a shorter summary or smaller safe range", NoRetry: true}, Messages: messages}
+			}
 			uses := cpanthropic.ToolUseBlocks(message)
 			if message.StopReason != sdk.StopReasonToolUse || len(uses) != 1 || uses[0].Name != tool.CompressToolName {
 				return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: "model did not honor mandatory compress tool_choice; history is preserved", NoRetry: true}, Messages: messages}

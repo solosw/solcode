@@ -22,6 +22,8 @@ type MessageRequest struct {
 	Stream          bool
 	OnTextDelta     func(string)
 	OnThinkingDelta func(string)
+	// OnToolInputDelta reports streamed tool arguments without displaying them as chat.
+	OnToolInputDelta func(string)
 }
 
 // MarshalJSON writes the native Messages API request without using the SDK client.

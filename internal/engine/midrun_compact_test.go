@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
@@ -27,7 +28,7 @@ func TestMidRunCompactionBeforeCreate(t *testing.T) {
 	eng := NewEngine(Config{
 		Client:           client,
 		ModelName:        "test-model",
-		MaxContextTokens: 1,
+		MaxContextTokens: 12000,
 		MaxTokens:        64,
 		MaxTurns:         1,
 		CompactMessages: func(ctx context.Context, messages []sdk.MessageParam) ([]sdk.MessageParam, error) {
@@ -42,7 +43,7 @@ func TestMidRunCompactionBeforeCreate(t *testing.T) {
 	for i := 0; i < 12; i++ {
 		history = append(history,
 			sdk.NewUserMessage(sdk.NewTextBlock("user message padding content that uses many tokens for estimation")),
-			sdk.NewAssistantMessage(sdk.NewTextBlock("assistant message padding content that uses many tokens for estimation")),
+			sdk.NewAssistantMessage(sdk.NewTextBlock(strings.Repeat("assistant message padding content that uses many tokens for estimation ", 100))),
 		)
 	}
 
@@ -58,14 +59,14 @@ func TestMidRunCompactionBeforeCreate(t *testing.T) {
 	if result.AgentResult.Error != "" {
 		t.Logf("run finished with: %s", result.AgentResult.Error)
 	}
-	if compactCalls == 0 {
-		t.Fatal("expected CompactMessages when estimated context >= MaxContextTokens")
+	if compactCalls != 0 {
+		t.Fatal("hard overflow should directly trim instead of calling the legacy compactor")
 	}
 	if client.creates == 0 {
 		t.Fatal("expected Client.Create after mid-run compaction attempt")
 	}
 	// Compacted history (1) + new user prompt (1) should be far smaller than original.
-	if client.lastMsgCount > 5 {
+	if client.lastMsgCount >= len(history) {
 		t.Fatalf("Create should see compacted history, got %d messages", client.lastMsgCount)
 	}
 }

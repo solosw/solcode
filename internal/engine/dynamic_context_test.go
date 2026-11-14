@@ -223,32 +223,29 @@ func TestEngineModeChangesAppendAndDeactivateOldPlanOverlay(t *testing.T) {
 	}
 }
 
-func TestEngineCompactionRestoresWorkingSetAndKeepsStreamingCallbacks(t *testing.T) {
+func TestEngineWindowTrimKeepsStreamingAndDoesNotReinjectOldContext(t *testing.T) {
 	registry, dir := dynamicTestRegistry(t)
-	calls, compactions, jevCalls := 0, 0, 0
+	calls, windows := 0, 0
 	config := Config{
-		Tools: registry, MaxTurns: 4, MaxContextTokens: 1,
+		Tools: registry, MaxTurns: 4, MaxContextTokens: 40000, MaxTokens: 2000,
 		OnTextDelta: func(string) {}, OnThinkingDelta: func(string) {},
-		ShouldInjectWorkingSet: func(context.Context, map[string]any) bool { jevCalls++; return false },
-		CompactMessages: func(_ context.Context, _ []sdk.MessageParam) ([]sdk.MessageParam, error) {
-			compactions++
-			return []sdk.MessageParam{sdk.NewUserMessage(sdk.NewTextBlock("fresh compacted summary"))}, nil
-		},
+		ShouldInjectWorkingSet: func(context.Context, map[string]any) bool { return false },
 	}
+	var first []sdk.MessageParam
 	config.Client = backgroundTestClient(func(_ context.Context, req cpanthropic.MessageRequest) (*sdk.Message, error) {
 		calls++
 		if req.OnTextDelta == nil || req.OnThinkingDelta == nil {
-			t.Fatal("compaction must not drop main-agent streaming callbacks")
+			t.Fatal("window trim dropped streaming callbacks")
 		}
-		if messagesContain(req.Messages, "old session summary") || messagesContain(req.Messages, "old memory") || messagesContain(req.Messages, "old project knowledge") {
-			t.Fatal("pre-compaction request fields were injected over the durable summary")
+		if windows != 1 || messagesContain(req.Messages, "OLD_EVIDENCE_0 ") {
+			t.Fatal("history was not trimmed before model call")
 		}
-		if calls > 1 {
-			if contextOccurrences(req.Messages, "Task working set") != 1 || !messagesContain(req.Messages, filepath.Join(dir, "a.go")) {
-				t.Fatal("compaction recovery must restore file metadata exactly once")
-			}
-			if messagesContain(req.Messages, "Efficiency note") || messagesContain(req.Messages, "package a") {
-				t.Fatal("recovery must not forbid necessary re-reads or dump cached code")
+		if calls == 1 {
+			first = req.Messages
+		} else {
+			requireMessagePrefix(t, first, req.Messages)
+			if contextOccurrences(req.Messages, "old session summary") > 1 || contextOccurrences(req.Messages, "old memory") > 1 || contextOccurrences(req.Messages, "old project knowledge") > 1 {
+				t.Fatal("window recovery re-injected old context")
 			}
 		}
 		if calls < 3 {
@@ -258,11 +255,18 @@ func TestEngineCompactionRestoresWorkingSetAndKeepsStreamingCallbacks(t *testing
 	})
 	result := NewEngine(config).RunWithHistory(t.Context(), RunRequest{
 		AgentConfig:    agent.AgentConfig{ID: "main", Prompt: "task", WorkDir: dir},
+		Messages:       contextWindowHistory(),
 		SessionSummary: "old session summary", ProjectKnowledge: "old project knowledge",
 		MemoryContext: []ContextItem{{Content: "old memory"}},
+		Checkpoint: func(cp agent.Checkpoint) error {
+			if cp.Stage == "context_window" {
+				windows++
+			}
+			return nil
+		},
 	})
-	if result.AgentResult.Error != "" || calls != 3 || compactions != 3 || jevCalls != 0 {
-		t.Fatalf("error=%q calls=%d compactions=%d Jev=%d", result.AgentResult.Error, calls, compactions, jevCalls)
+	if result.AgentResult.Error != "" || calls != 3 || windows != 1 {
+		t.Fatalf("error=%q calls=%d windows=%d", result.AgentResult.Error, calls, windows)
 	}
 }
 
