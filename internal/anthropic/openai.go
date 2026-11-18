@@ -164,6 +164,7 @@ func doOpenAIRequest(ctx context.Context, client *http.Client, endpoint string, 
 			return nil, err
 		}
 		httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set("User-Agent", "solcode/1.0")
 		if apiKey != "" {
 			httpReq.Header.Set("Authorization", "Bearer "+apiKey)
 		}

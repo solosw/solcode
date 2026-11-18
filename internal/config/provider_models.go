@@ -116,6 +116,7 @@ func fetchProviderModels(ctx context.Context, client *http.Client, provider Prov
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", "solcode/1.0")
 	if provider.APIKey != "" {
 		if anthropic.NormalizeFormat(format) == anthropic.FormatAnthropic {
 			req.Header.Set("x-api-key", provider.APIKey)

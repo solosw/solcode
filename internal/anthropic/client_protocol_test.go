@@ -17,6 +17,9 @@ func TestAnthropicClientUsesHandwrittenMessagesProtocol(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		gotAPIKey = r.Header.Get("x-api-key")
+		if r.UserAgent() != "solcode/1.0" {
+			t.Errorf("User-Agent = %q", r.UserAgent())
+		}
 		gotVersion = r.Header.Get("anthropic-version")
 		data := make([]byte, r.ContentLength)
 		_, _ = r.Body.Read(data)

@@ -81,6 +81,7 @@ func (p *apiProvider) Embed(ctx context.Context, text string) ([]float32, error)
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "solcode/1.0")
 	req.Header.Set("Authorization", "Bearer "+p.apiKey)
 
 	resp, err := p.client.Do(req)

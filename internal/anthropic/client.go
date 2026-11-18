@@ -53,7 +53,7 @@ type Client struct {
 func NewClient(opts Options) *Client {
 	format := NormalizeFormat(opts.Format)
 	requestOptions := make([]option.RequestOption, 0, 3)
-	requestOptions = append(requestOptions, option.WithMaxRetries(DefaultMaxRetries))
+	requestOptions = append(requestOptions, option.WithMaxRetries(DefaultMaxRetries), option.WithHeader("User-Agent", "solcode/1.0"))
 	if opts.APIKey != "" {
 		requestOptions = append(requestOptions, option.WithAPIKey(opts.APIKey))
 	}
@@ -154,6 +154,7 @@ func doAnthropicRequest(ctx context.Context, client *http.Client, endpoint strin
 			return nil, fmt.Errorf("create anthropic request: %w", err)
 		}
 		httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set("User-Agent", "solcode/1.0")
 		httpReq.Header.Set("anthropic-version", "2023-06-01")
 		if apiKey != "" {
 			httpReq.Header.Set("x-api-key", apiKey)

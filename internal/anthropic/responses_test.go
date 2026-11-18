@@ -180,6 +180,9 @@ func TestResponsesClientCreateNonStream(t *testing.T) {
 	for _, suffix := range []string{"", "/v1", "/v1/responses/"} {
 		t.Run(suffix, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.UserAgent() != "solcode/1.0" {
+					t.Errorf("User-Agent = %q", r.UserAgent())
+				}
 				if r.URL.Path != "/v1/responses" || r.Method != http.MethodPost || r.Header.Get("Authorization") != "Bearer test-key" {
 					t.Errorf("request: %s %s; headers = %#v", r.Method, r.URL.Path, r.Header)
 				}

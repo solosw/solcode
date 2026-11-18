@@ -22,6 +22,9 @@ func TestOpenAIRequestRetriesRetryableStatus(t *testing.T) {
 	attempts := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		attempts++
+		if r.UserAgent() != "solcode/1.0" {
+			t.Errorf("User-Agent = %q", r.UserAgent())
+		}
 		if attempts <= 2 {
 			http.Error(w, "temporarily unavailable", http.StatusServiceUnavailable)
 			return
