@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -258,9 +259,9 @@ func (s *Server) handleSessionNew(ctx context.Context, msg jsonrpcMessage) error
 	return nil
 }
 
-// initializeNewSessionMemory applies the ACP new-session default, never the
-// load-session path. Persist the pending bootstrap because saving this metadata
-// means the first prompt will no longer see a newly-created session.
+// initializeNewSessionMemory applies the ACP new-session default, including
+// recovery when only a configuration record exists. Persist the pending bootstrap
+// because saving this metadata makes the first prompt see an existing session.
 func (sess *acpSession) initializeNewSessionMemory(ctx context.Context) error {
 	if sess.application.Sessions == nil {
 		return nil
@@ -594,11 +595,32 @@ func (s *Server) replayPersistedHistory(ctx context.Context, sess *acpSession, r
 		if !required && session.IsNotFound(err) {
 			return nil
 		}
-		return err
+		if !session.IsNotFound(err) || sess.configStatePath() == "" {
+			return err
+		}
+		// Before the first prompt, older ACP sessions may have saved only
+		// configuration. Require that durable record before recovering an
+		// empty transcript; an unknown ID must still fail to load.
+		if _, configErr := os.Stat(sess.configStatePath()); configErr != nil {
+			if os.IsNotExist(configErr) {
+				return err
+			}
+			return fmt.Errorf("read session configuration: %w", configErr)
+		}
 	}
-	// Confirm the transcript exists before restoring/re-saving its settings.
 	if err := sess.restoreConfig(ctx); err != nil {
 		return err
+	}
+	if loaded == nil {
+		// Persist only after validating the saved configuration. Retain the
+		// new-session memory bootstrap for the first actual prompt.
+		if err := sess.initializeNewSessionMemory(ctx); err != nil {
+			return err
+		}
+		loaded, err = sess.application.Sessions.Load(ctx, session.SessionID(sess.id))
+		if err != nil {
+			return err
+		}
 	}
 	// A restored transcript may predate a configuration save or come from
 	// another provider with the same model ID. Never trust opaque signatures
