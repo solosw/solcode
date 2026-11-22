@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/solosw/solcode/internal/codegraphruntime/bundle"
+	"github.com/solosw/solcode/internal/tool"
 )
 
 func smokeRuntime(t *testing.T) (bundle.Runtime, string) {
@@ -352,6 +354,62 @@ func TestCodeGraphInitializationRecoverySmoke(t *testing.T) {
 		t.Fatal("interrupted initial scan recovery:", err)
 	}
 	t.Log("native init recovered its own interrupted building state")
+}
+
+func TestCodeGraphRecreatedProjectSmoke(t *testing.T) {
+	runtime, cache := smokeRuntime(t)
+	t.Setenv("CODEGRAPH_DAEMON_IDLE_TIMEOUT_MS", "1000")
+	parent := t.TempDir()
+	root := filepath.Join(parent, "project")
+	if err := os.Mkdir(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	oldSource := filepath.Join(root, "original.go")
+	if err := os.WriteFile(oldSource, []byte("package sample\nfunc originalSymbol() {}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := initializeCodeGraph(t.Context(), runtime, root, codeGraphEnv(root)); err != nil {
+		t.Fatal(err)
+	}
+	oldDB := filepath.Join(smokeIndexDir(t, root), "codegraph.db")
+	before, err := os.ReadFile(oldDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Keep the original directory alive so the filesystem cannot reuse its ID.
+	if err := os.Rename(root, filepath.Join(parent, "original")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "current.go"), []byte("package sample\nfunc currentSymbol() {}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	client := NewCodeGraphClient(root, os.Getenv("SOLCODE_CODEGRAPH_RUNTIME_DIR"), cache, nil)
+	t.Cleanup(func() { _ = client.Close() })
+	smokeStart(t, client)
+	graph := tool.NewCodeGraphTool(client, root)
+	for _, query := range []struct{ raw, want string }{
+		{`{"action":"explore","query":"currentSymbol"}`, "current.go"},
+		{`{"action":"search","query":"currentSymbol","kind":"function"}`, "current.go"},
+		{`{"action":"node","file":"current.go","limit":2}`, "currentSymbol"},
+		{`{"action":"callers","symbol":"currentSymbol","file":"current.go"}`, "currentSymbol"},
+		{`{"action":"callees","symbol":"currentSymbol","file":"current.go"}`, "currentSymbol"},
+		{`{"action":"impact","symbol":"currentSymbol","depth":2}`, "current.go"},
+		{`{"action":"files","format":"flat"}`, "current.go"},
+		{`{"action":"status"}`, "Files indexed"},
+	} {
+		result, err := graph.Invoke(t.Context(), nil, json.RawMessage(query.raw))
+		if err != nil || result == nil || result.IsError || !strings.Contains(result.Text, query.want) || strings.Contains(result.Text, "original.go") {
+			t.Fatalf("%s: %+v, %v", query.raw, result, err)
+		}
+	}
+	after, err := os.ReadFile(oldDB)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("prior index changed:", err)
+	}
 }
 
 func TestCodeGraphBootstrapSafetySmoke(t *testing.T) {

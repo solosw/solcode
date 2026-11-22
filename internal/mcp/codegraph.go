@@ -3,15 +3,17 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
-
+	"regexp"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/solosw/solcode/internal/codegraphruntime/bundle"
 	"github.com/solosw/solcode/internal/config"
 	"github.com/solosw/solcode/internal/tool"
@@ -70,6 +72,10 @@ func (b *boundedLog) Write(p []byte) (int, error) {
 	}
 	return n, nil
 }
+
+// The pinned runtime reports both identities when the external index belongs to
+// a different directory. Restrict recovery to this error and a safe namespace.
+var codeGraphOwnerMismatch = regexp.MustCompile(`(?m)^Error: state-gated Store open rejected index state corrupt: index state slot [01] \(([^\r\n]+)\) belongs to project identity ([0-9a-f]{64}), not ([0-9a-f]{64})\r?$`)
 
 func initializeCodeGraph(ctx context.Context, r bundle.Runtime, root string, env map[string]string) error {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Minute)
@@ -174,7 +180,21 @@ func (c *CodeGraphClient) connect() error {
 	}
 	env := codeGraphEnv(root)
 	if err := c.initialize(c.ctx, r, root, env); err != nil {
-		return err
+		match := codeGraphOwnerMismatch.FindStringSubmatch(err.Error())
+		if match == nil || match[2] == match[3] || c.ctx.Err() != nil {
+			return err
+		}
+		expectedDir, expectedErr := os.Stat(env["CODEGRAPH_DIR"])
+		reportedDir, reportedErr := os.Stat(filepath.Dir(match[1]))
+		if expectedErr != nil || reportedErr != nil || !os.SameFile(expectedDir, reportedDir) {
+			return err
+		}
+		// The upstream owner gate stays in force for both directories. Sessions
+		// opening the same physical project converge on the same alternate index.
+		env["CODEGRAPH_DIR"] += "-" + match[3]
+		if err := c.initialize(c.ctx, r, root, env); err != nil {
+			return fmt.Errorf("initialize CodeGraph index for current project: %w", err)
+		}
 	}
 	args := []string{"serve", "--mcp", "--path", root}
 	client := c.factory(config.MCPServerConfig{Name: "solcode-codegraph", Transport: "stdio", Command: r.Binary, Args: args, Env: env})
@@ -286,6 +306,10 @@ func (c *CodeGraphClient) CallTool(ctx context.Context, name string, input json.
 		result, err = stdio.callTool(ctx, name, input)
 	} else {
 		result, err = c.client.CallTool(ctx, name, input)
+	}
+	var rpcErr *jsonrpc.Error
+	if errors.As(err, &rpcErr) {
+		return tool.ErrorResult(rpcErr.Error()), nil
 	}
 	if err != nil && ctx.Err() == nil {
 		c.err = fmt.Errorf("CodeGraph transport failed: %w", err)

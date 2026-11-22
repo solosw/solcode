@@ -16,7 +16,7 @@ func TestBatchSettingsLoadAndPartialOverlay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	expected := BatchConfig{MaxOperations: 6, MaxParallel: 3, MaxResultRunes: 4000, MaxTotalResultRunes: 9000, MaxReadRetries: 0}
+	expected := BatchConfig{MaxOperations: 6, MaxParallel: 3, MaxResultRunes: 4000, MaxTotalResultRunes: 9000, MaxReadRetries: 0, PTC: BatchPTCConfig{Enabled: true}}
 	if cfg.Batch != expected {
 		t.Fatalf("batch settings ignored: got=%+v want=%+v", cfg.Batch, expected)
 	}
@@ -30,6 +30,26 @@ func TestBatchSettingsLoadAndPartialOverlay(t *testing.T) {
 	expected.MaxParallel = 2
 	if cfg.Batch != expected {
 		t.Fatalf("partial batch overlay erased unrelated values: %+v", cfg.Batch)
+	}
+}
+
+func TestBatchPTCDefaultAndExplicitDisable(t *testing.T) {
+	if !Default().Batch.PTC.Enabled {
+		t.Fatal("PTC must be enabled by default")
+	}
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, []byte(`{"batch":{"ptc":{"enabled":false}}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil || cfg.Batch.PTC.Enabled {
+		t.Fatalf("explicit PTC override: %+v, error: %v", cfg.Batch.PTC, err)
+	}
+	if err := applyJSONConfig(&cfg, []byte(`{"batch":{"max_parallel":2}}`)); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Batch.PTC.Enabled {
+		t.Fatal("partial override enabled PTC")
 	}
 }
 

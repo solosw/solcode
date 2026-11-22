@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -137,8 +138,12 @@ func fetchProviderModels(ctx context.Context, client *http.Client, provider Prov
 	}
 	var catalog struct {
 		Data []struct {
-			ID          string `json:"id"`
-			DisplayName string `json:"display_name"`
+			ID               string          `json:"id"`
+			DisplayName      string          `json:"display_name"`
+			MaxContextTokens json.RawMessage `json:"max_context_tokens"`
+			ContextLength    json.RawMessage `json:"context_length"`
+			ContextWindow    json.RawMessage `json:"context_window"`
+			MaxModelLen      json.RawMessage `json:"max_model_len"`
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&catalog); err != nil {
@@ -150,15 +155,36 @@ func fetchProviderModels(ctx context.Context, client *http.Client, provider Prov
 		if id == "" {
 			continue
 		}
-		models = append(models, ModelConfig{Name: id, ID: id, DisplayName: m.DisplayName, Provider: provider.Name, discovered: true})
+		models = append(models, ModelConfig{
+			Name: id, ID: id, DisplayName: m.DisplayName, Provider: provider.Name, discovered: true,
+			remoteContextTokens: catalogContextTokens(m.MaxContextTokens, m.ContextLength, m.ContextWindow, m.MaxModelLen),
+		})
 	}
 	return models, nil
 }
 
+func catalogContextTokens(fields ...json.RawMessage) int64 {
+	for _, field := range fields {
+		tokens, err := strconv.ParseInt(strings.Trim(string(field), `"`), 10, 32)
+		if err == nil && tokens > 0 {
+			return tokens
+		}
+	}
+	return 0
+}
+
 func mergeProviderModels(provider string, local, remote []ModelConfig) []ModelConfig {
 	merged := append([]ModelConfig(nil), local...)
+	remoteLimits := make(map[string]int64, len(remote))
+	for _, m := range remote {
+		if remoteLimits[m.ID] == 0 {
+			remoteLimits[m.ID] = m.remoteContextTokens
+		}
+	}
 	seen := make(map[string]bool, len(local)+len(remote))
-	for _, m := range local {
+	for i := range merged {
+		m := &merged[i]
+		m.remoteContextTokens = remoteLimits[m.ID]
 		seen[m.Name], seen[m.ID] = true, true
 	}
 	for _, m := range remote {
@@ -166,6 +192,7 @@ func mergeProviderModels(provider string, local, remote []ModelConfig) []ModelCo
 			continue
 		}
 		m.Provider, m.discovered = provider, true
+		m.remoteContextTokens = remoteLimits[m.ID]
 		merged = append(merged, m)
 		seen[m.Name], seen[m.ID] = true, true
 	}

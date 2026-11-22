@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
@@ -149,6 +150,67 @@ func TestBackgroundToolsLetMainAgentDoIndependentWork(t *testing.T) {
 				t.Fatalf("result = %#v; requests=%d executions=%d UI completions=%d", result.AgentResult, calls, longCalls.Load(), doneEvents)
 			}
 		})
+	}
+}
+
+func TestBackgroundBashWakesOnlyIdleReplyInBypassAndUltra(t *testing.T) {
+	for _, mode := range []permission.Mode{permission.ModeBypass, permission.ModeUltra} {
+		for _, idle := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/idle=%t", mode, idle), func(t *testing.T) {
+				synctest.Test(t, func(t *testing.T) {
+					ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+					defer cancel()
+					release := make(chan struct{})
+					registry := tool.NewRegistry()
+					registry.Register(&backgroundTestTool{name: tool.BashToolName, run: func(context.Context) *tool.ContentBlock {
+						<-release
+						return tool.Result("background Bash output")
+					}})
+					calls, completions := 0, 0
+					client := backgroundTestClient(func(_ context.Context, req cpanthropic.MessageRequest) (*sdk.Message, error) {
+						calls++
+						switch calls {
+						case 1:
+							return backgroundMessage(t, backgroundCall("long", tool.BashToolName, map[string]any{"run_in_background": true})), nil
+						case 2:
+							if !idle {
+								close(release)
+								synctest.Wait()
+							}
+						case 3:
+							if !idle || !messagesContain(req.Messages, "background Bash output") {
+								t.Error("unexpected wake or missing Bash output")
+							}
+						default:
+							return nil, fmt.Errorf("unexpected model request %d", calls)
+						}
+						return backgroundMessage(t), nil
+					})
+					eng := NewEngine(Config{
+						Client: client, Tools: registry, Permissions: permission.NewService(mode),
+						BackgroundTasksEnabled: true,
+						OnStatus: func(status string) {
+							if idle && status == "Waiting for child question or background completion" {
+								close(release)
+							}
+						},
+						OnToolDone: func(_ string, _ string, _ bool, id string) {
+							if id == "long" {
+								completions++
+							}
+						},
+					})
+					result := eng.RunWithHistory(ctx, RunRequest{AgentConfig: agent.AgentConfig{ID: "main", Prompt: "work", UnlimitedTurns: true}})
+					wantCalls := 2
+					if idle {
+						wantCalls = 3
+					}
+					if result.AgentResult.Error != "" || calls != wantCalls || completions != 1 || !messagesContain(result.Messages, "background Bash output") {
+						t.Fatalf("result=%+v, model requests=%d, tool completions=%d", result.AgentResult, calls, completions)
+					}
+				})
+			})
+		}
 	}
 }
 

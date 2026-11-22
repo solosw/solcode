@@ -800,17 +800,16 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 				// cannot be undone by a stale local override after restart.
 				next.NormalizeLocalModels()
 				updates := map[string]any{
-					"permissions":        map[string]any{"bypass_subagents": next.Permissions.BypassSubagents},
-					"subagents":          next.Subagents,
-					"tool_search":        map[string]any{"enabled": next.ToolSearchEnabled()},
-					"provider":           next.Provider,
-					"model":              next.Model,
-					"providers":          next.Providers,
-					"mcp":                map[string]any{"servers": next.MCP.Servers},
-					"effort":             next.Effort,
-					"max_turns":          next.MaxTurns,
-					"max_context_tokens": next.MaxContextTokens,
-					"skills":             map[string]any{"enabled": next.Skills.Enabled, "disabled": next.Skills.Disabled},
+					"permissions": map[string]any{"bypass_subagents": next.Permissions.BypassSubagents},
+					"subagents":   next.Subagents,
+					"tool_search": map[string]any{"enabled": next.ToolSearchEnabled()},
+					"provider":    next.Provider,
+					"model":       next.Model,
+					"providers":   next.Providers,
+					"mcp":         map[string]any{"servers": next.MCP.Servers},
+					"effort":      next.Effort,
+					"max_turns":   next.MaxTurns,
+					"skills":      map[string]any{"enabled": next.Skills.Enabled, "disabled": next.Skills.Disabled},
 					// Written as a nested object so the merge keeps unrelated
 					// ComputerUse keys that a future version may add.
 					"computer_use": map[string]any{"enabled": next.ComputerUse.Enabled, "backend": next.ComputerUse.Backend, "binary": next.ComputerUse.Binary},
@@ -860,6 +859,9 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 							"dimensions":      next.Memory.Embedding.Dimensions,
 						},
 					},
+				}
+				if len(next.Providers) == 0 {
+					updates["max_context_tokens"] = next.LegacyContextLimitOverride()
 				}
 				if err := config.SaveLocalOverrides(persistencePath, updates); err != nil {
 					return fmt.Errorf("could not persist settings: %w", err)

@@ -623,7 +623,7 @@ func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
 		Model:      settingsModelName(cfg),
 		Effort:     cfg.Effort,
 		MaxTurns:   cfg.MaxTurns,
-		MaxContext: cfg.MaxContextTokens,
+		MaxContext: cfg.ContextLimitForModel(cfg.Model),
 		APIFormat:  cfg.APIFormat,
 		MCPServers: cfg.MCP.Servers,
 		ComputerUse: computerUseSettings{

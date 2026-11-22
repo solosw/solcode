@@ -804,6 +804,7 @@
     data: null,
     draft: null,
     dirty: false,
+    maxContextEdited: false,
   };
 
   function setSettingsStatus(msg, kind = "") {
@@ -868,6 +869,7 @@
 
   function clearSettingsDirty() {
     settings.dirty = false;
+    settings.maxContextEdited = false;
     el.settingsDirty.textContent = "All changes are saved together.";
     el.settingsDirty.classList.remove("dirty");
   }
@@ -1366,7 +1368,6 @@
       model: d.model,
       effort: d.effort,
       max_turns: d.max_turns,
-      max_context_tokens: d.max_context_tokens,
       mcp_disabled: Object.fromEntries((d.mcp_servers || []).map((s) => [s.name, Boolean(s.disabled)])),
       skills_enabled: Object.fromEntries((d.skills || []).filter((s) => s.enabled).map((s) => [s.name, true])),
       skills_disabled: Object.fromEntries((d.skills || []).filter((s) => !s.enabled).map((s) => [s.name, true])),
@@ -1403,6 +1404,9 @@
       memory_organizer_temperature: d.memory_organizer?.temperature ?? 0.2,
       memory_organizer_timeout_sec: d.memory_organizer?.timeout_sec ?? 180,
     };
+    if (settings.maxContextEdited) {
+      payload.max_context_tokens = d.max_context_tokens;
+    }
     // Only send the key when the user typed one; otherwise the stored key stays.
     if (d.jev?.api_key) {
       payload.jev_api_key = d.jev.api_key;
@@ -1630,6 +1634,7 @@
         markSettingsDirty();
       });
       input.addEventListener("input", () => {
+        if (input === el.setMaxContext) settings.maxContextEdited = true;
         if (input.type === "number") syncRuntimeSettings();
         markSettingsDirty();
       });

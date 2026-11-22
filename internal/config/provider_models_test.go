@@ -111,6 +111,76 @@ func TestStartupDiscoversModelsForAllProvidersAndPrefersLocal(t *testing.T) {
 	}
 }
 
+func TestModelContextWindowPrecedence(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"data":[
+			{"id":"openai/gpt-5","context_length":999999}, {"id":"gpt-5-mini","context_window":400000},
+			{"id":"anthropic/Claude-Sonnet","context_length":200000},
+			{"id":"google/gemini-3"},{"id":"deepseek-ai/DeepSeek-V3"},
+			{"id":"glm-5"},{"id":"kimi-k2"},{"id":"grok-4"},{"id":"Qwen3.5"},
+			{"id":"custom","max_context_tokens":{},"context_length":"90000"},
+			{"id":"private","max_model_len":64000},
+			{"id":"invalid","context_window":-1,"max_output_tokens":1000}
+		]}`))
+	}))
+	defer server.Close()
+	path := writeDiscoveryConfig(t, []ProviderConfig{{Name: "test", BaseURL: server.URL, Models: []ModelConfig{
+		{Name: "manual", ID: "openai/gpt-5", MaxContextTokens: 123000},
+		{Name: "alias", ID: "private"},
+	}}}, "manual")
+	cfg, err := LoadForStartup(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		model string
+		want  int64
+	}{
+		{"manual", 123000}, {"gpt-5-mini", 256000}, {"anthropic/Claude-Sonnet", 500000}, {"google/gemini-3", 500000},
+		{"deepseek-ai/DeepSeek-V3", 1000000}, {"glm-5", 1000000}, {"kimi-k2", 1000000},
+		{"grok-4", 200000}, {"Qwen3.5", 256000}, {"custom", 90000}, {"alias", 64000}, {"invalid", 200000},
+	} {
+		if got := cfg.ContextLimitForModel(tc.model); got != tc.want {
+			t.Errorf("catalog window for %s = %d, want %d", tc.model, got, tc.want)
+		}
+		cfg, err = cfg.WithModel(tc.model)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.MaxContextTokens != tc.want {
+			t.Errorf("active window for %s = %d, want %d", tc.model, cfg.MaxContextTokens, tc.want)
+		}
+	}
+
+	// Existing settings can have a top-level value written by the settings UI.
+	// Only model-level overrides apply when a provider catalog is configured.
+	if err := applyJSONConfig(&cfg, []byte(`{"max_context_tokens":200000}`)); err != nil {
+		t.Fatal(err)
+	}
+	selected, err := cfg.WithModel("google/gemini-3")
+	if err != nil || selected.MaxContextTokens != 500000 {
+		t.Fatalf("Gemini window = %d, error=%v", selected.MaxContextTokens, err)
+	}
+}
+
+func TestLegacyContextWindowOverride(t *testing.T) {
+	cfg := Default()
+	if err := applyJSONConfig(&cfg, []byte(`{"model":"gpt-5","max_context_tokens":200000}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MaxContextTokens != 200000 || cfg.LegacyContextLimitOverride() != 200000 {
+		t.Fatalf("legacy window = %d, override = %d", cfg.MaxContextTokens, cfg.LegacyContextLimitOverride())
+	}
+	cfg.MaxContextTokens = 0
+	next, err := cfg.WithModel("claude-sonnet")
+	if err != nil || next.MaxContextTokens != 500000 || next.LegacyContextLimitOverride() != 0 {
+		t.Fatalf("automatic legacy window = %d, override = %d, error=%v", next.MaxContextTokens, next.LegacyContextLimitOverride(), err)
+	}
+}
+
 func TestStartupResolvesRemoteOnlyProviderBeforeNormalize(t *testing.T) {
 	var calls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

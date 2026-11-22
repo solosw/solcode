@@ -20,8 +20,9 @@ the release and are also embedded.
   derived from the canonical absolute project path. Project aliases share one
   index and daemon. SolCode passes the absolute path through `CODEGRAPH_DIR`.
   The patch accepts external storage and anchors lease creation there; upstream
-  still owns scanning, SQLite, daemon and watcher behavior. External indexes
-  with a different physical project owner are refused, not adopted or rebuilt.
+  still owns scanning, SQLite, daemon and watcher behavior. When the runtime
+  reports a different physical project owner, SolCode leaves that index in
+  place and builds or reuses a sibling `codegraph-<project-identity>/` index.
 - Previous `.solcode-codegraph/` and Node-engine `.codegraph/` indexes are left
   untouched: no migration, deletion or stopping their existing daemons. A new
   index is built in user state when the updated application opens the project.
@@ -46,8 +47,8 @@ the release and are also embedded.
   project found" error for its own already-initialized canonical project on the
   same proxy (200 ms between attempts, within the existing two-minute startup
   deadline). Closing the session cancels the wait. It never reruns initialization
-  or replays user queries; other-project, ownership, corruption and transport
-  errors still fail immediately.
+  or replays user queries. Other-project, ownership, corruption and transport
+  errors during live-service preparation still fail immediately.
 - Telemetry is disabled. Runtime resolution never downloads anything and has no
   PATH fallback. Missing payloads, unsupported platforms or startup failures
   leave Grep/View/LSP and the existing projectindex fallback usable. The existing

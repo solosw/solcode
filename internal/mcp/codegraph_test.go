@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/solosw/solcode/internal/codegraphruntime/bundle"
 	"github.com/solosw/solcode/internal/config"
 	"github.com/solosw/solcode/internal/tool"
@@ -184,6 +185,23 @@ func TestCodeGraphCloseBeforeStartNeverInitializes(t *testing.T) {
 		t.Fatalf("%+v %v", r, err)
 	}
 }
+func TestCodeGraphRPCErrorDoesNotCloseProxy(t *testing.T) {
+	f := &graphFakeClient{}
+	c := graphTestClient(t, f)
+	c.Start()
+	waitGraph(t, c)
+	f.callErr = &jsonrpc.Error{Code: jsonrpc.CodeInvalidParams, Message: "invalid argument"}
+	result, err := c.CallTool(t.Context(), "codegraph_node", json.RawMessage(`{}`))
+	if err != nil || result == nil || !result.IsError || !strings.Contains(result.Text, "invalid argument") {
+		t.Fatalf("query error: %+v, %v", result, err)
+	}
+	f.callErr = nil
+	result, err = c.CallTool(t.Context(), "codegraph_files", json.RawMessage(`{}`))
+	if err != nil || result == nil || result.IsError || f.closed.Load() != 0 {
+		t.Fatalf("query after RPC error: %+v, %v", result, err)
+	}
+}
+
 func TestCodeGraphTransportFailureDegradesWithoutReplay(t *testing.T) {
 	f := &graphFakeClient{}
 	c := graphTestClient(t, f)

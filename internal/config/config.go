@@ -125,8 +125,10 @@ type Config struct {
 	// Keep top-level defaults separate from active model/provider overrides.
 	// Switching back must not inherit the last provider's wire format or a
 	// non-reasoning model's disabled thinking. Runtime-only settings.
-	defaultAPIFormat string
-	defaultThinking  bool
+	defaultAPIFormat          string
+	defaultThinking           bool
+	manualContextTokens       int64
+	lastResolvedContextTokens int64
 
 	// SupportedEfforts overrides compatibility defaults for a legacy endpoint.
 	SupportedEfforts []string `json:"supported_efforts"`
@@ -568,7 +570,8 @@ type ResolvedProvider struct {
 
 type ModelConfig struct {
 	// discovered models are runtime catalog entries, not local settings.
-	discovered bool
+	discovered          bool
+	remoteContextTokens int64
 	// Nil uses compatibility defaults; an empty list disables effort selection.
 	SupportedEfforts []string                   `json:"supported_efforts"`
 	Name             string                     `json:"name"`
@@ -593,12 +596,12 @@ func Default() Config {
 		BaseURL:          os.Getenv("ANTHROPIC_BASE_URL"),
 		Model:            anthropic.DefaultModel,
 		FastModel:        "",
-		MaxContextTokens: 200_000,
+		MaxContextTokens: defaultContextTokens,
 		MaxTokens:        64_000,
 		WorkDir:          wd,
 		MaxTurns:         0,
 		BackgroundTasks:  BackgroundTasksConfig{Enabled: true, YieldAfterMS: DefaultBackgroundYieldAfterMS},
-		Batch:            BatchConfig{MaxReadRetries: 1},
+		Batch:            BatchConfig{MaxReadRetries: 1, PTC: BatchPTCConfig{Enabled: true}},
 		Stream:           true,
 		Thinking:         true,
 		ThinkingText:     false,
@@ -721,10 +724,9 @@ func defaultSettingsPayload(workDir string) map[string]any {
 			Name:      "anthropic",
 			APIKeyEnv: "ANTHROPIC_API_KEY",
 			Models: []ModelConfig{{
-				Name:             "default",
-				ID:               anthropic.DefaultModel,
-				MaxContextTokens: 200_000,
-				MaxTokens:        &maxTokens,
+				Name:      "default",
+				ID:        anthropic.DefaultModel,
+				MaxTokens: &maxTokens,
 			}},
 		}},
 		"work_dir": workDir,
@@ -744,6 +746,9 @@ func (cfg *Config) Normalize() error {
 		cfg.defaultThinking = cfg.Thinking
 	}
 	cfg.APIFormat = cfg.defaultAPIFormat
+	if len(cfg.Providers) == 0 {
+		cfg.manualContextTokens = cfg.LegacyContextLimitOverride()
+	}
 	if cfg.BackgroundTasks.YieldAfterMS <= 0 {
 		cfg.BackgroundTasks.YieldAfterMS = DefaultBackgroundYieldAfterMS
 	}
@@ -830,11 +835,8 @@ func (cfg *Config) Normalize() error {
 		cfg.APIFormat = cfg.defaultAPIFormat
 	}
 	cfg.Model = mdl.ID
-	if mdl.MaxContextTokens > 0 {
-		cfg.MaxContextTokens = mdl.MaxContextTokens
-	} else if cfg.MaxContextTokens <= 0 {
-		cfg.MaxContextTokens = 200_000
-	}
+	cfg.MaxContextTokens = cfg.resolveModelContextTokens(mdl)
+	cfg.lastResolvedContextTokens = cfg.MaxContextTokens
 	if mdl.MaxTokens != nil {
 		cfg.MaxTokens = *mdl.MaxTokens
 	}
@@ -852,9 +854,6 @@ func (cfg *Config) Normalize() error {
 	}
 	if strings.TrimSpace(cfg.Effort) == "" {
 		cfg.Effort = "high"
-	}
-	if cfg.MaxContextTokens <= 0 {
-		cfg.MaxContextTokens = 20_000
 	}
 	if cfg.MaxTokens <= 0 {
 		cfg.MaxTokens = 64_000
@@ -1119,9 +1118,8 @@ func applyEnvLegacy(cfg *Config) {
 		cfg.Model = anthropic.DefaultModel
 	}
 	cfg.FastModel = strings.TrimSpace(cfg.FastModel)
-	if cfg.MaxContextTokens <= 0 {
-		cfg.MaxContextTokens = 200_000
-	}
+	cfg.MaxContextTokens = cfg.resolveModelContextTokens(ModelConfig{ID: cfg.Model})
+	cfg.lastResolvedContextTokens = cfg.MaxContextTokens
 	if cfg.MaxTokens <= 0 {
 		cfg.MaxTokens = 64_000
 	}
@@ -1412,6 +1410,10 @@ func applyJSONConfig(cfg *Config, data []byte) error {
 			}
 		case "context_nudge":
 			if err := json.Unmarshal(value, &cfg.ContextNudge); err != nil {
+				return err
+			}
+		case "max_context_tokens":
+			if err := json.Unmarshal(value, &cfg.manualContextTokens); err != nil {
 				return err
 			}
 		case "max_tokens":

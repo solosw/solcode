@@ -13,16 +13,28 @@ import (
 
 	"github.com/solosw/solcode/internal/agent"
 	"github.com/solosw/solcode/internal/app"
+	"github.com/solosw/solcode/internal/config"
 	"github.com/solosw/solcode/internal/engine"
 	"github.com/solosw/solcode/internal/permission"
 	"github.com/solosw/solcode/internal/tool"
 )
 
 func TestACPCancelPendingBashPermission(t *testing.T) {
-	for _, name := range []string{tool.BashToolName, tool.BatchToolName} {
-		t.Run(name, func(t *testing.T) {
+	for _, tc := range []struct {
+		label string
+		name  string
+		ptc   bool
+	}{
+		{label: "Bash", name: tool.BashToolName},
+		{label: "BatchTool/static", name: tool.BatchToolName},
+		{label: "BatchTool/PTC", name: tool.BatchToolName, ptc: true},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
 			var invoked atomic.Int32
-			client := newACPHarness(t, func(ctx context.Context, application *app.App, sessionID, prompt, workDir string, maxTurns int, emit StreamEmitter) (agent.AgentResult, error) {
+			client := newACPHarnessWithConfig(t, func(cfg config.Config) config.Config {
+				cfg.Batch.PTC.Enabled = tc.ptc
+				return cfg
+			}, func(ctx context.Context, application *app.App, sessionID, prompt, workDir string, maxTurns int, emit StreamEmitter) (agent.AgentResult, error) {
 				if prompt == "next" {
 					return agent.AgentResult{Output: "ready"}, nil
 				}
@@ -35,16 +47,16 @@ func TestACPCancelPendingBashPermission(t *testing.T) {
 					}).Content, nil
 				}
 				input := json.RawMessage(`{"command":"printf forbidden > cancelled-marker"}`)
-				if name == tool.BatchToolName {
-					// Use the static batch wire format independent of configured PTC defaults.
-					application.Tools.Register(tool.NewBatchTool())
+				if tc.ptc {
+					input = json.RawMessage(`{"code":"await tools.Bash({command:'printf forbidden > cancelled-marker'})"}`)
+				} else if tc.name == tool.BatchToolName {
 					input = json.RawMessage(`{"operations":[{"tool":"Bash","input":{"command":"printf forbidden > cancelled-marker"}}]}`)
 				}
 				env := engine.ToolEnv{UseContext: uctx}
-				if name == tool.BashToolName {
+				if tc.name == tool.BashToolName {
 					env.OnInvokeStart = func() { invoked.Add(1) }
 				}
-				executor.Execute(ctx, engine.ToolCall{Name: name, Input: input}, env)
+				executor.Execute(ctx, engine.ToolCall{Name: tc.name, Input: input}, env)
 				return agent.AgentResult{}, ctx.Err()
 			})
 			requests := make(chan jsonrpcMessage, 4)

@@ -5,15 +5,15 @@ BatchTool keeps its name and switches schema when the application loads settings
 ```json
 {
   "batch": {
-    "ptc": { "enabled": true },
+    "ptc": { "enabled": false },
     "max_parallel": 4,
     "max_result_runes": 18000
   }
 }
 ```
 
-The default is `false`. With PTC disabled the existing `operations` batch
-schema, scheduling, transaction and output handling remain unchanged.
+PTC is enabled by default. Set `batch.ptc.enabled` to `false` as shown above
+to use the static `operations` batch schema.
 
 With PTC enabled, the model supplies `{"code":"..."}` to `BatchTool`.
 No Node.js installation is required: the Goja runtime is compiled into the Go

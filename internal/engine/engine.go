@@ -460,11 +460,21 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 			result.Messages = append(result.Messages, sdk.NewUserMessage(sdk.NewTextBlock(notification)))
 		}
 	}()
-	drainBackground := func() int {
-		notifications := background.drain(e.config.OnToolDone)
+	drainBackground := func(skipBashWake bool) int {
+		completed := 0
+		notifications := background.drain(func(name, output string, isError bool, toolUseID string) {
+			if !skipBashWake || name != tool.BashToolName {
+				completed++
+			}
+			if e.config.OnToolDone != nil {
+				e.config.OnToolDone(name, output, isError, toolUseID)
+			}
+		})
 		if isMain && e.config.Tools != nil {
 			if source, ok := e.config.Tools.Find(tool.TaskToolName).(tool.AgentNotificationSource); ok {
-				notifications = append(notifications, source.DrainAgentNotifications(&tool.UseContext{SessionID: nonEmpty(runReq.SessionID, string(cfg.ID)), AgentID: string(cfg.ID), WorkDir: cfg.WorkDir})...)
+				agentNotifications := source.DrainAgentNotifications(parentScope)
+				completed += len(agentNotifications)
+				notifications = append(notifications, agentNotifications...)
 			}
 		}
 		for _, notification := range notifications {
@@ -472,7 +482,7 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 			// tool_result for an already acknowledged tool_use ID.
 			messages = append(messages, sdk.NewUserMessage(sdk.NewTextBlock(notification)))
 		}
-		return len(notifications)
+		return completed
 	}
 	drainQueuedPrompts := func() int {
 		if !isMain || e.config.QueuedPrompts == nil {
@@ -510,7 +520,7 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 			if agentEvents != nil {
 				wake, live, questions = agentEvents.ParentEvents(parentScope)
 			}
-			injected := drainBackground() + drainQueuedPrompts()
+			injected := drainBackground(false) + drainQueuedPrompts()
 			if injected > 0 || questions || (!live && !background.hasPending()) {
 				return injected, nil
 			}
@@ -553,7 +563,7 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 		if err := ctx.Err(); err != nil {
 			return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: err.Error()}, Messages: messages}
 		}
-		injected := drainBackground() + drainQueuedPrompts()
+		injected := drainBackground(false) + drainQueuedPrompts()
 		if isMain && turn > 0 && injected == 0 && agentEvents != nil {
 			_, live, questions := agentEvents.ParentEvents(parentScope)
 			if live && !questions {
@@ -907,9 +917,13 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 			issuedTool = true
 		}
 		if message.StopReason != sdk.StopReasonToolUse || len(toolUses) == 0 {
-			injected := drainBackground() + drainQueuedPrompts()
+			// A Bash result already ready during this reply is saved to history.
+			// Only a completion received while waiting should wake an idle reply.
+			mode := e.config.Permissions.Mode()
+			skipBashWake := mode == permission.ModeBypass || mode == permission.ModeUltra
+			injected := drainBackground(skipBashWake) + drainQueuedPrompts()
 			if injected > 0 {
-				if turn+1 >= turnLimit {
+				if turnLimit > 0 && turn+1 >= turnLimit {
 					return RunResult{AgentResult: agent.AgentResult{AgentID: cfg.ID, Error: fmt.Sprintf("max turns reached: %d; queued/background messages saved but not processed", turnLimit)}, Messages: messages}
 				}
 				continue
