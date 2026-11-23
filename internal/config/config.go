@@ -187,6 +187,11 @@ type Config struct {
 	Provider   string           `json:"provider,omitempty"`
 	Providers  []ProviderConfig `json:"providers,omitempty"`
 	ToolSearch ToolSearchConfig `json:"tool_search,omitempty"`
+
+	// Client system instructions are scoped to the ACP lifecycle request,
+	// not user configuration. Override replaces only the authored core prompt.
+	SystemPromptOverride string `json:"-"`
+	SystemPromptAppend   string `json:"-"`
 }
 
 // SubagentsConfig selects the default child model. Role TOML model settings override it.

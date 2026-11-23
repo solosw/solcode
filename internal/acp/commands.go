@@ -6,6 +6,7 @@ import (
 	"maps"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/solosw/solcode/internal/app"
 	"github.com/solosw/solcode/internal/config"
@@ -31,7 +32,10 @@ func parseSlashCommand(input string) (slashCommand, bool) {
 	if body == "" {
 		return slashCommand{}, false
 	}
-	name, args, _ := strings.Cut(body, " ")
+	name, args := body, ""
+	if i := strings.IndexFunc(body, unicode.IsSpace); i >= 0 {
+		name, args = body[:i], body[i:]
+	}
 	name = strings.ToLower(strings.TrimSpace(name))
 	args = strings.TrimSpace(args)
 	if !isSlashCommandName(name) {
@@ -95,7 +99,7 @@ func (s *Server) handleSlashCommand(ctx context.Context, sess *acpSession, input
 		return true, StopReasonEndTurn, fmt.Errorf("session is not ready")
 	}
 
-	// Skills fall through to the agent loop (Skill tool). Anything else that
+	// Skill commands are expanded before entering the agent loop. Anything else that
 	// isn't a builtin is ordinary chat — do not intercept with "Unknown command".
 	if !isBuiltinSlashCommand(cmd.Name) {
 		return false, "", nil
@@ -744,6 +748,7 @@ func (s *Server) toggleSkill(sess *acpSession, skillName, persistencePath string
 		return fmt.Sprintf("Could not reload skills after updating %q: %v", skillName, err), nil
 	}
 	sess.cfg = next
+	s.emitAvailableCommands(sess)
 	msg := fmt.Sprintf("Disabled skill %s.", skillName)
 	if !currentlyEnabled {
 		msg = fmt.Sprintf("Enabled skill %s.", skillName)

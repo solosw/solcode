@@ -67,6 +67,9 @@ type Config struct {
 	MaxTokens          int64
 	SystemPrompt       string
 
+	SystemPromptOverride string
+	SystemPromptAppend   string
+
 	// DisableToolSearch exposes the full model-visible catalog without routing.
 	DisableToolSearch bool
 
@@ -394,12 +397,14 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 		WithGuardrail(e.config.Guardrail).
 		WithAllowedTools(cfg.AllowedTools)
 	builder := ContextBuilder{
-		SystemPrompt:      e.config.SystemPrompt,
-		DisableToolSearch: e.config.DisableToolSearch,
-		AgentInstructions: cfg.RoleInstructions,
-		ProjectRules:      e.config.ProjectRules,
-		Skills:            e.config.Skills,
-		SkillNames:        e.config.SkillNames,
+		SystemPrompt:         e.config.SystemPrompt,
+		SystemPromptOverride: e.config.SystemPromptOverride,
+		SystemPromptAppend:   e.config.SystemPromptAppend,
+		DisableToolSearch:    e.config.DisableToolSearch,
+		AgentInstructions:    cfg.RoleInstructions,
+		ProjectRules:         e.config.ProjectRules,
+		Skills:               e.config.Skills,
+		SkillNames:           e.config.SkillNames,
 	}
 	// Task working set (§5): tracks files read/modified and confirmed facts so
 	// later turns reuse local knowledge instead of re-exploring. Updated only

@@ -204,9 +204,14 @@ func (s *Server) handleInitialize(msg jsonrpcMessage) error {
 			Version: s.version,
 		},
 		AgentCapabilities: AgentCapabilities{
-			LoadSession:         true,
-			SessionCapabilities: SessionCapabilities{Subagents: &SubagentCapabilities{}},
-			MCPCapabilities:     MCPCapabilities{HTTP: true},
+			LoadSession: true,
+			SessionCapabilities: SessionCapabilities{
+				Subagents: &SubagentCapabilities{},
+				SystemPrompt: &SystemPromptCapabilities{
+					Mode: SystemPromptModes{Override: &struct{}{}},
+				},
+			},
+			MCPCapabilities: MCPCapabilities{HTTP: true},
 			PromptCapabilities: PromptCapabilities{
 				Image:           true,
 				EmbeddedContext: true,
@@ -228,8 +233,11 @@ func (s *Server) handleSessionNew(ctx context.Context, msg jsonrpcMessage) error
 	if err != nil {
 		return s.conn.ReplyError(msg.ID, JSONRPCInvalidParams, err.Error())
 	}
+	if err := validateSystemPrompt(params.SystemPrompt); err != nil {
+		return s.conn.ReplyError(msg.ID, JSONRPCInvalidParams, err.Error())
+	}
 	id := s.nextSessionID()
-	sess, err := s.createSession(ctx, id, params.Cwd, mcpServers)
+	sess, err := s.createSession(ctx, id, params.Cwd, mcpServers, params.SystemPrompt)
 	if err != nil {
 		return s.conn.ReplyError(msg.ID, JSONRPCInternalError, err.Error())
 	}
@@ -299,7 +307,10 @@ func (s *Server) handleSessionLoad(ctx context.Context, msg jsonrpcMessage) erro
 	if err != nil {
 		return s.conn.ReplyError(msg.ID, JSONRPCInvalidParams, err.Error())
 	}
-	sess, err := s.createSession(ctx, params.SessionID, params.Cwd, mcpServers)
+	if err := validateSystemPrompt(params.SystemPrompt); err != nil {
+		return s.conn.ReplyError(msg.ID, JSONRPCInvalidParams, err.Error())
+	}
+	sess, err := s.createSession(ctx, params.SessionID, params.Cwd, mcpServers, params.SystemPrompt)
 	if err != nil {
 		return s.conn.ReplyError(msg.ID, JSONRPCInternalError, err.Error())
 	}
@@ -337,6 +348,11 @@ func (s *Server) prepareSessionPrompt(ctx context.Context, msg jsonrpcMessage) (
 	sess := s.getSession(params.SessionID)
 	if sess == nil {
 		return nil, s.conn.ReplyError(msg.ID, JSONRPCInvalidParams, "unknown session")
+	}
+	for _, block := range params.Prompt {
+		if block.Type == "skill" {
+			return nil, s.conn.ReplyError(msg.ID, JSONRPCInvalidParams, "ACP v1 skills must be invoked with /name text commands")
+		}
 	}
 	prompt := promptToText(params.Prompt, sess.workDir)
 	if prompt == "" {
@@ -378,6 +394,11 @@ func (s *Server) runSessionPrompt(runCtx context.Context, msg jsonrpcMessage, se
 		return s.conn.Reply(msg.ID, SessionPromptResult{StopReason: stop})
 	}
 
+	prompt, err := sess.expandSkillCommand(prompt)
+	if err != nil {
+		endPrompt()
+		return s.conn.ReplyError(msg.ID, JSONRPCInternalError, err.Error())
+	}
 	runPrompt := s.runPrompt
 	if runPrompt == nil {
 		runPrompt = defaultPromptFunc
@@ -464,8 +485,9 @@ func defaultPromptFunc(ctx context.Context, application *app.App, sessionID, pro
 	return application.RunPromptWithSession(ctx, sessionID, prompt, workDir, maxTurns)
 }
 
-func (s *Server) createSession(ctx context.Context, id, cwd string, mcpServers []config.MCPServerConfig) (*acpSession, error) {
+func (s *Server) createSession(ctx context.Context, id, cwd string, mcpServers []config.MCPServerConfig, systemPrompt *SystemPrompt) (*acpSession, error) {
 	cfg := s.cfg
+	applySystemPrompt(&cfg, systemPrompt)
 	if cwd = strings.TrimSpace(cwd); cwd != "" {
 		applyWorkDir(&cfg, cwd)
 	}
@@ -640,10 +662,7 @@ func (s *Server) emitSessionBootstrap(sess *acpSession) {
 	if sess == nil {
 		return
 	}
-	s.emitUpdate(sess.id, SessionUpdate{
-		SessionUpdate:     "available_commands_update",
-		AvailableCommands: availableCommands(),
-	})
+	s.emitAvailableCommands(sess)
 	if sess.application != nil && sess.application.Permissions != nil {
 		s.emitUpdate(sess.id, SessionUpdate{
 			SessionUpdate: "current_mode_update",

@@ -19,9 +19,13 @@ type SkillInfo struct {
 }
 
 type ContextBuilder struct {
-	SystemPrompt      string
-	DisableToolSearch bool
-	AgentInstructions string
+	SystemPrompt string
+	// These modify only the core instructions; tool guidance and environment
+	// context are composed independently below.
+	SystemPromptOverride string
+	SystemPromptAppend   string
+	DisableToolSearch    bool
+	AgentInstructions    string
 	// ProjectRules are project-only instructions from <workDir>/.solcode,
 	// injected into the system prompt at startup.
 	ProjectRules string
@@ -414,10 +418,17 @@ type BuildRequest struct {
 
 func (b ContextBuilder) systemPrompt(workDir string) string {
 	parts := []string{}
-	if text := strings.TrimSpace(b.SystemPrompt); text != "" {
-		parts = append(parts, stripPlanModeFromText(text))
+	if override := strings.TrimSpace(b.SystemPromptOverride); override != "" {
+		parts = append(parts, override)
+	} else {
+		if text := strings.TrimSpace(b.SystemPrompt); text != "" {
+			parts = append(parts, stripPlanModeFromText(text))
+		}
+		parts = append(parts, defaultSystemPrompt())
 	}
-	parts = append(parts, defaultSystemPrompt())
+	if appended := strings.TrimSpace(b.SystemPromptAppend); appended != "" {
+		parts = append(parts, appended)
+	}
 	parts = append(parts, toolUsagePrompt(b.DisableToolSearch))
 	parts = append(parts, skillsPrompt(b.skillCatalog()))
 	// Compact plan-mode rules are appended EXACTLY ONCE, at the end of the

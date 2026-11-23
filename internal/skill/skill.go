@@ -21,6 +21,7 @@ type Definition struct {
 	License       string
 	Compatibility string
 	AllowedTools  string
+	UserInvocable *bool // nil means user-invocable; false keeps it model-only
 	Metadata      map[string]string
 }
 
@@ -38,6 +39,7 @@ type Meta struct {
 	License       string            `yaml:"license"`
 	Compatibility string            `yaml:"compatibility"`
 	AllowedTools  string            `yaml:"allowed-tools"`
+	UserInvocable *bool             `yaml:"user-invocable"`
 	Metadata      map[string]string `yaml:"metadata"`
 }
 
@@ -144,6 +146,7 @@ func definitionFromFile(nameHint, path, source string) Definition {
 		def.License = strings.TrimSpace(meta.License)
 		def.Compatibility = strings.TrimSpace(meta.Compatibility)
 		def.AllowedTools = strings.TrimSpace(meta.AllowedTools)
+		def.UserInvocable = meta.UserInvocable
 		if len(meta.Metadata) > 0 {
 			def.Metadata = meta.Metadata
 		}

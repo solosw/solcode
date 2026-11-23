@@ -140,7 +140,8 @@ type MCPCapabilities struct {
 }
 
 type SessionCapabilities struct {
-	Subagents *SubagentCapabilities `json:"subagents,omitempty"`
+	Subagents    *SubagentCapabilities     `json:"subagents,omitempty"`
+	SystemPrompt *SystemPromptCapabilities `json:"systemPrompt,omitempty"`
 }
 
 // SubagentCapabilities deliberately advertises no prompt/cancel/close operations.
@@ -161,8 +162,9 @@ type AuthMethod struct {
 }
 
 type SessionNewParams struct {
-	Cwd        string          `json:"cwd"`
-	MCPServers []MCPServerSpec `json:"mcpServers,omitempty"`
+	SystemPrompt *SystemPrompt   `json:"systemPrompt,omitempty"`
+	Cwd          string          `json:"cwd"`
+	MCPServers   []MCPServerSpec `json:"mcpServers,omitempty"`
 }
 
 type MCPServerSpec struct {
@@ -233,9 +235,10 @@ type SessionNewResult struct {
 }
 
 type SessionLoadParams struct {
-	SessionID  string          `json:"sessionId"`
-	Cwd        string          `json:"cwd,omitempty"`
-	MCPServers []MCPServerSpec `json:"mcpServers,omitempty"`
+	SystemPrompt *SystemPrompt   `json:"systemPrompt,omitempty"`
+	SessionID    string          `json:"sessionId"`
+	Cwd          string          `json:"cwd,omitempty"`
+	MCPServers   []MCPServerSpec `json:"mcpServers,omitempty"`
 }
 
 type SessionLoadResult struct {

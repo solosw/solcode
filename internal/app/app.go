@@ -1513,12 +1513,14 @@ func (a *App) estimateSessionContextTokens(ctx context.Context, current *session
 	}
 	messages := session.StripEphemeralContextMessages(current.CopyMessages())
 	builder := engine.ContextBuilder{
-		SystemPrompt:      a.Config.SystemPrompt,
-		DisableToolSearch: !a.Config.ToolSearchEnabled(),
-		ProjectRules:      config.FormatProjectRulesPrompt(config.LoadProjectRules(a.Config.WorkDir)),
-		Skills:            skillInfos(a.SkillRegistry),
-		SkillNames:        skillNames(a.SkillRegistry),
-		PlanMode:          a.Permissions != nil && a.Permissions.Mode() == permission.ModePlan,
+		SystemPrompt:         a.Config.SystemPrompt,
+		SystemPromptOverride: a.Config.SystemPromptOverride,
+		SystemPromptAppend:   a.Config.SystemPromptAppend,
+		DisableToolSearch:    !a.Config.ToolSearchEnabled(),
+		ProjectRules:         config.FormatProjectRulesPrompt(config.LoadProjectRules(a.Config.WorkDir)),
+		Skills:               skillInfos(a.SkillRegistry),
+		SkillNames:           skillNames(a.SkillRegistry),
+		PlanMode:             a.Permissions != nil && a.Permissions.Mode() == permission.ModePlan,
 	}
 	tools := []tool.Tool(nil)
 	if a.Tools != nil {
@@ -3426,6 +3428,8 @@ func engineConfig(cfg config.Config, client *cpanthropic.Client, runtime *hook.R
 		ContextNudge:           cfg.ContextNudge,
 		MaxTokens:              cfg.MaxTokens,
 		SystemPrompt:           cfg.SystemPrompt,
+		SystemPromptOverride:   cfg.SystemPromptOverride,
+		SystemPromptAppend:     cfg.SystemPromptAppend,
 		ProjectRules:           config.FormatProjectRulesPrompt(config.LoadProjectRules(cfg.WorkDir)),
 		Skills:                 skillInfos(skillRegistry),
 		SkillNames:             skillNames(skillRegistry),
