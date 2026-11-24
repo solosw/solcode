@@ -3,14 +3,9 @@ package acp
 import (
 	"context"
 	"encoding/json"
-	"os"
 	"path/filepath"
-	"sort"
-	"strconv"
 	"strings"
-	"time"
 
-	"github.com/solosw/solcode/internal/config"
 	"github.com/solosw/solcode/internal/session"
 )
 
@@ -144,82 +139,6 @@ func (s *Server) handleV2Resume(ctx context.Context, msg jsonrpcMessage) error {
 	}
 	s.emitV2State(sess.id, "idle", "", nil)
 	return s.conn.Reply(msg.ID, v2SessionResult{ConfigOptions: v2ConfigOptions(sess.configOptions()), AvailableCommands: s.v2Commands(sess)})
-}
-
-func (s *Server) handleV2List(ctx context.Context, msg jsonrpcMessage) error {
-	var params struct {
-		Cwd    string `json:"cwd"`
-		Cursor string `json:"cursor"`
-	}
-	if err := decodeParams(msg.Params, &params); err != nil {
-		return s.conn.ReplyError(msg.ID, JSONRPCInvalidParams, err.Error())
-	}
-	cfg := s.cfg
-	if params.Cwd != "" {
-		if !filepath.IsAbs(params.Cwd) {
-			return s.conn.ReplyError(msg.ID, JSONRPCInvalidParams, "cwd must be an absolute path")
-		}
-		applyWorkDir(&cfg, params.Cwd)
-	}
-	if cfg.Session.Dir == "" {
-		cfg.Session.Dir = config.DefaultSessionDir(cfg.WorkDir)
-	}
-	dirs := []string{cfg.Session.Dir}
-	if params.Cwd == "" && cfg.Session.Dir == config.DefaultSessionDir(cfg.WorkDir) {
-		projects := filepath.Join(config.UserStateDir(), "projects")
-		entries, err := os.ReadDir(projects)
-		if err != nil && !os.IsNotExist(err) {
-			return s.conn.ReplyError(msg.ID, JSONRPCInternalError, err.Error())
-		}
-		dirs = append(dirs, config.DefaultSessionDir(""))
-		for _, entry := range entries {
-			if entry.IsDir() {
-				dirs = append(dirs, filepath.Join(projects, entry.Name(), "sessions"))
-			}
-		}
-	}
-	var metas []session.Metadata
-	seenDirs := make(map[string]bool, len(dirs))
-	for _, dir := range dirs {
-		if seenDirs[dir] {
-			continue
-		}
-		seenDirs[dir] = true
-		entries, err := session.NewFileStore(dir).List(ctx)
-		if err != nil {
-			return s.conn.ReplyError(msg.ID, JSONRPCInternalError, err.Error())
-		}
-		metas = append(metas, entries...)
-	}
-	sort.SliceStable(metas, func(i, j int) bool { return metas[i].UpdatedAt.After(metas[j].UpdatedAt) })
-	type listedSession struct {
-		SessionID session.SessionID `json:"sessionId"`
-		Cwd       string            `json:"cwd"`
-		Title     string            `json:"title,omitempty"`
-		UpdatedAt time.Time         `json:"updatedAt,omitempty"`
-	}
-	sessions := make([]listedSession, 0, len(metas))
-	for _, meta := range metas {
-		if !filepath.IsAbs(meta.WorkDir) || (params.Cwd != "" && filepath.Clean(meta.WorkDir) != filepath.Clean(params.Cwd)) {
-			continue
-		}
-		sessions = append(sessions, listedSession{meta.ID, meta.WorkDir, meta.Title, meta.UpdatedAt})
-	}
-	offset := 0
-	if params.Cursor != "" {
-		var err error
-		offset, err = strconv.Atoi(params.Cursor)
-		if err != nil || offset < 0 || offset > len(sessions) {
-			return s.conn.ReplyError(msg.ID, JSONRPCInvalidParams, "invalid session list cursor")
-		}
-	}
-	const pageSize = 100
-	end := min(offset+pageSize, len(sessions))
-	result := map[string]any{"sessions": sessions[offset:end]}
-	if end < len(sessions) {
-		result["nextCursor"] = strconv.Itoa(end)
-	}
-	return s.conn.Reply(msg.ID, result)
 }
 
 func (s *Server) handleV2Close(msg jsonrpcMessage) error {

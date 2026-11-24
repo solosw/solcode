@@ -542,13 +542,67 @@ Notable session behavior:
 | Cancel | `session/cancel` cancels the in-flight prompt (`stopReason=cancelled`) |
 | Configuration | `session/new` / `session/load` advertise `configOptions`; `session/set_config_option` selects a model, agent mode, or thinking level and returns the complete updated configuration |
 | Modes | `session/set_mode` remains supported; both APIs synchronize `current_mode_update` and `config_option_update` |
-| History | `session/load` replays saved user/assistant turns |
+| History | `session/list` discovers saved sessions (metadata only, with optional `cwd` filtering and pagination); `session/load` replays saved user/assistant turns |
 | Core instructions | `systemPrompt` on `session/new` / `session/load` supports append and core-only override, preserving tool guidance and workspace context; see [ACP customizations](docs/acp-customizations.md) |
 | Skills | Enabled skills appear as v1 slash commands; invocation loads their instructions and bundled resource paths. Skill toggles refresh the command list |
 | Cross-session memory | `session/new` enables cross-session memory by default and schedules first-prompt recall when memory is enabled. `session/load` preserves the saved choice; `/new-session` still offers an explicit yes/no choice. |
 | Tool diffs | `Edit` / `Write` / `MultiEdit` / `MultiWrite` emit ACP `type: "diff"` content plus `locations` |
 | Plan updates | Successful `TodoWrite` calls emit a full `plan` (`sessionUpdate: "plan"`) update; when every item is `completed`, the agent sends `entries: []` (cleared plan) |
 | Client filesystem | When the client advertises FS capabilities at `initialize`, text tools use per-session `fs/read_text_file` and `fs/write_text_file`; otherwise they fall back to the local disk. `TodoWrite` always stays on the agent-local todo file (never client FS). In `bypass` / `goal` modes, writes also fall back to local disk so the client does not show a second file-accept prompt |
+
+#### ACP Registry JSON for BaoCode
+
+Import this agent entry in BaoCode to install solcode from the rolling `master`
+release. BaoCode selects the archive for your platform and starts `solcode --acp`.
+Configure your model provider or set `ANTHROPIC_API_KEY` in the agent environment
+before sending a prompt.
+
+```json
+{
+  "id": "solcode",
+  "name": "solcode",
+  "version": "master",
+  "description": "A terminal coding agent with multi-model support, persistent sessions, and ACP over stdio.",
+  "repository": "https://github.com/solosw/solcode",
+  "distribution": {
+    "binary": {
+      "darwin-aarch64": {
+        "archive": "https://github.com/solosw/solcode/releases/download/master/solcode_master_darwin_arm64_computeruse.tar.gz",
+        "cmd": "./solcode",
+        "args": ["--acp"]
+      },
+      "darwin-x86_64": {
+        "archive": "https://github.com/solosw/solcode/releases/download/master/solcode_master_darwin_amd64_computeruse.tar.gz",
+        "cmd": "./solcode",
+        "args": ["--acp"]
+      },
+      "linux-aarch64": {
+        "archive": "https://github.com/solosw/solcode/releases/download/master/solcode_master_linux_arm64_computeruse.tar.gz",
+        "cmd": "./solcode",
+        "args": ["--acp"]
+      },
+      "linux-x86_64": {
+        "archive": "https://github.com/solosw/solcode/releases/download/master/solcode_master_linux_amd64_computeruse.tar.gz",
+        "cmd": "./solcode",
+        "args": ["--acp"]
+      },
+      "windows-aarch64": {
+        "archive": "https://github.com/solosw/solcode/releases/download/master/solcode_master_windows_arm64_computeruse.zip",
+        "cmd": "./solcode.exe",
+        "args": ["--acp"]
+      },
+      "windows-x86_64": {
+        "archive": "https://github.com/solosw/solcode/releases/download/master/solcode_master_windows_amd64_computeruse.zip",
+        "cmd": "./solcode.exe",
+        "args": ["--acp"]
+      }
+    }
+  }
+}
+```
+
+The `master` version label is for manual import. An official ACP Registry
+submission requires a versioned release and a project license or terms URL.
 
 #### Session configuration options
 

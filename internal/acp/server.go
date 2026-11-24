@@ -9,6 +9,8 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -189,8 +191,6 @@ func (s *Server) handle(ctx context.Context, msg jsonrpcMessage) error {
 		switch msg.Method {
 		case "session/resume":
 			return s.handleV2Resume(ctx, msg)
-		case "session/list":
-			return s.handleV2List(ctx, msg)
 		case "session/close":
 			return s.handleV2Close(msg)
 		case MethodSessionLoad, MethodSessionSetMode:
@@ -204,6 +204,8 @@ func (s *Server) handle(ctx context.Context, msg jsonrpcMessage) error {
 		return s.conn.Reply(msg.ID, map[string]any{})
 	case MethodSessionNew:
 		return s.handleSessionNew(ctx, msg)
+	case MethodSessionList:
+		return s.handleSessionList(ctx, msg)
 	case MethodSessionLoad:
 		return s.handleSessionLoad(ctx, msg)
 	case MethodSessionPrompt:
@@ -248,6 +250,7 @@ func (s *Server) handleInitialize(msg jsonrpcMessage) error {
 		AgentCapabilities: AgentCapabilities{
 			LoadSession: true,
 			SessionCapabilities: SessionCapabilities{
+				List:      &struct{}{},
 				Subagents: &SubagentCapabilities{},
 				SystemPrompt: &SystemPromptCapabilities{
 					Mode: SystemPromptModes{Override: &struct{}{}},
@@ -338,6 +341,85 @@ func (sess *acpSession) initializeNewSessionMemory(ctx context.Context) error {
 		return fmt.Errorf("save session memory preference: %w", err)
 	}
 	return nil
+}
+
+func (s *Server) handleSessionList(ctx context.Context, msg jsonrpcMessage) error {
+	if err := s.requireInitialized(); err != nil {
+		return s.conn.ReplyError(msg.ID, JSONRPCInvalidRequest, err.Error())
+	}
+	var params struct {
+		Cwd    string `json:"cwd"`
+		Cursor string `json:"cursor"`
+	}
+	if err := decodeParams(msg.Params, &params); err != nil {
+		return s.conn.ReplyError(msg.ID, JSONRPCInvalidParams, err.Error())
+	}
+	cfg := s.cfg
+	if params.Cwd != "" {
+		if !filepath.IsAbs(params.Cwd) {
+			return s.conn.ReplyError(msg.ID, JSONRPCInvalidParams, "cwd must be an absolute path")
+		}
+		applyWorkDir(&cfg, params.Cwd)
+	}
+	if cfg.Session.Dir == "" {
+		cfg.Session.Dir = config.DefaultSessionDir(cfg.WorkDir)
+	}
+	dirs := []string{cfg.Session.Dir}
+	if params.Cwd == "" && cfg.Session.Dir == config.DefaultSessionDir(cfg.WorkDir) {
+		projects := filepath.Join(config.UserStateDir(), "projects")
+		entries, err := os.ReadDir(projects)
+		if err != nil && !os.IsNotExist(err) {
+			return s.conn.ReplyError(msg.ID, JSONRPCInternalError, err.Error())
+		}
+		dirs = append(dirs, config.DefaultSessionDir(""))
+		for _, entry := range entries {
+			if entry.IsDir() {
+				dirs = append(dirs, filepath.Join(projects, entry.Name(), "sessions"))
+			}
+		}
+	}
+	var metas []session.Metadata
+	seenDirs := make(map[string]bool, len(dirs))
+	for _, dir := range dirs {
+		if seenDirs[dir] {
+			continue
+		}
+		seenDirs[dir] = true
+		entries, err := session.NewFileStore(dir).List(ctx)
+		if err != nil {
+			return s.conn.ReplyError(msg.ID, JSONRPCInternalError, err.Error())
+		}
+		metas = append(metas, entries...)
+	}
+	sort.SliceStable(metas, func(i, j int) bool { return metas[i].UpdatedAt.After(metas[j].UpdatedAt) })
+	type listedSession struct {
+		SessionID session.SessionID `json:"sessionId"`
+		Cwd       string            `json:"cwd"`
+		Title     string            `json:"title,omitempty"`
+		UpdatedAt time.Time         `json:"updatedAt,omitempty"`
+	}
+	sessions := make([]listedSession, 0, len(metas))
+	for _, meta := range metas {
+		if !filepath.IsAbs(meta.WorkDir) || (params.Cwd != "" && filepath.Clean(meta.WorkDir) != filepath.Clean(params.Cwd)) {
+			continue
+		}
+		sessions = append(sessions, listedSession{meta.ID, meta.WorkDir, meta.Title, meta.UpdatedAt})
+	}
+	offset := 0
+	if params.Cursor != "" {
+		var err error
+		offset, err = strconv.Atoi(params.Cursor)
+		if err != nil || offset < 0 || offset > len(sessions) {
+			return s.conn.ReplyError(msg.ID, JSONRPCInvalidParams, "invalid session list cursor")
+		}
+	}
+	const pageSize = 100
+	end := min(offset+pageSize, len(sessions))
+	result := map[string]any{"sessions": sessions[offset:end]}
+	if end < len(sessions) {
+		result["nextCursor"] = strconv.Itoa(end)
+	}
+	return s.conn.Reply(msg.ID, result)
 }
 
 func (s *Server) handleSessionLoad(ctx context.Context, msg jsonrpcMessage) error {

@@ -14,6 +14,7 @@ const (
 	MethodInitialize               = "initialize"
 	MethodAuthenticate             = "authenticate"
 	MethodSessionNew               = "session/new"
+	MethodSessionList              = "session/list"
 	MethodSessionLoad              = "session/load"
 	MethodSessionPrompt            = "session/prompt"
 	MethodSessionCancel            = "session/cancel"
@@ -140,6 +141,7 @@ type MCPCapabilities struct {
 }
 
 type SessionCapabilities struct {
+	List         *struct{}                 `json:"list,omitempty"`
 	Subagents    *SubagentCapabilities     `json:"subagents,omitempty"`
 	SystemPrompt *SystemPromptCapabilities `json:"systemPrompt,omitempty"`
 }

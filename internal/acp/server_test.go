@@ -166,6 +166,7 @@ func TestACPSessionLoadAndImagePrompt(t *testing.T) {
 	existing := session.NewSession("loaded", workDir, "test-model")
 	existing.Append(sdk.NewUserMessage(sdk.NewTextBlock("previous question")))
 	existing.Append(sdk.NewAssistantMessage(sdk.NewTextBlock("previous answer")))
+	existing.Metadata.Title = "Saved conversation"
 	if err := store.Save(context.Background(), existing); err != nil {
 		t.Fatalf("save session: %v", err)
 	}
@@ -184,11 +185,35 @@ func TestACPSessionLoadAndImagePrompt(t *testing.T) {
 		return agent.AgentResult{Output: "ok"}, nil
 	})
 
-	mustCall(t, client, MethodInitialize, map[string]any{"protocolVersion": 1})
-	mustCall(t, client, MethodSessionLoad, map[string]any{
-		"sessionId": "loaded",
-		"cwd":       workDir,
-	})
+	listParams := map[string]string{"cwd": workDir}
+	requireRPCError(t, client.conn.Call(t.Context(), MethodSessionList, listParams, nil), JSONRPCInvalidRequest)
+	var init InitializeResult
+	if err := json.Unmarshal(mustCall(t, client, MethodInitialize, InitializeParams{ProtocolVersion: 1}), &init); err != nil || init.ProtocolVersion != 1 || init.AgentCapabilities.SessionCapabilities.List == nil || !init.AgentCapabilities.LoadSession {
+		t.Fatalf("initialize = %+v (%v), want v1 with session list and load", init, err)
+	}
+	var listed struct {
+		Sessions []struct {
+			SessionID string    `json:"sessionId"`
+			Cwd       string    `json:"cwd"`
+			Title     string    `json:"title"`
+			UpdatedAt time.Time `json:"updatedAt"`
+		} `json:"sessions"`
+	}
+	raw := mustCall(t, client, MethodSessionList, listParams)
+	if err := json.Unmarshal(raw, &listed); err != nil || len(listed.Sessions) != 1 {
+		t.Fatalf("session/list = %s (%v)", raw, err)
+	}
+	found := listed.Sessions[0]
+	if found.SessionID != "loaded" || found.Cwd != workDir || found.Title != existing.Metadata.Title || !found.UpdatedAt.Equal(existing.Metadata.UpdatedAt) {
+		t.Fatalf("unexpected session metadata: %+v", found)
+	}
+	if strings.Contains(string(raw), "previous question") || strings.Contains(string(raw), "previous answer") {
+		t.Fatalf("session/list returned chat content: %s", raw)
+	}
+	if raw := mustCall(t, client, MethodSessionList, map[string]string{"cwd": t.TempDir()}); string(raw) != `{"sessions":[]}` {
+		t.Fatalf("session/list for another cwd = %s, want an empty array", raw)
+	}
+	mustCall(t, client, MethodSessionLoad, SessionLoadParams{SessionID: found.SessionID, Cwd: found.Cwd})
 	waitFor(t, func() bool {
 		snap := client.snapshot()
 		return hasText(snap, "user_message_chunk", "previous question") && hasText(snap, "agent_message_chunk", "previous answer")
