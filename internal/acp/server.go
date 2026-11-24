@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -19,6 +20,7 @@ import (
 	"github.com/solosw/solcode/internal/engine"
 	"github.com/solosw/solcode/internal/permission"
 	"github.com/solosw/solcode/internal/session"
+	"github.com/solosw/solcode/internal/skill"
 	"github.com/solosw/solcode/internal/tool"
 )
 
@@ -46,6 +48,12 @@ type Server struct {
 	conn               *Conn
 	mu                 sync.Mutex
 	initialized        bool
+	protocol           atomic.Int32
+	v2SkillCommands    bool
+	v2UpdatesMu        sync.Mutex
+	v2Streams          map[string]v2Stream
+	v2StreamEpoch      int64
+	v2MessageSeq       atomic.Uint64
 	clientCapabilities ClientCapabilities
 	sessions           map[string]*acpSession
 	sessionSeq         atomic.Uint64
@@ -62,6 +70,11 @@ type acpSession struct {
 	cancel        context.CancelFunc
 	promptCtx     context.Context
 	prompting     bool
+	promptDone    chan struct{}
+	closing       bool
+	closeOnce     sync.Once
+	v2Prompts     []v2PromptRecord
+	v2Skills      map[string]skill.Definition
 	pendingConfig bool
 	configNotices []string
 	toolCalls     map[string]string
@@ -93,12 +106,13 @@ func NewServer(cfg config.Config, timeout time.Duration, maxTurns int, version s
 		version = "dev"
 	}
 	return &Server{
-		cfg:      cfg,
-		timeout:  timeout,
-		maxTurns: maxTurns,
-		version:  version,
-		newApp:   newApp,
-		sessions: make(map[string]*acpSession),
+		cfg:           cfg,
+		timeout:       timeout,
+		maxTurns:      maxTurns,
+		version:       version,
+		newApp:        newApp,
+		sessions:      make(map[string]*acpSession),
+		v2StreamEpoch: time.Now().UnixNano(),
 	}
 }
 
@@ -156,15 +170,33 @@ func (s *Server) Close() {
 	sessions := s.sessions
 	s.sessions = make(map[string]*acpSession)
 	s.mu.Unlock()
-	for _, sess := range sessions {
-		sess.close()
-	}
 	if s.conn != nil {
 		s.conn.Close()
+	}
+	for _, sess := range sessions {
+		if s.isV2() {
+			s.discardV2Streams(sess.id)
+			if done := sess.cancelV2Work(); done != nil {
+				<-done
+			}
+		}
+		sess.close()
 	}
 }
 
 func (s *Server) handle(ctx context.Context, msg jsonrpcMessage) error {
+	if s.isV2() {
+		switch msg.Method {
+		case "session/resume":
+			return s.handleV2Resume(ctx, msg)
+		case "session/list":
+			return s.handleV2List(ctx, msg)
+		case "session/close":
+			return s.handleV2Close(msg)
+		case MethodSessionLoad, MethodSessionSetMode:
+			return s.conn.ReplyError(msg.ID, JSONRPCMethodNotFound, "method not found: "+msg.Method)
+		}
+	}
 	switch msg.Method {
 	case MethodInitialize:
 		return s.handleInitialize(msg)
@@ -192,7 +224,17 @@ func (s *Server) handleInitialize(msg jsonrpcMessage) error {
 	if err := decodeParams(msg.Params, &params); err != nil {
 		return s.conn.ReplyError(msg.ID, JSONRPCInvalidParams, err.Error())
 	}
+	if params.ProtocolVersion < 0 {
+		return s.replyErrorData(msg, v2UnsupportedVersion, "unsupported protocol version", map[string]any{"requested": params.ProtocolVersion, "supported": []int{1, 2}})
+	}
+	if params.ProtocolVersion >= 2 {
+		return s.initializeV2(msg)
+	}
 	s.mu.Lock()
+	if s.isV2() {
+		s.mu.Unlock()
+		return s.conn.ReplyError(msg.ID, JSONRPCInvalidRequest, "connection already initialized with ACP v2")
+	}
 	s.initialized = true
 	s.clientCapabilities = params.ClientCapabilities
 	s.mu.Unlock()
@@ -236,6 +278,9 @@ func (s *Server) handleSessionNew(ctx context.Context, msg jsonrpcMessage) error
 	if err := validateSystemPrompt(params.SystemPrompt); err != nil {
 		return s.conn.ReplyError(msg.ID, JSONRPCInvalidParams, err.Error())
 	}
+	if s.isV2() && !filepath.IsAbs(params.Cwd) {
+		return s.conn.ReplyError(msg.ID, JSONRPCInvalidParams, "cwd must be an absolute path")
+	}
 	id := s.nextSessionID()
 	sess, err := s.createSession(ctx, id, params.Cwd, mcpServers, params.SystemPrompt)
 	if err != nil {
@@ -253,6 +298,9 @@ func (s *Server) handleSessionNew(ctx context.Context, msg jsonrpcMessage) error
 		sess.close()
 		s.removeSession(sess.id)
 		return s.conn.ReplyError(msg.ID, JSONRPCInternalError, "could not save initial session configuration: "+err.Error())
+	}
+	if s.isV2() {
+		return s.conn.Reply(msg.ID, v2SessionResult{SessionID: sess.id, ConfigOptions: v2ConfigOptions(sess.configOptions()), AvailableCommands: s.v2Commands(sess)})
 	}
 	if err := s.conn.Reply(msg.ID, SessionNewResult{
 		ConfigOptions: sess.configOptions(),
@@ -341,6 +389,9 @@ func (s *Server) prepareSessionPrompt(ctx context.Context, msg jsonrpcMessage) (
 	if err := s.requireInitialized(); err != nil {
 		return nil, s.conn.ReplyError(msg.ID, JSONRPCInvalidRequest, err.Error())
 	}
+	if s.isV2() {
+		return s.prepareV2Prompt(ctx, msg)
+	}
 	var params SessionPromptParams
 	if err := decodeParams(msg.Params, &params); err != nil {
 		return nil, s.conn.ReplyError(msg.ID, JSONRPCInvalidParams, err.Error())
@@ -368,11 +419,11 @@ func (s *Server) prepareSessionPrompt(ctx context.Context, msg jsonrpcMessage) (
 		return nil, s.conn.ReplyError(msg.ID, JSONRPCInvalidRequest, "session is already prompting")
 	}
 	return func() error {
-		return s.runSessionPrompt(runCtx, msg, sess, prompt)
+		return s.runSessionPrompt(runCtx, msg, sess, prompt, false)
 	}, nil
 }
 
-func (s *Server) runSessionPrompt(runCtx context.Context, msg jsonrpcMessage, sess *acpSession, prompt string) error {
+func (s *Server) runSessionPrompt(runCtx context.Context, msg jsonrpcMessage, sess *acpSession, prompt string, inlineSkill bool) error {
 	ended := false
 	endPrompt := func() {
 		if !ended {
@@ -382,22 +433,33 @@ func (s *Server) runSessionPrompt(runCtx context.Context, msg jsonrpcMessage, se
 	}
 	defer endPrompt()
 
-	if handled, stop, err := s.handleSlashCommand(runCtx, sess, prompt); handled {
+	finish := func(stop string, err error) error {
+		if s.isV2() {
+			s.finishV2Prompt(sess, stop, err)
+			ended = true
+			return nil
+		}
+		endPrompt()
 		if err != nil && stop != StopReasonCancelled {
-			endPrompt()
 			return s.conn.ReplyError(msg.ID, JSONRPCInternalError, err.Error())
 		}
-		if stop == "" {
-			stop = StopReasonEndTurn
-		}
-		endPrompt()
 		return s.conn.Reply(msg.ID, SessionPromptResult{StopReason: stop})
 	}
-
-	prompt, err := sess.expandSkillCommand(prompt)
-	if err != nil {
-		endPrompt()
-		return s.conn.ReplyError(msg.ID, JSONRPCInternalError, err.Error())
+	if s.isV2() && runCtx.Err() != nil {
+		return finish(stopReason(runCtx, agent.AgentResult{}, runCtx.Err()), runCtx.Err())
+	}
+	if !inlineSkill {
+		if handled, stop, err := s.handleSlashCommand(runCtx, sess, prompt); handled {
+			if stop == "" {
+				stop = StopReasonEndTurn
+			}
+			return finish(stop, err)
+		}
+		var err error
+		prompt, err = sess.expandSkillCommand(prompt)
+		if err != nil {
+			return finish(StopReasonRefusal, err)
+		}
 	}
 	runPrompt := s.runPrompt
 	if runPrompt == nil {
@@ -423,22 +485,25 @@ func (s *Server) runSessionPrompt(runCtx context.Context, msg jsonrpcMessage, se
 		},
 	})
 	stop := stopReason(runCtx, result, err)
-	if err != nil && stop != StopReasonCancelled {
-		endPrompt()
-		return s.conn.ReplyError(msg.ID, JSONRPCInternalError, err.Error())
+	if s.isV2() && err == nil && stop == StopReasonRefusal && result.Error != "" {
+		err = errors.New(result.Error)
 	}
-	endPrompt()
-	return s.conn.Reply(msg.ID, SessionPromptResult{StopReason: stop})
+	return finish(stop, err)
 }
 
 func (s *Server) handleSessionCancel(msg jsonrpcMessage) error {
 	var params SessionCancelParams
 	if err := decodeParams(msg.Params, &params); err != nil {
+		if len(msg.ID) == 0 {
+			return nil
+		}
 		return s.conn.ReplyError(msg.ID, JSONRPCInvalidParams, err.Error())
 	}
 	sess := s.getSession(params.SessionID)
 	if sess != nil {
 		sess.cancelPrompt()
+	} else if s.isV2() && len(msg.ID) != 0 {
+		return s.v2UnknownSession(msg, params.SessionID)
 	}
 	if len(msg.ID) == 0 {
 		return nil
@@ -510,7 +575,7 @@ func (s *Server) createSession(ctx context.Context, id, cwd string, mcpServers [
 	}
 
 	s.mu.Lock()
-	subagentsEnabled := supportsSubagents(s.clientCapabilities.Subagents)
+	subagentsEnabled := s.isV2() || supportsSubagents(s.clientCapabilities.Subagents)
 	terminalEnabled := s.clientCapabilities.Terminal
 	fsCapabilities := FSClientCapabilities{}
 	if s.clientCapabilities.FS != nil {
@@ -598,50 +663,68 @@ func (s *Server) createSession(ctx context.Context, id, cwd string, mcpServers [
 	}
 	s.sessions[id] = sess
 	s.mu.Unlock()
+	if s.isV2() {
+		s.registerV2Stream(id, "")
+	}
 	return sess, nil
 }
 
 func (s *Server) replayPersistedHistory(ctx context.Context, sess *acpSession, required bool) error {
+	loaded, err := s.loadPersistedSession(ctx, sess, required)
+	if err != nil || loaded == nil {
+		return err
+	}
+	if err := sess.loadV2Prompts(); err != nil {
+		return err
+	}
+	s.replayV2History(sess, loaded)
+	if u := sessionUsageUpdate(ctx, sess.application, loaded, sess.cfg.MaxContextTokens); u != nil {
+		s.emitUpdate(sess.id, SessionUpdate{SessionUpdate: "usage_update", Usage: u})
+	}
+	return s.replayPersistedSubagents(ctx, sess)
+}
+
+func (s *Server) loadPersistedSession(ctx context.Context, sess *acpSession, required bool) (*session.Session, error) {
 	if sess == nil || sess.application == nil || sess.application.Sessions == nil {
 		if required {
 			id := ""
 			if sess != nil {
 				id = sess.id
 			}
-			return session.NotFoundError{ID: session.SessionID(id)}
+			return nil, session.NotFoundError{ID: session.SessionID(id)}
 		}
-		return nil
+		return nil, nil
 	}
 	loaded, err := sess.application.Sessions.Load(ctx, session.SessionID(sess.id))
 	if err != nil {
 		if !required && session.IsNotFound(err) {
-			return nil
+			return nil, nil
 		}
 		if !session.IsNotFound(err) || sess.configStatePath() == "" {
-			return err
+			return nil, err
 		}
 		// Before the first prompt, older ACP sessions may have saved only
 		// configuration. Require that durable record before recovering an
 		// empty transcript; an unknown ID must still fail to load.
 		if _, configErr := os.Stat(sess.configStatePath()); configErr != nil {
 			if os.IsNotExist(configErr) {
-				return err
+				return nil, err
 			}
-			return fmt.Errorf("read session configuration: %w", configErr)
+			return nil, fmt.Errorf("read session configuration: %w", configErr)
 		}
 	}
 	if err := sess.restoreConfig(ctx); err != nil {
-		return err
+		return nil, err
 	}
 	if loaded == nil {
 		// Persist only after validating the saved configuration. Retain the
 		// new-session memory bootstrap for the first actual prompt.
 		if err := sess.initializeNewSessionMemory(ctx); err != nil {
-			return err
+			return nil, err
 		}
 		loaded, err = sess.application.Sessions.Load(ctx, session.SessionID(sess.id))
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
 	// A restored transcript may predate a configuration save or come from
@@ -649,13 +732,7 @@ func (s *Server) replayPersistedHistory(ctx context.Context, sess *acpSession, r
 	// without provider provenance, including after a process restart.
 	sess.application.Engine.InvalidateReasoningHistory()
 	sess.application.SanitizeLoadedSession(loaded)
-	for _, update := range sessionHistoryUpdates(loaded) {
-		s.emitUpdate(sess.id, update)
-	}
-	if u := sessionUsageUpdate(ctx, sess.application, loaded, sess.cfg.MaxContextTokens); u != nil {
-		s.emitUpdate(sess.id, SessionUpdate{SessionUpdate: "usage_update", Usage: u})
-	}
-	return s.replayPersistedSubagents(ctx, sess)
+	return loaded, nil
 }
 
 func (s *Server) emitSessionBootstrap(sess *acpSession) {
@@ -1011,7 +1088,7 @@ func (s *Server) requestPermission(sess *acpSession, toolName, description strin
 	}
 
 	var result RequestPermissionResult
-	err := s.conn.Call(ctx, MethodSessionRequestPermission, RequestPermissionParams{
+	err := s.callPermission(ctx, RequestPermissionParams{
 		SessionID: sess.id,
 		ToolCall: ToolCallUpdate{
 			ToolCallID: id,
@@ -1070,7 +1147,7 @@ func (s *Server) askUser(ctx context.Context, sess *acpSession, params tool.AskU
 			header = fmt.Sprintf("question-%d", i+1)
 		}
 		var result RequestPermissionResult
-		err := s.conn.Call(ctx, MethodSessionRequestPermission, RequestPermissionParams{
+		err := s.callPermission(ctx, RequestPermissionParams{
 			SessionID: sess.id,
 			ToolCall: ToolCallUpdate{
 				ToolCallID: s.nextToolCallID(),
@@ -1099,6 +1176,10 @@ func (s *Server) emitUpdate(sessionID string, update SessionUpdate) {
 	if s.conn == nil || sessionID == "" {
 		return
 	}
+	if s.isV2() {
+		s.emitV2Update(sessionID, update)
+		return
+	}
 	if err := s.conn.Notify(MethodSessionUpdate, SessionUpdateParams{
 		SessionID: sessionID,
 		Update:    update,
@@ -1114,6 +1195,9 @@ func (s *Server) getSession(id string) *acpSession {
 }
 
 func (s *Server) removeSession(id string) {
+	if s.isV2() {
+		s.discardV2Streams(id)
+	}
 	s.mu.Lock()
 	delete(s.sessions, id)
 	s.mu.Unlock()
@@ -1144,10 +1228,11 @@ func (s *Server) nextToolCallID() string {
 func (sess *acpSession) beginPrompt(ctx context.Context, cancel context.CancelFunc) bool {
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
-	if sess.prompting {
+	if sess.prompting || sess.closing {
 		return false
 	}
 	sess.prompting = true
+	sess.promptDone = make(chan struct{})
 	sess.promptCtx = ctx
 	sess.cancel = cancel
 	return true
@@ -1156,7 +1241,15 @@ func (sess *acpSession) beginPrompt(ctx context.Context, cancel context.CancelFu
 func (sess *acpSession) endPrompt() {
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
+	sess.endPromptLocked()
+}
+
+func (sess *acpSession) endPromptLocked() {
 	sess.prompting = false
+	if sess.promptDone != nil {
+		defer close(sess.promptDone)
+		sess.promptDone = nil
+	}
 	// App.Config/client are read throughout the prompt; reconcile ancillary
 	// state only once the prompt has returned. Main API calls already use the
 	// confirmed live engine configuration.
@@ -1184,10 +1277,12 @@ func (sess *acpSession) cancelPrompt() {
 }
 
 func (sess *acpSession) close() {
-	sess.cancelPrompt()
-	if sess.application != nil {
-		_ = sess.application.Close()
-	}
+	sess.closeOnce.Do(func() {
+		sess.cancelPrompt()
+		if sess.application != nil {
+			_ = sess.application.Close()
+		}
+	})
 }
 
 func conversationContext(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {

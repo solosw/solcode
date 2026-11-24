@@ -909,6 +909,14 @@ func (a *App) RunPrompt(ctx context.Context, prompt, workDir string, maxTurns in
 	}), nil
 }
 
+type sessionPromptObserverKey struct{}
+
+// WithSessionPromptObserver binds an observer to the durable user message for
+// this call. The observer runs before the first prompt checkpoint is written.
+func WithSessionPromptObserver(ctx context.Context, observe func(int, sdk.MessageParam) error) context.Context {
+	return context.WithValue(ctx, sessionPromptObserverKey{}, observe)
+}
+
 func (a *App) RunPromptWithSession(ctx context.Context, sessionID, prompt, workDir string, maxTurns int) (agent.AgentResult, error) {
 	if a == nil {
 		return agent.AgentResult{}, fmt.Errorf("app is nil")
@@ -945,9 +953,16 @@ func (a *App) RunPromptWithSession(ctx context.Context, sessionID, prompt, workD
 			return agent.AgentResult{}, fmt.Errorf("save session after compaction: %w", err)
 		}
 	}
+	observe, _ := ctx.Value(sessionPromptObserverKey{}).(func(int, sdk.MessageParam) error)
 	memoryContext, err := a.retrieveNewSessionMemoryContext(ctx, prompt, current, newSession)
 	if err != nil {
-		current.Append(sdk.NewUserMessage(sdk.NewTextBlock(prompt)))
+		userMessage := sdk.NewUserMessage(sdk.NewTextBlock(prompt))
+		if observe != nil {
+			if observeErr := observe(len(current.Messages), userMessage); observeErr != nil {
+				return agent.AgentResult{}, observeErr
+			}
+		}
+		current.Append(userMessage)
 		saveCtx := context.WithoutCancel(ctx)
 		if saveErr := a.Sessions.Save(saveCtx, current); saveErr != nil {
 			return agent.AgentResult{}, fmt.Errorf("save session after memory error: %w", saveErr)
@@ -965,12 +980,19 @@ func (a *App) RunPromptWithSession(ctx context.Context, sessionID, prompt, workD
 	projectKnowledge := a.projectKnowledgeForRequest(ctx, current, prompt)
 	a.beginCheckpointTurn(sessionID, workDir, prompt)
 	result := a.runMainAgentWithHistory(ctx, func() engine.RunResult {
+		promptIndex := len(current.Messages)
 		return a.Engine.RunWithHistory(ctx, engine.RunRequest{
 			AgentConfig: cfg,
 			SessionID:   sessionID,
 			Messages:    current.CopyMessages(),
 			Compression: current.Compression,
 			Checkpoint: func(cp agent.Checkpoint) error {
+				if observe != nil && cp.Stage == "prompt" && promptIndex < len(cp.Messages) {
+					index := len(session.StripEphemeralContextMessages(cp.Messages[:promptIndex]))
+					if err := observe(index, cp.Messages[promptIndex]); err != nil {
+						return err
+					}
+				}
 				staged := *current
 				staged.ReplaceMessages(session.StripEphemeralContextMessages(cp.Messages))
 				staged.Compression = cp.Compression.Clone()

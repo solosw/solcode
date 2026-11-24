@@ -385,6 +385,7 @@ type harnessClient struct {
 	terminalRequests   chan jsonrpcMessage
 	mu                 sync.Mutex
 	updates            []SessionUpdateParams
+	v2Updates          []v2TestUpdate
 }
 
 func (c *harnessClient) snapshot() []SessionUpdateParams {
@@ -453,6 +454,15 @@ func (c *harnessClient) readLoop() {
 		}
 		switch msg.Method {
 		case MethodSessionUpdate:
+			if c.server.isV2() {
+				var update v2TestUpdate
+				if json.Unmarshal(msg.Params, &update) == nil {
+					c.mu.Lock()
+					c.v2Updates = append(c.v2Updates, update)
+					c.mu.Unlock()
+				}
+				continue
+			}
 			var params SessionUpdateParams
 			if err := json.Unmarshal(msg.Params, &params); err == nil {
 				c.mu.Lock()

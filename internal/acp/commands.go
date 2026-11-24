@@ -142,6 +142,10 @@ func (s *Server) handleSlashCommand(ctx context.Context, sess *acpSession, input
 		s.emitText(sess, "agent_message_chunk", msg)
 		return true, StopReasonEndTurn, nil
 	case "sessions":
+		if s.isV2() {
+			s.emitText(sess, "agent_message_chunk", "Use the client’s session picker to open another session.")
+			return true, StopReasonEndTurn, nil
+		}
 		msg, err := s.slashSessions(ctx, sess, persistencePath)
 		if err != nil {
 			return true, stopReasonFromErr(ctx, err), errIfNotCancel(ctx, err)
@@ -190,6 +194,10 @@ func (s *Server) handleSlashCommand(ctx context.Context, sess *acpSession, input
 		s.emitText(sess, "agent_message_chunk", msg)
 		return true, StopReasonEndTurn, nil
 	case "new-session":
+		if s.isV2() {
+			s.emitText(sess, "agent_message_chunk", "Create a session from the client to get its own session ID.")
+			return true, StopReasonEndTurn, nil
+		}
 		msg, err := s.slashNewSession(ctx, sess, cmd.Args, persistencePath)
 		if err != nil {
 			return true, stopReasonFromErr(ctx, err), errIfNotCancel(ctx, err)
@@ -813,7 +821,7 @@ func (s *Server) requestChoice(ctx context.Context, sess *acpSession, title, que
 		options = options[:40]
 	}
 	var result RequestPermissionResult
-	err := s.conn.Call(ctx, MethodSessionRequestPermission, RequestPermissionParams{
+	err := s.callPermission(ctx, RequestPermissionParams{
 		SessionID: sess.id,
 		ToolCall: ToolCallUpdate{
 			ToolCallID: s.nextToolCallID(),

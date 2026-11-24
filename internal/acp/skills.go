@@ -60,6 +60,10 @@ func (sess *acpSession) availableCommands() []AvailableCommand {
 }
 
 func (s *Server) emitAvailableCommands(sess *acpSession) {
+	if s.isV2() {
+		s.notifyV2(sess.id, map[string]any{"sessionUpdate": "available_commands_update", "availableCommands": s.v2Commands(sess)})
+		return
+	}
 	s.emitUpdate(sess.id, SessionUpdate{SessionUpdate: "available_commands_update", AvailableCommands: sess.availableCommands()})
 }
 

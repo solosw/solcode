@@ -161,15 +161,25 @@ func (s *Server) handleSessionSetConfigOption(msg jsonrpcMessage) error {
 	}
 	sess := s.getSession(params.SessionID)
 	if sess == nil {
+		if s.isV2() {
+			return s.v2UnknownSession(msg, params.SessionID)
+		}
 		return s.conn.ReplyError(msg.ID, JSONRPCInvalidParams, "unknown session")
 	}
-	if params.Type != "" && params.Type != "select" {
+	if s.isV2() {
+		if params.Type != "id" {
+			return s.conn.ReplyError(msg.ID, JSONRPCInvalidParams, "config option type must be id")
+		}
+	} else if params.Type != "" && params.Type != "select" {
 		return s.conn.ReplyError(msg.ID, JSONRPCInvalidParams, "only select configuration options are supported")
 	}
 	// Serialize commit, notification and response with autonomous changes, so
 	// an older response cannot follow a newer committed configuration snapshot.
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
+	if sess.closing {
+		return s.v2Busy(msg)
+	}
 	options, err := sess.setConfigOptionLocked(params.ConfigID, params.Value)
 	if err != nil {
 		return s.conn.ReplyError(msg.ID, configErrorCode(err), err.Error())
@@ -178,6 +188,9 @@ func (s *Server) handleSessionSetConfigOption(msg jsonrpcMessage) error {
 		s.emitUpdate(sess.id, SessionUpdate{SessionUpdate: "current_mode_update", CurrentModeID: string(sess.application.Permissions.Mode())})
 	}
 	s.emitUpdate(sess.id, SessionUpdate{SessionUpdate: "config_option_update", ConfigOptions: options})
+	if s.isV2() {
+		return s.conn.Reply(msg.ID, map[string]any{"configOptions": v2ConfigOptions(options)})
+	}
 	return s.conn.Reply(msg.ID, SessionSetConfigOptionResult{ConfigOptions: options})
 }
 

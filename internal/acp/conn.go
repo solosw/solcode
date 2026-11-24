@@ -130,6 +130,10 @@ func (c *Conn) Notify(method string, params any) error {
 }
 
 func (c *Conn) Call(ctx context.Context, method string, params any, result any) error {
+	return c.call(ctx, method, params, result, false)
+}
+
+func (c *Conn) call(ctx context.Context, method string, params any, result any, notifyCancel bool) error {
 	id := c.nextID.Add(1)
 	idRaw, _ := json.Marshal(id)
 	raw, err := marshalParams(params)
@@ -158,6 +162,9 @@ func (c *Conn) Call(ctx context.Context, method string, params any, result any) 
 
 	select {
 	case <-ctx.Done():
+		if notifyCancel {
+			_ = c.Notify("$/cancel_request", map[string]any{"requestId": id})
+		}
 		return ctx.Err()
 	case <-c.closed:
 		if c.readErr != nil {

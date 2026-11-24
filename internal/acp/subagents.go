@@ -123,13 +123,21 @@ func (s *Server) announceSubagent(root *acpSession, key, parentID, runID, title,
 		lastToolInput: make(map[string]json.RawMessage),
 	}}
 	root.subagents[key] = child
+	if s.isV2() {
+		s.registerV2Stream(child.session.id, root.id)
+	}
 	s.emitUpdate(parentID, SessionUpdate{SessionUpdate: "subagent_update", SessionID: child.session.id,
 		Title: title, Description: description, Capabilities: &SubagentCapabilities{}})
 	return child
 }
 
 func (s *Server) emitSubagentState(child *acpSubagent, state *SubagentState) {
-	// v1 reports child state on the parent subagent_update. A top-level
-	// state_update on the child is v2-only, and must not be sent here.
+	if s.isV2() {
+		var err error
+		if state.Error != nil {
+			err = state.Error
+		}
+		s.emitV2State(child.session.id, state.State, state.StopReason, err)
+	}
 	s.emitUpdate(child.parentID, SessionUpdate{SessionUpdate: "subagent_update", SessionID: child.session.id, State: state})
 }

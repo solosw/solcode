@@ -1,8 +1,8 @@
 # ACP core instructions and skills
 
-solcode currently negotiates ACP v1. Client-provided core instructions use the
-standard systemPrompt capability. Skills use v1 slash commands; the v2 skill
-command variant and structured skill content blocks are not advertised.
+solcode negotiates ACP v1 and ACP v2 Preview (`2.0.0-beta.3`). Both versions
+use the standard `systemPrompt` capability for client-provided core
+instructions. ACP v2 adds structured skill discovery and invocation.
 
 ## Client-provided core instructions
 
@@ -19,7 +19,9 @@ The initialize response advertises:
 }
 ```
 
-Clients can send the same object on session/new and session/load:
+In v2, the capability is under `capabilities.session.systemPrompt`. Clients
+can send `systemPrompt` on `session/new`, v1 `session/load`, or v2
+`session/resume`.
 
 
 ```json
@@ -35,7 +37,7 @@ Clients can send the same object on session/new and session/load:
 }
 ```
 
-On session/load, include sessionId as usual.
+Include `sessionId` when loading or resuming a session.
 
 - append keeps the configured core preamble and solcode's authored default
   instructions, then adds the client instructions at system level.
@@ -56,7 +58,6 @@ configuration, ACP configuration sidecars, or conversation messages. Clients
 should re-send them when loading a saved session. A supplied prompt takes effect
 on the loaded runtime immediately; omitting it uses the configured/default core.
 Changing model, mode, or enabled features retains the runtime instructions.
-The implementation does not add session/resume or session/fork methods.
 
 ## Skills on ACP v1
 
@@ -91,9 +92,43 @@ grants are still enforced by the runtime.
   the complete updated command list.
 - Unknown slash names continue to ordinary chat. An advertised skill whose
   instructions cannot be read returns an explicit error.
-- A structured type: skill content block is rejected with -32602 on v1, before
-  message insertion. ACP v2 negotiation, structured references, and inline skill
-  references require the separate v2 lifecycle and message-update work.
+
+## Skills on ACP v2
+
+Send `protocolVersion: 2` and opt into structured commands with
+`capabilities.session.commands.skill: {}` in `initialize`. The agent advertises
+`capabilities.session.prompt.skill.inline: {}`. Skills appear as entries with
+`type: "skill"`, a name, a description, and an optional absolute `SKILL.md`
+path in `availableCommands`. The response to `session/new` or `session/resume`
+includes the current list. `available_commands_update` replaces it when the
+user changes enabled skills.
+
+Each skill block references its advertised name. A prompt can include multiple
+skill blocks, interleaved with text and other supported content.
+
+```json
+{
+  "sessionId": "your-session-id",
+  "idempotencyKey": "review-api-changes-1",
+  "prompt": [
+    { "type": "text", "text": "Check the public API changes." },
+    { "type": "skill", "name": "review" },
+    { "type": "text", "text": "Focus on backwards compatibility." }
+  ]
+}
+```
+
+The agent validates skill references before accepting the prompt. An unknown,
+disabled, hidden, or unadvertised name yields `-32602`. Accepted prompts return a
+`messageId` immediately. The matching `user_message` update carries the original
+content blocks, and `state_update` reports progress and completion. Resubmitting
+an accepted `idempotencyKey` returns the same ID without running the prompt again.
+
+To replay a saved conversation, call `session/resume` with
+`replayFrom: { "type": "start" }`. Persisted user prompts retain their message
+IDs and skill references. A v2 client without the structured commands capability
+gets ordinary slash commands and text references on replay. A v1 client gets
+text references when it loads a v2 conversation.
 
 References:
 
