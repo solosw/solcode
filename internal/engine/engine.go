@@ -105,6 +105,7 @@ type Config struct {
 	// OnTodosUpdated records a session-memory todolist snapshot after each
 	// successful TodoWrite. Nil keeps TodoWrite persistence-only.
 	OnTodosUpdated func(ctx context.Context, sessionID, workDir string, todos []tool.TodoItem)
+	SolAPI         func(ctx context.Context, sessionID, workDir string, request tool.SolAPIRequest) (any, error)
 	QueuedPrompts  func() []string
 	// Background scheduling applies only to main-agent Bash/Task calls.
 	BackgroundTasksEnabled bool
@@ -1031,7 +1032,12 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 					},
 				},
 			}
-			// Dispatch batch child operations through this run's normal executor.
+			if isMain && e.config.SolAPI != nil {
+				toolEnv.UseContext.SolAPI = func(ctx context.Context, req tool.SolAPIRequest) (any, error) {
+					return e.config.SolAPI(ctx, nonEmpty(runReq.SessionID, string(cfg.ID)), cfg.WorkDir, req)
+				}
+			}
+			toolEnv.UseContext.BatchTools = e.config.Tools.All
 			toolEnv.UseContext.ContextControl = func(controlCtx context.Context, name string, req contextcompression.Request) (any, error) {
 				if err := controlCtx.Err(); err != nil {
 					return nil, err
@@ -1105,7 +1111,12 @@ func (e *Engine) runMessagesLoop(ctx context.Context, runReq RunRequest) (result
 				*compression = *next
 				return data, nil
 			}
-			toolEnv.UseContext.BatchLookup = e.config.Tools.Find
+			toolEnv.UseContext.BatchLookup = func(name string) tool.Tool {
+				if name == tool.SolAPIToolName && !isMain {
+					return nil
+				}
+				return e.config.Tools.Find(name)
+			}
 			toolEnv.UseContext.BatchDispatch = func(batchCtx context.Context, name string, childInput json.RawMessage) (*tool.ContentBlock, error) {
 				if name == tool.BatchToolName {
 					return nil, fmt.Errorf("nested batches are not supported")
@@ -1225,6 +1236,12 @@ func toolResultToAPI(toolUseID string, toolResult ToolResult) cpanthropic.ToolRe
 	if toolResult.Content.Type == "image" && toolResult.Content.Data != "" {
 		out.ImageMimeType = toolResult.Content.MimeType
 		out.ImageData = toolResult.Content.Data
+	}
+	for _, image := range toolResult.Content.Images {
+		if image.Type != "image" || image.Data == "" {
+			continue
+		}
+		out.ImageBlocks = append(out.ImageBlocks, sdk.ToolResultBlockParamContentUnion{OfImage: &sdk.ImageBlockParam{Source: sdk.ImageBlockParamSourceUnion{OfBase64: &sdk.Base64ImageSourceParam{MediaType: sdk.Base64ImageSourceMediaType(image.MimeType), Data: image.Data}}}})
 	}
 	return out
 }

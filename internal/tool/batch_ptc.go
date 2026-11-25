@@ -94,7 +94,16 @@ func (bt *batchTool) invokePTC(ctx context.Context, uctx *UseContext, input json
 	var pending []ptcCall
 	calls := 0
 	tools := vm.NewObject()
-	for _, toolName := range []string{ViewToolName, GrepToolName, GlobToolName, LSToolName, EditToolName, MultiEditToolName, WriteToolName, MultiWriteToolName, PatchToolName, BashToolName, "LSP"} {
+	names := []string{ViewToolName, GrepToolName, GlobToolName, LSToolName, EditToolName, MultiEditToolName, WriteToolName, MultiWriteToolName, BashToolName, "LSP", SolAPIToolName}
+	if uctx.BatchTools != nil {
+		names = nil
+		for _, child := range uctx.BatchTools() {
+			if ptcBuiltin(child) {
+				names = append(names, child.Name())
+			}
+		}
+	}
+	for _, toolName := range names {
 		name := toolName
 		_ = tools.Set(name, func(call goja.FunctionCall) goja.Value {
 			promise, resolve, _ := vm.NewPromise()
@@ -110,7 +119,7 @@ func (bt *batchTool) invokePTC(ctx context.Context, uctx *UseContext, input json
 				return fail(err.Error())
 			}
 			child := uctx.BatchLookup(name)
-			if child == nil {
+			if !ptcBuiltin(child) {
 				return fail("TOOL_UNAVAILABLE")
 			}
 			if len(call.Arguments) != 1 {
@@ -133,6 +142,12 @@ func (bt *batchTool) invokePTC(ctx context.Context, uctx *UseContext, input json
 	_ = vm.Set("tools", tools)
 
 	var output strings.Builder
+	var images []ContentBlock
+	imageBytes := 0
+	withImages := func(content *ContentBlock) *ContentBlock {
+		content.Images = images
+		return content
+	}
 	outputRunes := 0
 	truncated := false
 	console := vm.NewObject()
@@ -169,7 +184,7 @@ func (bt *batchTool) invokePTC(ctx context.Context, uctx *UseContext, input json
 			message = output.String() + "\n" + message
 		}
 		message = ptcBoundedText(message, ptcMaxOutputRunes)
-		return ErrorResult(message + "\nCompleted tool effects are not rolled back."), nil
+		return withImages(ErrorResult(message + "\nCompleted tool effects are not rolled back.")), nil
 	}
 
 	value, err := vm.RunString("(async function(){\n" + request.Code + "\n})()")
@@ -217,8 +232,15 @@ func (bt *batchTool) invokePTC(ctx context.Context, uctx *UseContext, input json
 				response = ptcError(result.err.Error())
 			case result.content == nil:
 				response = ptcError("EMPTY_RESULT")
-			case result.content.Type == "image":
-				response = ptcError("UNSUPPORTED_OUTPUT: PTC accepts text results only")
+			case result.content.Type == "image" && !result.content.IsError:
+				if imageBytes+len(result.content.Data) > 8*1024*1024 {
+					response = ptcError("IMAGE_OUTPUT_LIMIT: at most 8 MiB of encoded images per program")
+				} else {
+					imageBytes += len(result.content.Data)
+					images = append(images, *result.content)
+					response = store.put(result.content)
+					response["image_attached"] = true
+				}
 			default:
 				response = store.put(result.content)
 			}
@@ -245,9 +267,25 @@ func (bt *batchTool) invokePTC(ctx context.Context, uctx *UseContext, input json
 		output.WriteString("\n[output truncated]")
 	}
 	if output.Len() == 0 {
-		return Result(fmt.Sprintf("PTC completed (%d tool calls; no console output)", calls)), nil
+		return withImages(Result(fmt.Sprintf("PTC completed (%d tool calls; no console output)", calls))), nil
 	}
-	return Result(output.String()), nil
+	return withImages(Result(output.String())), nil
+}
+
+// Only public builtins belong to the in-process bridge. Child permissions are
+// enforced by the executor, including role restrictions on coordination tools.
+func ptcBuiltin(child Tool) bool {
+	if child == nil {
+		return false
+	}
+	if mcp, ok := child.(interface{ IsMCP() bool }); ok && mcp.IsMCP() {
+		return false
+	}
+	switch child.Name() {
+	case BatchToolName, SubagentToolName, ReadMemoryToolName, ReadObservationToolName, ReadSessionMemoryToolName, WriteSessionMemoryToolName:
+		return false
+	}
+	return true
 }
 
 func ptcBoundedText(text string, limit int) string {

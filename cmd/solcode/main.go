@@ -28,6 +28,7 @@ import (
 	"github.com/solosw/solcode/internal/session"
 	"github.com/solosw/solcode/internal/skill"
 	"github.com/solosw/solcode/internal/tool"
+	"github.com/solosw/solcode/internal/trigger"
 	"github.com/solosw/solcode/internal/tui"
 	"github.com/solosw/solcode/internal/workflow"
 	"github.com/solosw/solcode/internal/workflowui"
@@ -396,15 +397,76 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 		}
 	})
 
-	submit := func(prompt string) (tea.Cmd, func()) {
+	currentSession := func() string {
+		if cfg.Session.DefaultSession == "" {
+			return "main"
+		}
+		return cfg.Session.DefaultSession
+	}
+	var triggerScope uint64
+	var detachTriggers func()
+	attachTriggers := func() error {
+		if detachTriggers != nil {
+			detachTriggers()
+			detachTriggers = nil
+		}
+		triggerScope++
+		scope := triggerScope
+		// Keep the runtime's notification callback nonblocking, including while
+		// switching sessions or closing and joining listener goroutines.
+		wake := make(chan struct{}, 1)
+		ctx, cancel := context.WithCancel(context.Background())
+		detach, err := application.AttachSessionTriggers(currentSession(), cfg.WorkDir, func() {
+			select {
+			case wake <- struct{}{}:
+			default:
+			}
+		})
+		if err != nil {
+			cancel()
+			return err
+		}
+		detachTriggers = func() { cancel(); detach() }
+		go func() {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-wake:
+					program.Send(tui.SessionTriggerReadyMsg{Scope: scope})
+				}
+			}
+		}()
+		return nil
+	}
+	defer func() {
+		if detachTriggers != nil {
+			detachTriggers()
+		}
+	}()
+	reattachTriggers := func(result tui.SelectResult) tui.SelectResult {
+		if result.ReplaceMessages {
+			if err := attachTriggers(); err != nil {
+				result.Message += fmt.Sprintf("\nCould not attach session listeners: %v", err)
+			}
+		}
+		return result
+	}
+
+	runSession := func(prompt string, event *trigger.Event) (tea.Cmd, func()) {
+		// Capture the scope on the update loop, before the command can run.
+		runCfg := cfg
+		currentSessionID := currentSession()
 		ctx, cancel := conversationContext(timeout)
 		cmd := func() tea.Msg {
 			defer cancel()
-			currentSessionID := cfg.Session.DefaultSession
-			if currentSessionID == "" {
-				currentSessionID = "main"
+			var result agent.AgentResult
+			var err error
+			if event != nil {
+				result, err = application.RunSessionTrigger(ctx, *event, maxTurns)
+			} else {
+				result, err = application.RunPromptWithSession(ctx, currentSessionID, prompt, runCfg.WorkDir, maxTurns)
 			}
-			result, err := application.RunPromptWithSession(ctx, currentSessionID, prompt, cfg.WorkDir, maxTurns)
 			if errors.Is(ctx.Err(), context.Canceled) {
 				return tui.StreamCanceledMsg{Reason: "Canceled"}
 			}
@@ -421,17 +483,18 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 				return tui.StreamErrorMsg{Err: fmt.Errorf("%s", result.Error)}
 			}
 			if application.Sessions != nil && program != nil {
-				if s, loadErr := loadSanitizedSession(context.Background(), application, currentSessionID, cfg); loadErr == nil && s != nil {
+				if s, loadErr := loadSanitizedSession(context.Background(), application, currentSessionID, runCfg); loadErr == nil && s != nil {
 					program.Send(tui.ReplaceMessagesMsg{Messages: chatMessagesFromSession(s)})
 				}
 			}
-			if result.Output != "" && !cfg.Stream {
+			if result.Output != "" && !runCfg.Stream {
 				program.Send(tui.StreamTextMsg{Text: result.Output})
 			}
 			return tui.StreamDoneMsg{}
 		}
 		return cmd, cancel
 	}
+	submit := func(prompt string) (tea.Cmd, func()) { return runSession(prompt, nil) }
 
 	theme := tui.ThemeByName(cfg.TUI.Theme).WithBackground(cfg.TUI.Background)
 	model := tui.NewWith(submit, theme, cfg.Model, cfg.WorkDir, true)
@@ -454,6 +517,18 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 			})
 		}
 	}
+	model.SetSessionTriggers(func() uint64 { return triggerScope }, func() (tea.Cmd, func()) {
+		id, dir := currentSession(), cfg.WorkDir
+		event, ok := application.NextSessionTrigger(id, dir)
+		if !ok {
+			return nil, nil
+		}
+		if event.SessionID != id || event.WorkDir != dir {
+			application.FailSessionTrigger(event, fmt.Errorf("trigger does not belong to the attached session"))
+			return nil, nil
+		}
+		return runSession("", &event)
+	}, func() { _ = application.CancelSessionTriggers(currentSession(), cfg.WorkDir) })
 	model.SetQueueFunc(queuePrompt)
 	model.SetModelNameFn(func() string { return cfg.Model })
 	model.SetContextBaseFn(func() int64 {
@@ -610,7 +685,7 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 		}
 	})
 	model.SetNewSessionHandler(func(name string, crossSessionMemory bool) tui.SelectResult {
-		return handleNewSessionCommand(&cfg, application, name, persistencePath, crossSessionMemory)
+		return reattachTriggers(handleNewSessionCommand(&cfg, application, name, persistencePath, crossSessionMemory))
 	})
 	modeNames := permission.CycleModeNames()
 	model.SetModeSwitchFn(modeNames, string(cfg.PermissionMode), func(mode string) {
@@ -701,7 +776,7 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 		case tui.DialogEffort:
 			return tui.SelectResult{Message: handleEffortSwitch(&cfg, application, value, persistencePath)}
 		case tui.DialogSessions:
-			return handleSessionSwitch(&cfg, application, value, persistencePath)
+			return reattachTriggers(handleSessionSwitch(&cfg, application, value, persistencePath))
 		case tui.DialogSkills:
 			return handleSkillToggleSelection(&cfg, application, value, persistencePath)
 		case tui.DialogMCP:
@@ -1000,6 +1075,9 @@ func runInteractive(cfg config.Config, configPath string, timeout time.Duration,
 		},
 	})
 	program = tea.NewProgram(model)
+	if err := attachTriggers(); err != nil {
+		return fmt.Errorf("attach session listeners: %w", err)
+	}
 	if application.MCPRegistry != nil {
 		go func() {
 			_ = application.EnsureMCPTools(context.Background())

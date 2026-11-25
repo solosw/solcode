@@ -321,7 +321,7 @@ func imageResultCaption(path string, prompt string, kind string) string {
 	if prompt != "" {
 		fmt.Fprintf(&b, "prompt: %s\n", prompt)
 	}
-	fmt.Fprintf(&b, "Use ViewImage with path %q to inspect the result.", path)
+	fmt.Fprintf(&b, "Use View with path %q to inspect the result.", path)
 	return strings.TrimSpace(b.String())
 }
 

@@ -105,7 +105,7 @@ func (c *RequestEfficiencyController) observeCallLocked(name string, input []byt
 				c.newThisTurn = true
 			}
 		}
-	case tool.EditToolName, tool.WriteToolName, tool.MultiEditToolName, tool.MultiWriteToolName, tool.PatchToolName:
+	case tool.EditToolName, tool.WriteToolName, tool.MultiEditToolName, tool.MultiWriteToolName:
 		if !result.IsError {
 			// A new file version makes previous reads/searches legitimate again.
 			c.newThisTurn = true

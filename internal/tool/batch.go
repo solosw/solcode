@@ -93,6 +93,7 @@ type batchItem struct {
 	Output    *batchOutput `json:"output,omitempty"`
 	Error     *batchError  `json:"error,omitempty"`
 	BlockedBy []string     `json:"blocked_by,omitempty"`
+	image     *ContentBlock
 }
 type batchError struct {
 	Code           string `json:"code"`
@@ -155,9 +156,9 @@ func (*batchTool) Name() string { return BatchToolName }
 func (bt *batchTool) Description() string {
 	if bt.ptcEnabled {
 		schema, _ := json.Marshal(batchOperationSchema())
-		return "Run a bounded JavaScript program using tools.Name(input). Use await for dependent calls or Promise.all for independent calls. Safe read-only calls run concurrently (bounded by batch.max_parallel); mutations and unsafe calls run sequentially as barriers. Results contain {ok, content, result_ref, truncated}; bridge errors contain {ok:false, content:\"\", error}. Large content is previewed; results.get(result_ref, {offset:0, limit:1000}) reads rune-indexed pages within this invocation. Check ok/error/storage_error; completed effects are not rolled back on script failure. Intermediate results stay in the program; only console.log output is returned. No Node APIs or direct filesystem/network access. At most 32 child calls, 64 KiB code, 2-minute deadline, 8 MiB result store, 16384-rune console output. All children retain executor permissions/hooks. PTC uses {code}, not operations/depends_on/output_mode/atomic; use child MultiEdit/MultiWrite atomic options when needed. Child input schemas (use each tool and input variant, not the operations envelope): " + string(schema)
+		return "Run a bounded JavaScript program using tools.Name(input). Use await for dependent calls or Promise.all for independent calls. Safe read-only calls run concurrently (bounded by batch.max_parallel); mutations and unsafe calls run sequentially as barriers. Results contain {ok, content, result_ref, truncated}; bridge errors contain {ok:false, content:\"\", error}. PTC can call any registered public builtin except BatchTool itself via tools.Name(input); use the standalone tool schema for non-coding tools. Images are attached to the result and scripts receive captions only. Large content is previewed; results.get(result_ref, {offset:0, limit:1000}) reads rune-indexed pages within this invocation. Check ok/error/storage_error; completed effects are not rolled back on script failure. Intermediate results stay in the program; only console.log output is returned. No Node APIs or direct filesystem/network access. At most 32 child calls, 64 KiB code, 2-minute deadline, 8 MiB result store, 16384-rune console output. All children retain executor permissions/hooks. PTC uses {code}, not operations/depends_on/output_mode/atomic; use child MultiEdit/MultiWrite atomic options when needed. Child input schemas (use each tool and input variant, not the operations envelope): " + string(schema)
 	}
-	return fmt.Sprintf("Run 1-%d coding operations using the tool-specific input schemas below. IDs are optional (default op_1, op_2, ...); use explicit IDs for depends_on. Dependencies only order execution: they do NOT substitute results into later inputs. Only batch edits whose exact old_string is already known from a prior read. Independent safe reads run concurrently, mutations sequentially. In non-atomic batches, successful edits stay applied after unrelated failures, even when a MultiEdit partially fails. Default output_mode=compact omits repeated file diffs; read/search/Bash outputs remain useful within per-item and total text budgets. Truncated or summarized outputs include full_output_path; read it with View using offset/limit. output_mode=full keeps diffs but still obeys budgets. atomic=true attempts to roll back all file operations on any failure; supports Edit/MultiEdit/Write/MultiWrite/Patch, including repeated edits to the same file. Inspect atomic_status and reverted: after rolled_back, reapply the corrected transaction; after rollback_failed/unknown, read current targets first. Permissions and hooks still apply to each child.", bt.limits.MaxOperations)
+	return fmt.Sprintf("Run 1-%d coding operations using the tool-specific input schemas below. IDs are optional (default op_1, op_2, ...); use explicit IDs for depends_on. Dependencies only order execution: they do NOT substitute results into later inputs. Only batch edits whose exact old_string is already known from a prior read. Independent safe reads run concurrently, mutations sequentially. In non-atomic batches, successful edits stay applied after unrelated failures, even when a MultiEdit partially fails. Default output_mode=compact omits repeated file diffs; read/search/Bash outputs remain useful within per-item and total text budgets. Truncated or summarized outputs include full_output_path; read it with View using offset/limit. output_mode=full keeps diffs but still obeys budgets. atomic=true attempts to roll back all file operations on any failure; supports Edit/MultiEdit/Write/MultiWrite, including repeated edits to the same file. Inspect atomic_status and reverted: after rolled_back, reapply the corrected transaction; after rollback_failed/unknown, read current targets first. Permissions and hooks still apply to each child.", bt.limits.MaxOperations)
 }
 
 // IsPlanModeBatch admits built-in PTC containers and static exploration batches,
@@ -456,9 +457,8 @@ func (bt *batchTool) runOperation(ctx context.Context, uctx *UseContext, op batc
 			}
 			item.Error = &batchError{Code: code, Message: message, Retryable: retryable}
 		}
-		if output.Type == "image" {
-			item.Status = "error"
-			item.Error = &batchError{Code: "UNSUPPORTED_OUTPUT", Message: "batch does not embed image payloads; call this tool directly"}
+		if output.Type == "image" && item.Status == "success" {
+			item.image = output
 		}
 		if item.Status == "success" {
 			item.Output = &batchOutput{Content: output.Text}
@@ -482,7 +482,7 @@ func (bt *batchTool) invokeAtomic(ctx context.Context, uctx *UseContext, req bat
 	paths := make([]string, 0, len(req.Operations))
 	for i, op := range req.Operations {
 		if !CheckpointableFileTool(op.Tool) {
-			return ErrorResult("atomic mode supports only file edits (Edit, MultiEdit, Write, MultiWrite, Patch); " + op.Tool + " is not allowed"), nil
+			return ErrorResult("atomic mode supports only file edits (Edit, MultiEdit, Write, MultiWrite); " + op.Tool + " is not allowed"), nil
 		}
 		if err := validateBatchChild(ctx, uctx.BatchLookup(op.Tool), op.Input); err != nil {
 			return ErrorResult(fmt.Sprintf("atomic operation %s: %v", op.ID, err)), nil
@@ -640,8 +640,20 @@ func (bt *batchTool) encode(ctx context.Context, uctx *UseContext, response batc
 	if err != nil {
 		return nil, err
 	}
+	// Keep image payloads out of JSON summaries and attach them as vision blocks.
+	result := Result(string(encoded))
+	imageBytes := 0
+	for _, item := range response.Results {
+		if item.image != nil {
+			imageBytes += len(item.image.Data)
+			if imageBytes > 8*1024*1024 {
+				return ErrorResult("IMAGE_OUTPUT_LIMIT: at most 8 MiB of encoded images per batch"), nil
+			}
+			result.Images = append(result.Images, *item.image)
+		}
+	}
 	// Partial failure is an informative tool result, not a failed model-level call.
-	return Result(string(encoded)), nil
+	return result, nil
 }
 
 // classifyChildError maps a child failure message to a structured error code.
@@ -684,7 +696,7 @@ func isTransientError(text string) bool {
 // individually in the model tool schema.
 func BatchWrapped(name string) bool {
 	switch name {
-	case ViewToolName, GrepToolName, GlobToolName, LSToolName, EditToolName, MultiEditToolName, WriteToolName, MultiWriteToolName, PatchToolName, BashToolName, "LSP":
+	case ViewToolName, GrepToolName, GlobToolName, LSToolName, EditToolName, MultiEditToolName, WriteToolName, MultiWriteToolName, BashToolName, "LSP", SolAPIToolName:
 		return true
 	default:
 		return false

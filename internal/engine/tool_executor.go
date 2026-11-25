@@ -129,9 +129,6 @@ func timeoutForTool(selected tool.Tool) time.Duration {
 		// AskUser waits on a human dialog; keep the executor ceiling above the
 		// tool's own AskUserTimeout so the tool can fall back to Jev first.
 		return time.Duration(tool.AskUserTimeout)*time.Second + 30*time.Second
-	case tool.WaitToolName:
-		// Wait is internal (not model-visible); same ceiling as Bash auto-wait.
-		return bashToolTimeout
 	case tool.BatchToolName:
 		// Allow the outer batch to wait for long-running children; each child
 		// still uses its individual executor timeout.
@@ -154,6 +151,9 @@ func (x *ToolExecutor) Execute(ctx context.Context, call ToolCall, env ToolEnv) 
 		return ToolResult{Content: content, IsError: true}
 	}
 
+	if selected.Name() == tool.SolAPIToolName && !tool.SolAPIHasSessionScope(env.UseContext) {
+		return ToolResult{Content: tool.ErrorResult("solapi is available only to the main agent in its current session"), IsError: true}
+	}
 	input := call.Input
 	if x.hooks != nil {
 		result, err := x.hooks.Run(ctx, hook.Event{

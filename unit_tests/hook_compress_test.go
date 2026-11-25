@@ -159,10 +159,10 @@ func TestToolExecutor_PostToolUseCompressesPerTool(t *testing.T) {
 
 	// Write tools (Edit/Write/…) are compressed by default now.
 	skipTools := map[string]bool{}
-	// Built-in tool surface (text results). ViewImage is covered separately as image.
+	// Built-in tool surface (text results). View is covered separately as image.
 	tools := []string{
 		"AskUser", "Bash", "Diff", "Edit", "Fetch", "Glob", "Grep", "LS",
-		"ModeSwitch", "MultiEdit", "MultiWrite", "Patch", "search_context", "Skill",
+		"ModeSwitch", "MultiEdit", "MultiWrite", "search_context", "Skill",
 		"Task", "TodoWrite", "ToolSearch", "View", "WebSearch", "Write", "WriteMemory",
 		"mcp__demo__echo",
 	}
@@ -214,13 +214,13 @@ func TestToolExecutor_PostToolUseCompressesPerTool(t *testing.T) {
 		})
 	}
 
-	t.Run("ViewImage_image_skipped", func(t *testing.T) {
+	t.Run("View_image_skipped", func(t *testing.T) {
 		reg := tool.NewRegistry()
 		img := &tool.ContentBlock{Type: "image", MimeType: "image/png", Data: strings.Repeat("A", 4096)}
-		reg.Register(&staticBlockTool{name: "ViewImage", block: img})
+		reg.Register(&staticBlockTool{name: "View", block: img})
 		exec := engine.NewToolExecutor(reg, hook.NewRuntime(hook.DefaultConfig()))
 		out := exec.Execute(context.Background(), engine.ToolCall{
-			Name:  "ViewImage",
+			Name:  "View",
 			Input: json.RawMessage(`{}`),
 		}, engine.ToolEnv{UseContext: &tool.UseContext{WorkDir: t.TempDir()}})
 		if out.IsError {
@@ -229,7 +229,7 @@ func TestToolExecutor_PostToolUseCompressesPerTool(t *testing.T) {
 		if out.Content.Type != "image" || out.Content.Data != img.Data {
 			t.Fatalf("image tool result must not be rewritten: %+v", out.Content)
 		}
-		t.Logf("tool=ViewImage type=image data_len=%d unchanged=true", len(out.Content.Data))
+		t.Logf("tool=View type=image data_len=%d unchanged=true", len(out.Content.Data))
 	})
 
 	t.Run("Bash_error_skipped", func(t *testing.T) {

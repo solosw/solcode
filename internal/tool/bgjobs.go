@@ -204,6 +204,10 @@ func (m *BackgroundJobs) RunningIDs() []string {
 	return out
 }
 
+func isUnknownJob(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "unknown background task_id")
+}
+
 // Wait blocks until the job finishes, the wait timeout elapses, or ctx is done.
 // timeout<=0 means wait until the job completes (still bounded by ctx).
 func (m *BackgroundJobs) Wait(ctx context.Context, id string, timeout time.Duration) (JobSnapshot, error) {

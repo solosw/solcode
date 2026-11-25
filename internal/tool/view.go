@@ -50,14 +50,15 @@ func (v *viewTool) IsReadOnly(_ json.RawMessage) bool        { return true }
 func (v *viewTool) IsConcurrencySafe(_ json.RawMessage) bool { return true }
 
 func (v *viewTool) Description() string {
-	return `Reads and displays file contents with line numbers.
-Use this tool to examine source code, configuration files, or log files.
+	return `Reads text files with line numbers or returns images as multimodal content.
+Use this tool to examine source code, configuration files, logs, screenshots, or photos.
 - Provide path (absolute or relative to work dir).
 - Optionally specify offset (0-based line) and limit (default 2000).
 - Large files are read in pages; use offset/limit to continue — whole-file size is not a hard reject.
 - Lines longer than 2000 characters are truncated.
-- Binary files (NUL bytes) and images are not shown; use ViewImage for images.
-- UTF-8 and UTF-16 text are supported.`
+- UTF-8 and UTF-16 text are supported; other binary files are not shown.
+- Images up to 5MB are optimized (max edge 1280px) and returned as jpeg/png/gif/webp.
+- Text offset/limit do not apply to images.`
 }
 
 func (v *viewTool) InputSchema() map[string]any {
@@ -101,8 +102,7 @@ func (v *viewTool) Invoke(ctx context.Context, uctx *UseContext, input json.RawM
 		params.Limit = DefaultReadLimit
 	}
 	if IsImagePath(filePath) {
-		ext := strings.ToLower(filepath.Ext(filePath))
-		return ErrorResult(fmt.Sprintf("This is an image file of type: %s. Use the ViewImage tool to examine images.", ext)), nil
+		return viewImage(filePath)
 	}
 
 	// ACP clients can expose unsaved editor buffers. Prefer that source whenever
@@ -305,12 +305,7 @@ func AddLineNumbers(content string, startLine int) string {
 }
 
 func IsImagePath(filePath string) bool {
-	ext := strings.ToLower(filepath.Ext(filePath))
-	switch ext {
-	case ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".svg", ".webp", ".ico":
-		return true
-	}
-	return false
+	return supportedImageExtensions[strings.ToLower(filepath.Ext(filePath))]
 }
 
 func SuggestSimilarFile(filePath string) *ContentBlock {

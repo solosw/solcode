@@ -142,9 +142,9 @@ func TestPrefixSnapshotOnlyGrows(t *testing.T) {
 		t.Fatalf("empty engine snapshot = %#v", snap)
 	}
 	eng.mergeStickyExtras(map[string]bool{
-		"mcp__office__cli": true,
-		tool.BashToolName:  true, // core must be ignored
-		tool.WaitToolName:  true, // hidden must be ignored
+		"mcp__office__cli":           true,
+		tool.BashToolName:            true, // core must be ignored
+		tool.ReadObservationToolName: true, // hidden must be ignored
 	})
 	snap := eng.PrefixSnapshot()
 	if len(snap.ExtraToolNames) != 1 || snap.ExtraToolNames[0] != "mcp__office__cli" {

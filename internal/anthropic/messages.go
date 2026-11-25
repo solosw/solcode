@@ -262,6 +262,7 @@ type ToolResult struct {
 	IsError       bool
 	ImageMimeType string
 	ImageData     string // base64-encoded image payload
+	ImageBlocks   []sdk.ToolResultBlockParamContentUnion
 }
 
 // ToolResultBlock builds a single tool_result content block, optionally with an image.
@@ -289,6 +290,7 @@ func ToolResultBlock(result ToolResult) sdk.ContentBlockParamUnion {
 			},
 		})
 	}
+	content = append(content, result.ImageBlocks...)
 	return sdk.ContentBlockParamUnion{
 		OfToolResult: &sdk.ToolResultBlockParam{
 			ToolUseID: result.ToolUseID,

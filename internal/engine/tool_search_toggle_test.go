@@ -54,7 +54,7 @@ func TestToolSearchDisabledSkipsRouterAndPreservesExecutorPermissions(t *testing
 				t.Fatalf("extra %s not directly visible", name)
 			}
 		}
-		for _, name := range []string{tool.ToolSearchToolName, tool.SubagentToolName, tool.WaitToolName, tool.TaskToolName, tool.EditToolName} {
+		for _, name := range []string{tool.ToolSearchToolName, tool.SubagentToolName, tool.ReadObservationToolName, tool.TaskToolName, tool.EditToolName} {
 			if names[name] {
 				t.Fatalf("unavailable tool %s exposed", name)
 			}

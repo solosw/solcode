@@ -16,13 +16,13 @@ import (
 	"github.com/solosw/solcode/internal/tool"
 )
 
-func TestViewImageTool_OptimizesAndReturnsImageBlock(t *testing.T) {
+func TestViewTool_ImageOptimizesAndReturnsImageBlock(t *testing.T) {
 	dir := t.TempDir()
 	const ow, oh = 2000, 1500
 	path := filepath.Join(dir, "big.png")
 	writeSolidPNG(t, path, ow, oh)
 
-	vt := tool.NewViewImageTool()
+	vt := tool.NewViewTool()
 	input, _ := json.Marshal(map[string]string{"path": path})
 	block, err := vt.Invoke(context.Background(), &tool.UseContext{WorkDir: dir}, input)
 	if err != nil {
@@ -68,8 +68,8 @@ func TestViewImageTool_OptimizesAndReturnsImageBlock(t *testing.T) {
 	}
 }
 
-func TestViewImageTool_MissingFile(t *testing.T) {
-	vt := tool.NewViewImageTool()
+func TestViewTool_ImageMissingFile(t *testing.T) {
+	vt := tool.NewViewTool()
 	input, _ := json.Marshal(map[string]string{"path": filepath.Join(t.TempDir(), "nope.png")})
 	block, err := vt.Invoke(context.Background(), nil, input)
 	if err != nil {
@@ -77,6 +77,35 @@ func TestViewImageTool_MissingFile(t *testing.T) {
 	}
 	if block == nil || !block.IsError {
 		t.Fatal("expected error result for missing file")
+	}
+}
+
+func TestViewTool_ImageIgnoresTextOverlayAndPaging(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "photo.png")
+	writeSolidPNG(t, path, 16, 12)
+	input, _ := json.Marshal(tool.ViewParams{Path: path, Offset: 100, Limit: 1})
+	block, err := tool.NewViewTool().Invoke(t.Context(), &tool.UseContext{WorkDir: dir, TextFileSystem: &staticTextFS{content: "editor text"}}, input)
+	if err != nil || block == nil || block.IsError || block.Type != "image" || block.Data == "" {
+		t.Fatalf("image must use local image reader: %+v (%v)", block, err)
+	}
+}
+
+func TestViewTool_RejectsOversizedImage(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "large.png")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Truncate(tool.MaxImageSize + 1); err != nil {
+		f.Close()
+		t.Fatal(err)
+	}
+	f.Close()
+	input, _ := json.Marshal(tool.ViewParams{Path: path})
+	block, err := tool.NewViewTool().Invoke(t.Context(), nil, input)
+	if err != nil || block == nil || !block.IsError || !strings.Contains(block.Text, "maximum size") {
+		t.Fatalf("expected image size rejection: %+v (%v)", block, err)
 	}
 }
 

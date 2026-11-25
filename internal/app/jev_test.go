@@ -288,7 +288,6 @@ func TestGuardrailPayloadExtractsCommandAndContent(t *testing.T) {
 		{"bash command", "Bash", `{"command":"rm -rf /tmp/x"}`, "rm -rf /tmp/x"},
 		{"write content", "Write", `{"path":"a.go","content":"package a"}`, "a.go\npackage a"},
 		{"edit strings", "Edit", `{"path":"a.go","old_string":"x","new_string":"y"}`, "a.go\nx\ny"},
-		{"patch text", "Patch", `{"path":"a.go","patch_text":"@@ -1 +1 @@"}`, "a.go\n@@ -1 +1 @@"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

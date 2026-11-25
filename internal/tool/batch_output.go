@@ -26,7 +26,7 @@ func (bt *batchTool) compactOutputs(ctx context.Context, uctx *UseContext, respo
 			full := r.Output.Content
 			if mode != "full" && !r.Reverted {
 				switch r.Tool {
-				case EditToolName, WriteToolName, PatchToolName:
+				case EditToolName, WriteToolName:
 					// These tools repeat the full diff. Their first two lines describe the
 					// target and change counts; MultiEdit/MultiWrite already emit summaries.
 					body := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(full, "<result>\n"), "</result>"))

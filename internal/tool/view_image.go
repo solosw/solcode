@@ -1,8 +1,6 @@
 package tool
 
 import (
-	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,15 +9,7 @@ import (
 	"github.com/solosw/solcode/internal/attach"
 )
 
-// ViewImageParams is the input schema for the view_image tool.
-type ViewImageParams struct {
-	Path string `json:"path"`
-}
-
-const (
-	ViewImageToolName = "ViewImage"
-	MaxImageSize      = attach.MaxImageBytes // 5MB
-)
+const MaxImageSize = attach.MaxImageBytes // 5MB
 
 // Anthropic vision accepts only these media types in image blocks.
 var anthropicImageMimes = map[string]bool{
@@ -45,54 +35,7 @@ var supportedImageExtensions = map[string]bool{
 	".heif": true,
 }
 
-type viewImageTool struct {
-	BaseTool
-}
-
-// NewViewImageTool creates a new image viewing tool.
-func NewViewImageTool() Tool {
-	return &viewImageTool{}
-}
-
-func (v *viewImageTool) Name() string                             { return ViewImageToolName }
-func (v *viewImageTool) IsReadOnly(_ json.RawMessage) bool        { return true }
-func (v *viewImageTool) IsConcurrencySafe(_ json.RawMessage) bool { return true }
-
-func (v *viewImageTool) Description() string {
-	return `Reads an image file from disk and returns it so the model can see it (multimodal image block).
-Use this tool to examine screenshots, diagrams, photos, or other image files.
-- Provide path (absolute or relative to work dir).
-- Maximum file size: 5MB.
-- Large images are resized (max edge 1280px) and re-encoded to reduce context tokens.
-- Supported send formats after optimization: jpeg, png, gif, webp.`
-}
-
-func (v *viewImageTool) InputSchema() map[string]any {
-	return map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"path": map[string]any{
-				"type":        "string",
-				"description": "The path to the image file to read (absolute or relative)",
-			},
-		},
-		"required": []string{"path"},
-	}
-}
-
-func (v *viewImageTool) Invoke(ctx context.Context, uctx *UseContext, input json.RawMessage) (*ContentBlock, error) {
-	var params ViewImageParams
-	if err := json.Unmarshal(input, &params); err != nil {
-		return ErrorResult("invalid parameters: " + err.Error()), nil
-	}
-	if params.Path == "" {
-		return ErrorResult("path is required"), nil
-	}
-
-	filePath := ResolvePath(uctx, params.Path)
-	if err := CheckAllowedPath(uctx, filePath); err != nil {
-		return ErrorResult(err.Error()), nil
-	}
+func viewImage(filePath string) (*ContentBlock, error) {
 
 	info, err := os.Stat(filePath)
 	if err != nil {
@@ -116,6 +59,9 @@ func (v *viewImageTool) Invoke(ctx context.Context, uctx *UseContext, input json
 	att, err := attach.LoadImage(filePath)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("load image %s: %v", filePath, err)), nil
+	}
+	if att.Width == 0 && (att.MimeType == "image/png" || att.MimeType == "image/jpeg" || att.MimeType == "image/gif") {
+		return ErrorResult(fmt.Sprintf("load image %s: invalid image data", filePath)), nil
 	}
 	if !anthropicImageMimes[att.MimeType] {
 		return ErrorResult(fmt.Sprintf(

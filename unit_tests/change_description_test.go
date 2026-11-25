@@ -62,7 +62,6 @@ func TestMutationToolDescSchema(t *testing.T) {
 	}{
 		{name: "Edit", tool: tool.NewEditTool()},
 		{name: "Write", tool: tool.NewWriteTool()},
-		{name: "Patch", tool: tool.NewPatchTool()},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			properties := test.tool.InputSchema()["properties"].(map[string]any)

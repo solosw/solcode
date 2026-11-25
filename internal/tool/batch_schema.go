@@ -11,7 +11,7 @@ import (
 // The wrapped tools are hidden on the wire, so their actual schemas must live
 // here rather than forcing the model to guess argument names from examples.
 func batchOperationSchema() map[string]any {
-	tools := []Tool{NewViewTool(), NewGrepTool(), NewGlobTool(), NewLsTool(), NewEditTool(), NewMultiEditTool(), NewWriteTool(), NewMultiWriteTool(), NewPatchTool(), NewBashTool(), NewLSPTool(nil)}
+	tools := []Tool{NewViewTool(), NewGrepTool(), NewGlobTool(), NewLsTool(), NewEditTool(), NewMultiEditTool(), NewWriteTool(), NewMultiWriteTool(), NewBashTool(), NewLSPTool(nil), NewSolAPITool()}
 	variants := make([]any, 0, len(tools))
 	for _, child := range tools {
 		inputSchema := child.InputSchema()

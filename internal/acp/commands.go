@@ -672,6 +672,7 @@ func (s *Server) slashNewSession(ctx context.Context, sess *acpSession, args, pe
 	if old := sess.persistID(); old != "" && old != name {
 		_ = sess.application.Sessions.Release(session.SessionID(old))
 	}
+	sess.detachTriggerScope()
 	sess.diskID = name
 	sess.cfg.Session.DefaultSession = name
 	sess.application.Config.Session.DefaultSession = name
@@ -710,6 +711,7 @@ func (s *Server) switchDiskSession(ctx context.Context, sess *acpSession, sessio
 			return fmt.Sprintf("Could not switch session to %q: %v", sessionName, err), nil
 		}
 	}
+	sess.detachTriggerScope()
 	sess.diskID = sessionName
 	sess.cfg.Session.DefaultSession = sessionName
 	sess.application.Config.Session.DefaultSession = sessionName

@@ -207,7 +207,7 @@ func defaultEditorTools() []string {
 	return []string{
 		"AskUser", "Bash", "Diff", "Edit", "MultiEdit", "MultiWrite", "Fetch", "Glob", "Grep",
 		"LS", "LSP", "Patch", "Skill", "Task", "TodoWrite",
-		"View", "ViewImage", "WebSearch", "Write",
+		"View", "WebSearch", "Write",
 	}
 }
 

@@ -205,7 +205,7 @@ func TestScreenedCandidatesHaveNoNoneOption(t *testing.T) {
 
 func TestScreenedCandidatesSkipsHiddenTools(t *testing.T) {
 	got := screenedCandidates([]tool.Tool{
-		&stubTool{name: tool.WaitToolName, desc: "wait"},
+		&stubTool{name: tool.ReadObservationToolName, desc: "wait"},
 		&stubTool{name: tool.SubagentToolName, desc: "subagent"},
 		&stubTool{name: "ImageGenerate", desc: "generate images"},
 	})

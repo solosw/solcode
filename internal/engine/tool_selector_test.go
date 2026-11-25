@@ -90,7 +90,7 @@ func sampleTools() []tool.Tool {
 		&stubTool{name: tool.BashToolName, desc: "run shell commands"},
 		&stubTool{name: tool.EditToolName, desc: "edit files by replacing text"},
 		&stubTool{name: tool.ViewToolName, desc: "read files"},
-		&stubTool{name: tool.WaitToolName, desc: "wait for background bash jobs"},
+		&stubTool{name: tool.ReadObservationToolName, desc: "wait for background bash jobs"},
 		&stubTool{name: tool.SubagentToolName, desc: "run one internal sub-agent"},
 		&stubTool{name: tool.WriteToolName, desc: "write files"},
 		&stubTool{name: tool.ToolSearchToolName, desc: "search tools"},
@@ -100,7 +100,6 @@ func sampleTools() []tool.Tool {
 		&stubTool{name: tool.TodoWriteToolName, desc: "manage todos"},
 		&stubTool{name: tool.TaskToolName, desc: "spawn subagents"},
 		&stubTool{name: tool.DiffToolName, desc: "diff files"},
-		&stubTool{name: tool.PatchToolName, desc: "apply patches"},
 		&stubTool{name: tool.SkillToolName, desc: "load skills"},
 		&stubTool{name: "mcp__docs__query", desc: "Query library documentation and code examples from Context7"},
 		&stubTool{name: "mcp__docs__resolve", desc: "Resolve a package name to a Context7 library id"},
@@ -125,8 +124,8 @@ func TestSelectToolsForTurnCoreOnlyByDefault(t *testing.T) {
 	if !got[tool.BashToolName] || !got[tool.EditToolName] || !got[tool.ToolSearchToolName] {
 		t.Fatalf("core tools missing: %#v", got)
 	}
-	if got[tool.WaitToolName] || got[tool.SubagentToolName] {
-		t.Fatalf("Wait/Subagent must not be model-visible: %#v", got)
+	if got[tool.ReadObservationToolName] || got[tool.SubagentToolName] {
+		t.Fatalf("ReadObservation/Subagent must not be model-visible: %#v", got)
 	}
 	if got["mcp__docs__query"] || got["mcp__office__cli"] || got["WebSearch"] {
 		t.Fatalf("dynamic tools should be omitted without query: %#v", got)
@@ -136,17 +135,17 @@ func TestSelectToolsForTurnCoreOnlyByDefault(t *testing.T) {
 	}
 }
 
-func TestSelectToolsDoesNotSurfaceWaitOrSubagent(t *testing.T) {
-	selected := SelectToolsForTurn(sampleTools(), nil, "wait for background bash jobs", map[string]bool{tool.WaitToolName: true, tool.SubagentToolName: true})
+func TestSelectToolsDoesNotSurfaceLegacyReadOrSubagent(t *testing.T) {
+	selected := SelectToolsForTurn(sampleTools(), nil, "wait for background bash jobs", map[string]bool{tool.ReadObservationToolName: true, tool.SubagentToolName: true})
 	got := namesOf(selected)
-	if got[tool.WaitToolName] || got[tool.SubagentToolName] {
-		t.Fatalf("Wait/Subagent must stay hidden (query+sticky): %#v", got)
+	if got[tool.ReadObservationToolName] || got[tool.SubagentToolName] {
+		t.Fatalf("ReadObservation/Subagent must stay hidden (query+sticky): %#v", got)
 	}
 	// Explicit whitelist also cannot expose internal helpers to the model.
-	selected = SelectToolsForTurn(sampleTools(), []string{tool.BashToolName, tool.WaitToolName, tool.SubagentToolName}, "", nil)
+	selected = SelectToolsForTurn(sampleTools(), []string{tool.BashToolName, tool.ReadObservationToolName, tool.SubagentToolName}, "", nil)
 	got = namesOf(selected)
-	if got[tool.WaitToolName] || got[tool.SubagentToolName] || !got[tool.BashToolName] {
-		t.Fatalf("whitelist should drop Wait/Subagent only: %#v", got)
+	if got[tool.ReadObservationToolName] || got[tool.SubagentToolName] || !got[tool.BashToolName] {
+		t.Fatalf("whitelist should drop ReadObservation/Subagent only: %#v", got)
 	}
 }
 

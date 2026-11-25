@@ -321,7 +321,6 @@ var guardedTools = map[string]bool{
 	tool.MultiWriteToolName:  true,
 	tool.EditToolName:        true,
 	tool.MultiEditToolName:   true,
-	tool.PatchToolName:       true,
 	tool.ComputerUseToolName: true,
 }
 
@@ -391,11 +390,6 @@ func guardrailPayload(toolName string, input json.RawMessage) string {
 				b.WriteString("\n")
 			}
 			return b.String()
-		}
-	case tool.PatchToolName:
-		var params tool.PatchParams
-		if json.Unmarshal(input, &params) == nil {
-			return params.Path + "\n" + params.PatchText
 		}
 	case tool.ComputerUseToolName:
 		return string(input)

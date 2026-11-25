@@ -320,6 +320,9 @@ func ApplyModifiedResult(current *tool.ContentBlock, modified any) *tool.Content
 			if block.Data == "" {
 				block.Data = current.Data
 			}
+			if block.Images == nil {
+				block.Images = current.Images
+			}
 			if block.ToolUseID == "" {
 				block.ToolUseID = current.ToolUseID
 			}

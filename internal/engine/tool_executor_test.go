@@ -36,13 +36,10 @@ func TestTimeoutForCoordinationToolsHasNoExecutorDeadline(t *testing.T) {
 	}
 }
 
-func TestTimeoutForBashAndWaitAllowTwentyFourHours(t *testing.T) {
+func TestTimeoutForBashAllowsTwentyFourHours(t *testing.T) {
 	want := 24*time.Hour + 30*time.Second
 	if got := timeoutForTool(timeoutTestTool{name: tool.BashToolName}); got != want {
 		t.Fatalf("Bash timeout = %s, want %s", got, want)
-	}
-	if got := timeoutForTool(timeoutTestTool{name: tool.WaitToolName}); got != want {
-		t.Fatalf("Wait timeout = %s, want %s", got, want)
 	}
 }
 

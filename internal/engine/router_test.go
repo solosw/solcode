@@ -119,7 +119,7 @@ func TestRouterMissesOnlyOnLexicalMiss(t *testing.T) {
 func TestRouteCandidatesExcludesCoreAndHidden(t *testing.T) {
 	all := []tool.Tool{
 		&stubTool{name: tool.ViewToolName, desc: "view a file"},
-		&stubTool{name: tool.WaitToolName, desc: "wait"},
+		&stubTool{name: tool.ReadObservationToolName, desc: "wait"},
 		&stubTool{name: "ImageGenerate", desc: "generate images"},
 	}
 	got := routeCandidates(all, map[string]bool{})

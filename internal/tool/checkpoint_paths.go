@@ -9,7 +9,7 @@ import (
 // before Invoke for code-only rewind.
 func CheckpointableFileTool(name string) bool {
 	switch name {
-	case EditToolName, WriteToolName, PatchToolName, MultiEditToolName, MultiWriteToolName:
+	case EditToolName, WriteToolName, MultiEditToolName, MultiWriteToolName:
 		return true
 	default:
 		return false
@@ -19,7 +19,7 @@ func CheckpointableFileTool(name string) bool {
 // PathsForCheckpoint extracts workspace paths from a file-mutation tool input.
 func PathsForCheckpoint(toolName string, input json.RawMessage) []string {
 	switch toolName {
-	case EditToolName, WriteToolName, PatchToolName:
+	case EditToolName, WriteToolName:
 		var params struct {
 			Path string `json:"path"`
 		}

@@ -56,12 +56,12 @@ func TestFoldedToolsSummaryNamesUnsentTools(t *testing.T) {
 // engine will refuse.
 func TestFoldedToolsSummarySkipsHiddenTools(t *testing.T) {
 	all := []tool.Tool{
-		&stubTool{name: tool.WaitToolName, desc: "wait"},
+		&stubTool{name: tool.ReadObservationToolName, desc: "wait"},
 		&stubTool{name: tool.SubagentToolName, desc: "subagent"},
 		&stubTool{name: "ImageGenerate", desc: "generate"},
 	}
 	got := foldedToolsSummary(all, nil)
-	if strings.Contains(got, tool.WaitToolName) || strings.Contains(got, tool.SubagentToolName) {
+	if strings.Contains(got, tool.ReadObservationToolName) || strings.Contains(got, tool.SubagentToolName) {
 		t.Fatalf("summary leaked a hidden tool:\n%s", got)
 	}
 	if !strings.Contains(got, "ImageGenerate") {
@@ -119,7 +119,7 @@ func TestFoldedToolsSummaryEmptyWhenNothingFolded(t *testing.T) {
 		t.Fatalf("got %q, want empty", got)
 	}
 	// Only hidden tools folded is also empty, since they are never routable.
-	hidden := []tool.Tool{&stubTool{name: tool.WaitToolName, desc: "wait"}}
+	hidden := []tool.Tool{&stubTool{name: tool.ReadObservationToolName, desc: "wait"}}
 	if got := foldedToolsSummary(hidden, nil); got != "" {
 		t.Fatalf("got %q, want empty for hidden-only folds", got)
 	}

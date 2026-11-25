@@ -12,7 +12,7 @@ A terminal-based coding agent powered by Claude (Anthropic API) that can read, w
 - **Multi-model support** — Configure multiple LLM providers and models, switch at runtime with `/model` (current provider only) and `/provider`, or add them directly from their dialogs.
 - **Native Anthropic transport** — The Anthropic Messages API uses a handwritten HTTP/JSON/SSE client, including streaming text, thinking, and tool-input deltas; the official SDK remains only for internal message compatibility.
 - **Embedded CodeGraph** — Releases bundle the lightweight native CodeGraph-Rust v0.55.2 executable, with no Node/Python runtime. Projects index automatically in the background and stay updated through the upstream shared daemon and watcher; the core `CodeGraph` tool queries symbols, call paths and refactoring impact. No external MCP setup required. Indexes live in `~/.solcode/projects/<project-id>/codegraph/`, outside the source tree; older project-local indexes are left untouched; see [runtime and build details](docs/codegraph-runtime.md).
-- **20+ built-in tools** — Bash / Task (long-running calls automatically yield to the background with completion notifications), ImageGenerate / ImageEdit (optional OpenAI-format Images API, separately configurable), ComputerUse (optional embedded open-computer-use native runtime; off by default), Edit, Write, View, ViewImage, Grep, Glob, LS, Diff, Patch, Fetch, WebSearch, LSP, MCP, TodoWrite, WriteMemory, search_context, AskUser, Task (orchestrates internal Subagent workers), and more.
+- **20+ built-in tools** — Bash / Task (long-running calls automatically yield to the background with completion notifications), ImageGenerate / ImageEdit (optional OpenAI-format Images API, separately configurable), ComputerUse (optional embedded open-computer-use native runtime; off by default), Edit, Write, View (text and images), Grep, Glob, LS, Diff, Fetch, WebSearch, LSP, MCP, TodoWrite, WriteMemory, search_context, AskUser, Task (orchestrates internal Subagent workers), and more.
 - **Checkpoints & rewind** — Before any file-mutating tool runs, solcode snapshots the file's turn-start contents. During a Bash call it instead compares before/after SHA-256 workdir fingerprints (capped at 2000 files / 1 MiB each, skipping `.git`, `node_modules`, binaries, and hidden paths) and captures whatever changed. `/rewind` then restores workspace files to the start of a past turn — **code only**; conversation history is untouched. Checkpoints may be labeled with `/checkpoint-name` and listed with `/checkpoints`.
 - **Two memory layers** — `WriteMemory(source="memory")` / `search_context(source="memory")` persist and retrieve durable facts that stay true across sessions (preferences, project rules, verified commands). `WriteMemory(source="session_memory")` / `search_context(source="session_memory")` keep this project's chronological session log in `<project>/.solcode/solcode.md`, where each entry records the checkpoint turn, the files changed, the timestamp, and the session id.
 - **MCP (Model Context Protocol)** — Connect to external MCP servers over stdio or HTTP.
@@ -23,7 +23,7 @@ A terminal-based coding agent powered by Claude (Anthropic API) that can read, w
 - **Permission modes** — `auto`, `accept_edits`, `bypass`, `plan`, `goal`, `ultra` — control how tools are authorized.
 - **Sub-agent coordinator** — The `task` tool spawns isolated sub-agents for parallel or independent work.
 - **LSP integration** — Multi-language code intelligence via Language Server Protocol: go-to-definition, find references, hover, document/workspace symbols, and go-to-implementation. When enabled, `LSP` is a core model-visible tool on every turn. Language servers are launched by file extension (gopls, pyright, typescript-language-server, …); binaries on `PATH` are auto-detected, and you can override commands in settings.
-- **Inline diff rendering** — File edits (Edit/Write/Patch) show colored unified diffs directly in the TUI.
+- **Inline diff rendering** — File edits (Edit/Write) show colored unified diffs directly in the TUI.
 - **Syntax highlighting** — File content displayed in the TUI is syntax-highlighted via Chroma for 200+ languages.
 
 ## Quick Start
@@ -143,6 +143,40 @@ solcode [flags]
 | `-acp` | off | Run as an Agent Client Protocol server on stdio (mutually exclusive with `-prompt` / TUI) |
 
 Config auto-discovery looks for `~/.solcode/settings.json`, `~/.solcode/settings.local.json`, `./.solcode/settings.json`, and `./.solcode/settings.local.json` in order; later files merge on top.
+
+### JavaScript tool calls and file viewing
+
+In BatchTool PTC, `tools.Name(input)` can call the enabled public built-in tools, including `Diff`, `LSP`, `CodeGraph`, `Task`, and `solapi`. Every child call still passes through the normal permissions, agent allowlists, and hooks. Nested BatchTool calls, MCP tools, and hidden legacy tools are excluded. Reads may run concurrently; other calls run sequentially.
+
+`View` reads either text or images from `path`. Text supports `offset` and `limit`; images are attached as vision content, including when called through PTC. Scripts receive the caption and `image_attached` flag, without image bytes in the JS result. `Patch`, `Wait`, and the separate `ViewImage` tool have been removed; Bash and Task still handle their own waiting.
+
+### Current-session JavaScript listeners
+
+`solapi` has three actions: `register`, `cancel`, and `history`. In `BatchTool` PTC, register a listener using the existing Goja JavaScript runtime:
+
+```js
+const listener = await tools.solapi({
+  action: "register",
+  code: `
+    let previous = null;
+    while (true) {
+      const value = sol.readText("events/build.json");
+      if (value !== null && value !== previous) {
+        previous = value;
+        sol.trigger("A build event arrived: " + value);
+      }
+      await sol.sleep(1000);
+    }
+  `
+});
+console.log(listener);
+```
+
+The listener continues while its live TUI or ACP session is idle, without calling the model. An event queues a new prompt in that same conversation; the host serializes it after any active turn. No CLI subprocess or Cron scheduler is involved. Listener JavaScript has only `sol.sleep(ms)`, `sol.readText(projectRelativePath)`, and `sol.trigger(prompt)`, with no `require`, `process`, network, tool access, session-ID parameter, or permission-setting API. `readText` is confined to regular files under the project directory (maximum 1 MiB), and returns `null` for a missing file. `sleep` accepts 25 ms to 24 hours. Register up to 16 listeners, with at most 64 queued prompts per live session.
+
+Use `await tools.solapi({action:"history",offset:0,limit:20})` to inspect recent listener and trigger records, newest first. Records report queued/running/completed/failed/cancelled states and are isolated by session and project; the latest 1,000 records are saved when session persistence is enabled.
+
+Use `await tools.solapi({action:"cancel"})` to interrupt the current run and stop that session’s listeners and pending prompts. A trigger that has already started is recorded as `completed` with `stop_reason: "manual_stop"`; queued triggers remain `cancelled`. This keeps the conversation history and does not affect another session. Existing tool permissions and hooks apply; only the main agent can call `solapi`. Closing the host or switching away from a session stops its listeners. Listener code is not automatically restarted after process exit; saved unfinished records appear as interrupted when reopened.
 
 ### Image generation / edit (optional)
 
@@ -277,7 +311,7 @@ one is set, and leaving the field blank keeps the existing key.
 |---|---|
 | `routing` | When lexical tool/skill matching finds nothing, asks Jev which capability the request describes and enables the winners. Also registers the bundled workflow skills and picks one per prompt. |
 | `memory_judge` | Classifies memories (kind / scope / tier / durability) with typed questions instead of asking a chat model to emit and then parse JSON. |
-| `guardrail` | Advisory pre-action check on mutating tools (`Bash`, `Write`, `Edit`, `MultiEdit`, `MultiWrite`, `Patch`, `ComputerUse`) for secrets, destructive actions, exfiltration, and privilege escalation. |
+| `guardrail` | Advisory pre-action check on mutating tools (`Bash`, `Write`, `Edit`, `MultiEdit`, `MultiWrite`, `ComputerUse`) for secrets, destructive actions, exfiltration, and privilege escalation. |
 
 **Bundled workflow skills (Jev mode only)**
 
@@ -671,7 +705,7 @@ This implementation negotiates **ACP v1 only** (`id` in option objects). It does
 not claim v2 support; a future v2 adapter must translate `configId`, value types,
 and the rest of the session lifecycle rather than changing the version number.
 
-Client FS access is capability-gated per session (captured at `session/new` / `session/load`). `ViewImage` stays on the local path because ACP text-file RPCs are text-only.
+Client FS access is capability-gated per session (captured at `session/new` / `session/load`). Image reads through `View` stay on the local path because ACP text-file RPCs are text-only.
 
 ## TUI Controls
 
@@ -703,14 +737,14 @@ Type `@` in the input to attach files relative to the working directory:
 
 **Image context optimization**
 
-Large images can dominate the context window. solcode applies the same pipeline for `@` image attachments and the `ViewImage` tool:
+Large images can dominate the context window. solcode applies the same pipeline for `@` image attachments and image reads through `View`:
 
 1. **Estimates vision tokens** using Anthropic’s formula after normalizing the longest edge to ≤1568px:  
    `tokens ≈ (width × height) / 750`
 2. **Pre-resizes** images to a preferred max edge of **1280px** (never above 1568px)
 3. **Re-encodes** as JPEG (quality 80) when smaller, so screenshots/photos use fewer bytes and tokens
 4. **Counts image tokens** in live TUI `ctx` usage and in session token estimates (not only text)
-5. **Sends real image blocks** — `@` attaches them on the user message; `ViewImage` returns them inside the `tool_result` (not a base64 text dump)
+5. **Sends real image blocks** — `@` attaches them on the user message; `View` returns them inside the `tool_result` (not a base64 text dump)
 
 The model-facing attach note includes size and approximate token cost, e.g.  
 `[attached image: shot.png, 4000x3000→1280x960, image/jpeg, ~1638 tokens, compressed 2.1MB→180KB]`.
@@ -859,7 +893,7 @@ The same switch is available under **Settings → Agents & tools → ToolSearch*
 
 Large tool outputs are compressed on `PostToolUse` by the builtin `compress_tool_result` (headroom **legacy** path). Probe data on real sessions showed ~70–85% savings for tool dumps; the pipeline path was near 0%.
 
-- Skips `Edit` / `Write` / `Patch` / `Diff`, errors, images, and small outputs (&lt; ~800 tokens)
+- Skips `Edit` / `Write` / `Diff`, errors, images, and small outputs (&lt; ~800 tokens)
 - Applies only when savings ≥15% and ≥100 tokens
 - `fail_mode: "open"` so failures never block tools
 
@@ -877,7 +911,7 @@ Disable:
 }
 ```
 
-`ViewImage` returns a multimodal image block (after resize/re-encode) inside the tool result; the standard terminal TUI only shows the text caption, not the pixels.
+`View` returns a multimodal image block for image files (after resize/re-encode) inside the tool result; the standard terminal TUI only shows the text caption, not the pixels.
 
 **Examples pack** — see [`examples/`](examples/) for end-to-end samples:
 
@@ -1044,7 +1078,7 @@ Set `background_tasks.enabled` to `false` to retain foreground-only execution.
 ### Batch coding operations
 
 `BatchTool` is the model-visible entry point for View, Grep, Glob, LS, LSP,
-Edit, MultiEdit, Write, MultiWrite, Patch and Bash. Its schema includes each
+Edit, MultiEdit, Write, MultiWrite and Bash. Its schema includes each
 child's real input fields; children still use their normal permissions and hooks.
 The builtin lossy compressor defers to BatchTool for its children and never
 rewrites the JSON envelope; user-defined post-tool hooks still run.
@@ -1067,7 +1101,7 @@ rewrites the JSON envelope; user-defined post-tool hooks still run.
   grant permission to its underlying tools.
 - Independent safe reads run with bounded concurrency, even if the batch has
   more reads than the parallelism limit. Mutations run sequentially.
-- Default `output_mode: "compact"` returns short receipts for Edit/Write/Patch
+- Default `output_mode: "compact"` returns short receipts for Edit/Write
   instead of repeating complete diffs. Read/search/Bash results remain available
   within the text budget. `output_mode: "full"` retains diffs but **does not**
   disable the limits. Long output keeps its beginning and end.
@@ -1108,7 +1142,7 @@ failures are retried; writes and exact-match failures are never replayed automat
 
 solcode snapshots workspace files so you can restore code to an earlier turn.
 
-- Before `Edit` / `Write` / `Patch` / `MultiEdit` / `MultiWrite` run, the runtime records the file's turn-start contents.
+- Before `Edit` / `Write` / `MultiEdit` / `MultiWrite` run, the runtime records the file's turn-start contents.
 - `Bash` mutates files without declaring paths, so it uses before/after SHA-256 fingerprints instead: the workdir is hashed before and after the call, and only files whose hash or existence changed are captured (new files recorded as absent, so rewind deletes them). Walks are capped at **2000 files / 1 MiB each** and skip `.git`, `node_modules`, `vendor`, build dirs, hidden paths, and binaries.
 - A checkpoint is created per user prompt (not per tool call). Turns are numbered from `0` and the newest 50 are retained.
 
@@ -1188,7 +1222,7 @@ calls. Ultra retains sub-agent access regardless of this toggle; task workflows
 still require ultra.
 
 In **plan** mode, planning instructions are supplied through dynamic context. Mutating
-tools (`Edit` / `Write` / `Patch` / …) are blocked; explore with read-only tools or
+tools (`Edit` / `Write` / …) are blocked; explore with read-only tools or
 read-only `BatchTool` children and use `TodoWrite` to track the plan. Model-initiated
 `ModeSwitch` transitions require user approval; entering `bypass`, `goal`, or `ultra`
 also requires the current mode to be `plan`. Direct user mode selection in the TUI

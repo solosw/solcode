@@ -114,51 +114,6 @@ func TestBashAutoWaitTimeoutWhileRunning(t *testing.T) {
 	}
 }
 
-func TestWaitToolStillWorksInternally(t *testing.T) {
-	jobs := NewBackgroundJobs(8)
-	bash := NewBashToolWithJobs(DefaultShell(), jobs).(*bashTool)
-	wait := NewWaitToolWithJobs(jobs)
-
-	id := jobs.Start(sleepCommand(1), "", 30*time.Second, func(ctx context.Context, stdout, stderr *safeBuffer) (int, error) {
-		return bash.runCommandTo(ctx, sleepCommand(1), "", stdout, stderr)
-	})
-
-	waitInput, _ := json.Marshal(map[string]any{"task_id": id, "timeout_ms": 15_000})
-	waitRes, err := wait.Invoke(context.Background(), &UseContext{}, waitInput)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if waitRes.IsError {
-		t.Fatalf("wait failed: %s", waitRes.Text)
-	}
-	if !strings.Contains(waitRes.Text, "status: completed") {
-		t.Fatalf("expected completed, got:\n%s", waitRes.Text)
-	}
-}
-
-func TestWaitUnknownTask(t *testing.T) {
-	wait := NewWaitToolWithJobs(NewBackgroundJobs(4))
-	input, _ := json.Marshal(map[string]any{"task_id": "bash-missing"})
-	res, err := wait.Invoke(context.Background(), &UseContext{}, input)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !res.IsError || !strings.Contains(res.Text, "unknown") {
-		t.Fatalf("expected unknown error, got %q", res.Text)
-	}
-}
-
-func TestWaitNoJobs(t *testing.T) {
-	wait := NewWaitToolWithJobs(NewBackgroundJobs(4))
-	res, err := wait.Invoke(context.Background(), &UseContext{}, json.RawMessage(`{}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if res.IsError || !strings.Contains(res.Text, "No background") {
-		t.Fatalf("got %q", res.Text)
-	}
-}
-
 func TestBackgroundJobCancel(t *testing.T) {
 	jobs := NewBackgroundJobs(4)
 	bash := NewBashToolWithJobs(DefaultShell(), jobs).(*bashTool)
@@ -221,9 +176,6 @@ func TestBashWaitsForContinuousStdoutUntilExit(t *testing.T) {
 func TestMaxTimeoutIsTwentyFourHours(t *testing.T) {
 	if MaxTimeout != 86_400_000 {
 		t.Fatalf("MaxTimeout = %d, want 86400000 (24h)", MaxTimeout)
-	}
-	if MaxWaitTimeoutMs != MaxTimeout {
-		t.Fatalf("MaxWaitTimeoutMs = %d, want same as MaxTimeout %d", MaxWaitTimeoutMs, MaxTimeout)
 	}
 	if AutoWaitThresholdMs != 180_000 {
 		t.Fatalf("AutoWaitThresholdMs = %d, want 180000 (3m)", AutoWaitThresholdMs)

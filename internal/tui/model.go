@@ -29,6 +29,11 @@ type SubmitFunc func(prompt string) (tea.Cmd, func())
 
 type StreamTextMsg struct{ Text string }
 type StreamThinkingMsg struct{ Text string }
+
+// SessionTriggerReadyMsg asks the update loop to check the attached session queue.
+// Scope identifies one attachment, including switches back to the same session.
+type SessionTriggerReadyMsg struct{ Scope uint64 }
+
 type StreamDoneMsg struct{}
 type StreamCanceledMsg struct{ Reason string }
 type StreamErrorMsg struct{ Err error }
@@ -302,6 +307,12 @@ type Model struct {
 	activeShells   int
 	cancelCurrent  func()
 
+	triggerScopeFn func() uint64
+	triggerScope   uint64
+	triggerNext    func() (tea.Cmd, func())
+	triggerCancel  func()
+	triggerPending bool
+
 	// Input history (capped at maxHistoryEntries)
 	history      []string
 	historyIndex int
@@ -522,8 +533,69 @@ func (m Model) Init() tea.Cmd {
 	return textarea.Blink
 }
 
+// SetSessionTriggers connects listener notifications to the serialized update loop.
+// next must dequeue synchronously and return the work as a command, without
+// starting it. The model marks itself busy before Bubble Tea executes that work.
+func (m *Model) SetSessionTriggers(scope func() uint64, next func() (tea.Cmd, func()), cancel func()) {
+	m.triggerScopeFn = scope
+	m.triggerNext = next
+	m.triggerCancel = cancel
+}
+
+func (m *Model) syncTriggerScope() {
+	if m.triggerScopeFn != nil {
+		if scope := m.triggerScopeFn(); scope != m.triggerScope {
+			m.triggerScope = scope
+			m.triggerPending = false
+		}
+	}
+}
+
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	m.syncTriggerScope()
+	canceling := false
+	if key, ok := msg.(tea.KeyPressMsg); ok && key.String() == "ctrl+c" {
+		canceling = true
+		m.triggerPending = false
+		if m.triggerCancel != nil && !m.canceling {
+			m.triggerCancel()
+		}
+	}
+	next, cmd := m.update(msg)
+	if updated, ok := next.(*Model); ok {
+		m = *updated
+	} else {
+		m = next.(Model)
+	}
+	m.syncTriggerScope()
+	if canceling || !m.triggerPending || m.triggerNext == nil || m.streaming || m.spinnerActive ||
+		m.pending != nil || m.pendingConf != nil || m.pendingAsk != nil ||
+		(m.dialog != nil && m.dialog.Active != DialogNone) || m.workflowEditor != nil {
+		return m, cmd
+	}
+	m.triggerPending = false
+	run, cancel := m.triggerNext()
+	if run == nil {
+		return m, cmd
+	}
+	m.streaming = true
+	m.canceling = false
+	m.cancelCurrent = cancel
+	m.status = "Thinking…"
+	m.thinking = ""
+	m.activeToolName = ""
+	m.startSpinner()
+	m.refreshViewport()
+	return m, tea.Batch(cmd, run, m.nextSpinnerTick())
+}
+
+func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case SessionTriggerReadyMsg:
+		if msg.Scope == m.triggerScope {
+			m.triggerPending = true
+		}
+		return m, nil
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -1399,6 +1471,7 @@ func (m *Model) finishStream(status string) {
 	m.activeToolName = ""
 	m.activeShells = 0
 	m.cancelCurrent = nil
+	m.triggerPending = true
 	m.stopSpinner()
 }
 

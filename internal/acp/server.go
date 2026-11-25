@@ -74,6 +74,10 @@ type acpSession struct {
 	prompting     bool
 	promptDone    chan struct{}
 	closing       bool
+	triggerID     string
+	triggerWake   chan struct{}
+	triggerStop   chan struct{}
+	triggerDetach func()
 	closeOnce     sync.Once
 	v2Prompts     []v2PromptRecord
 	v2Skills      map[string]skill.Definition
@@ -530,6 +534,10 @@ func (s *Server) runSessionPrompt(runCtx context.Context, msg jsonrpcMessage, se
 			return nil
 		}
 		endPrompt()
+		if len(msg.ID) == 0 {
+			s.emitUpdate(sess.id, SessionUpdate{SessionUpdate: "status_update", Message: stop})
+			return err
+		}
 		if err != nil && stop != StopReasonCancelled {
 			return s.conn.ReplyError(msg.ID, JSONRPCInternalError, err.Error())
 		}
@@ -551,9 +559,17 @@ func (s *Server) runSessionPrompt(runCtx context.Context, msg jsonrpcMessage, se
 			return finish(StopReasonRefusal, err)
 		}
 	}
+	if err := s.ensureSessionTriggers(sess); err != nil {
+		return finish(StopReasonRefusal, err)
+	}
 	runPrompt := s.runPrompt
 	if runPrompt == nil {
 		runPrompt = defaultPromptFunc
+	}
+	if event, ok := triggerEvent(runCtx); ok {
+		runPrompt = func(ctx context.Context, application *app.App, _ string, _ string, _ string, maxTurns int, _ StreamEmitter) (agent.AgentResult, error) {
+			return application.RunSessionTrigger(ctx, event, maxTurns)
+		}
 	}
 	result, err := runPrompt(runCtx, sess.application, sess.persistID(), prompt, sess.workDir, s.maxTurns, StreamEmitter{
 		Text:     func(text string) { s.emitText(sess, "agent_message_chunk", text) },
@@ -591,6 +607,9 @@ func (s *Server) handleSessionCancel(msg jsonrpcMessage) error {
 	}
 	sess := s.getSession(params.SessionID)
 	if sess != nil {
+		if sess.application != nil {
+			_ = sess.application.CancelSessionTriggers(sess.persistID(), sess.workDir)
+		}
 		sess.cancelPrompt()
 	} else if s.isV2() && len(msg.ID) != 0 {
 		return s.v2UnknownSession(msg, params.SessionID)
@@ -1177,6 +1196,7 @@ func (s *Server) requestPermission(sess *acpSession, toolName, description strin
 		locations = locs
 	}
 
+	options := defaultPermissionOptions()
 	var result RequestPermissionResult
 	err := s.callPermission(ctx, RequestPermissionParams{
 		SessionID: sess.id,
@@ -1189,7 +1209,7 @@ func (s *Server) requestPermission(sess *acpSession, toolName, description strin
 			Content:    content,
 			Locations:  locations,
 		},
-		Options: defaultPermissionOptions(),
+		Options: options,
 	}, &result)
 	if err != nil {
 		log.Printf("acp permission request failed: %v", err)
@@ -1368,6 +1388,16 @@ func (sess *acpSession) cancelPrompt() {
 
 func (sess *acpSession) close() {
 	sess.closeOnce.Do(func() {
+		sess.mu.Lock()
+		sess.closing = true
+		stop, detach := sess.triggerStop, sess.triggerDetach
+		sess.mu.Unlock()
+		if stop != nil {
+			close(stop)
+		}
+		if detach != nil {
+			detach()
+		}
 		sess.cancelPrompt()
 		if sess.application != nil {
 			_ = sess.application.Close()

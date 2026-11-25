@@ -28,6 +28,7 @@ var coreToolNames = map[string]bool{
 	tool.GrepToolName:        true,
 	tool.LSToolName:          true,
 	tool.ModeSwitchToolName:  true,
+	tool.SolAPIToolName:      true,
 	"LSP":                    true,
 	tool.TaskToolName:        true,
 	tool.TodoWriteToolName:   true,
@@ -45,7 +46,6 @@ var hiddenFromModel = map[string]bool{
 	tool.ReadMemoryToolName:         true, // legacy execution; search_context is the shared read entry point
 	tool.ReadSessionMemoryToolName:  true,
 	tool.ReadObservationToolName:    true,
-	tool.WaitToolName:               true, // Bash timeout > 3m auto-waits; Wait is internal
 	tool.SubagentToolName:           true, // Task orchestrates Subagent; not model-visible
 }
 
@@ -65,7 +65,7 @@ var hiddenFromModel = map[string]bool{
 // With optional searchEnabled=false, all model-visible tools except ToolSearch
 // are returned in stable order without lexical/sticky routing. Runtime allowlists
 // continue to be enforced by the executor. Omitted preserves dynamic routing.
-// Wait and Subagent are never model-visible (see hiddenFromModel).
+// Subagent is never model-visible (see hiddenFromModel).
 func SelectToolsForTurn(all []tool.Tool, allowed []string, query string, enabled map[string]bool, searchEnabled ...bool) []tool.Tool {
 	if len(searchEnabled) > 0 && !searchEnabled[0] {
 		selected := make(map[string]bool, len(all))

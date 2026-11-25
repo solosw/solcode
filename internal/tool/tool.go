@@ -28,6 +28,8 @@ type TerminalRunner interface {
 }
 
 type UseContext struct {
+	// SolAPI is bound by the main runner to its current session.
+	SolAPI         func(ctx context.Context, request SolAPIRequest) (any, error)
 	ContextControl func(context.Context, string, contextcompression.Request) (any, error)
 	// Delegation inherits this runtime ceiling, never the parent snapshot.
 	AllowedTools   []string
@@ -36,6 +38,7 @@ type UseContext struct {
 	ParentContext agent.Snapshot
 	BatchDispatch func(ctx context.Context, name string, input json.RawMessage) (*ContentBlock, error)
 	BatchLookup   func(name string) Tool
+	BatchTools    func() []Tool
 
 	SessionID string
 	RunID     string
@@ -125,6 +128,8 @@ type ContentBlock struct {
 	MimeType  string `json:"mime_type,omitempty"`   // for image blocks
 	Data      string `json:"data,omitempty"`        // base64-encoded image data
 	ToolUseID string `json:"tool_use_id,omitempty"` // for tool_result blocks
+	// Images are delivered as multimodal blocks, separate from script text.
+	Images []ContentBlock `json:"images,omitempty"`
 }
 
 // ToolInfo describes a tool's metadata for the LLM API.

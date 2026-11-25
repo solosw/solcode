@@ -206,7 +206,7 @@ func TestViewTool_DirectoryMessage(t *testing.T) {
 	}
 }
 
-func TestViewTool_ImageRejected(t *testing.T) {
+func TestViewTool_InvalidImageRejected(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "a.png")
 	if err := os.WriteFile(path, []byte("not-really-png"), 0o644); err != nil {
@@ -218,8 +218,8 @@ func TestViewTool_ImageRejected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !out.IsError || !strings.Contains(out.Text, "ViewImage") {
-		t.Fatalf("expected ViewImage hint, got: %s", out.Text)
+	if !out.IsError || !strings.Contains(out.Text, "load image") {
+		t.Fatalf("expected image decoding error, got: %s", out.Text)
 	}
 }
 

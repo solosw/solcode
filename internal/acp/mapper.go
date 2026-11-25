@@ -363,21 +363,6 @@ func toolCallDiffs(name string, input json.RawMessage, workDir string) (content 
 		}
 		return content, locations
 
-	case strings.ToLower(tool.PatchToolName):
-		var params tool.PatchParams
-		if err := json.Unmarshal(input, &params); err != nil || strings.TrimSpace(params.Path) == "" {
-			return nil, nil
-		}
-		path := tool.ResolvePath(uctx, params.Path)
-		// Patch apply lives inside the tool; expose path + patch text for UI.
-		return []ToolCallContent{{
-			Type: "content",
-			Content: &ContentBlock{
-				Type: "text",
-				Text: fmt.Sprintf("Patch %s\n\n%s", path, params.PatchText),
-			},
-		}}, toolLocations(path)
-
 	default:
 		return nil, nil
 	}

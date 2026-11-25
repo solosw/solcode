@@ -292,7 +292,6 @@
     "LSP",
     "ReadMemory",
     "View",
-    "ViewImage",
     "WebSearch",
   ]);
 

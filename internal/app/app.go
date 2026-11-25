@@ -82,6 +82,8 @@ type App struct {
 	textFileSystem  tool.TextFileSystem
 	terminalRunner  tool.TerminalRunner
 	queuedPrompts   func() []string
+	triggerMu       sync.Mutex
+	triggerSessions map[string]*sessionTriggerState
 }
 
 type Option func(*options)
@@ -286,6 +288,7 @@ func New(cfg config.Config, opts ...Option) (*App, error) {
 	engineCfg.TerminalRunner = options.terminalRunner
 	application.configureContextCompression(&engineCfg)
 	engineCfg.AskUserAutoSelect = application.askUserAutoSelect
+	engineCfg.SolAPI = application.handleSolAPI
 	// Snapshot todolist on every TodoWrite so mid-turn updates are not lost;
 	// turn-end recording still captures the final state plus pruned files.
 	engineCfg.OnTodosUpdated = application.recordTodoSessionMemory
@@ -316,7 +319,7 @@ func New(cfg config.Config, opts ...Option) (*App, error) {
 		MaxTotalResultRunes: cfg.Batch.MaxTotalResultRunes,
 		MaxReadRetries:      cfg.Batch.MaxReadRetries,
 	}, cfg.Batch.PTC.Enabled))
-	registry.Register(tool.NewModeSwitchToolWithGoal(application.SwitchMode, application.startGoalFlow))
+	registry.Register(tool.NewModeSwitchToolWithGoal(application.SwitchMode, application.startGoalFlow), tool.NewSolAPITool())
 	// When Jev is on, screen WebSearch hits against the search query itself.
 	if jev != nil && jev.decider != nil {
 		tool.ConfigureWebSearchScreening(registry, jev.decider, jev.routeConfidence())
@@ -522,6 +525,7 @@ func (a *App) Close() error {
 	if a == nil {
 		return nil
 	}
+	a.closeSessionTriggers()
 	if a.Coordinator != nil {
 		a.Coordinator.Close()
 	}
@@ -653,6 +657,7 @@ func (a *App) SwitchModel(cfg config.Config) error {
 	ec.TerminalRunner = a.terminalRunner
 	ec.OnTodosUpdated = a.recordTodoSessionMemory
 	ec.AskUserAutoSelect = a.askUserAutoSelect
+	ec.SolAPI = a.handleSolAPI
 	a.Engine.UpdateConfig(ec)
 	return nil
 }
@@ -694,7 +699,7 @@ func (a *App) ReloadFeatures(cfg config.Config, mcpFactory mcp.ClientFactory) er
 	a.lspManager = lspManager
 	a.ChangeGraph = graphStore
 	subagent := tool.NewSubagentTool(a.Coordinator)
-	registry.Register(tool.NewAskParentTool(a.Coordinator), tool.NewReplyChildTool(a.Coordinator))
+	registry.Register(tool.NewAskParentTool(a.Coordinator), tool.NewReplyChildTool(a.Coordinator), tool.NewSolAPITool())
 	registry.Register(subagent, tool.NewTaskToolWithSubagent(subagent), tool.NewBatchToolWithPTC(tool.BatchLimits{
 		MaxOperations:       cfg.Batch.MaxOperations,
 		MaxParallel:         cfg.Batch.MaxParallel,
@@ -760,6 +765,7 @@ func (a *App) ReloadFeatures(cfg config.Config, mcpFactory mcp.ClientFactory) er
 	engineCfg.ShouldInjectWorkingSet = jev.shouldInjectWorkingSet()
 	engineCfg.Guardrail = jev.guardrail()
 	engineCfg.AskUserAutoSelect = a.askUserAutoSelect
+	engineCfg.SolAPI = a.handleSolAPI
 	engineCfg.OnTodosUpdated = a.recordTodoSessionMemory
 	a.Engine.UpdateConfig(engineCfg)
 	startCodeGraphTool(registry)
@@ -883,6 +889,10 @@ func waitForMainAgentRetry(ctx context.Context, delay time.Duration) error {
 }
 
 func (a *App) RunPrompt(ctx context.Context, prompt, workDir string, maxTurns int) (agent.AgentResult, error) {
+	return a.runPrompt(ctx, "main", prompt, workDir, maxTurns)
+}
+
+func (a *App) runPrompt(ctx context.Context, sessionID, prompt, workDir string, maxTurns int) (agent.AgentResult, error) {
 	if a == nil {
 		return agent.AgentResult{}, fmt.Errorf("app is nil")
 	}
@@ -905,7 +915,7 @@ func (a *App) RunPrompt(ctx context.Context, prompt, workDir string, maxTurns in
 		MaxTurns:     maxTurns,
 	}
 	return a.runMainAgent(ctx, func() agent.AgentResult {
-		return a.Engine.Run(ctx, cfg)
+		return a.Engine.RunWithHistory(ctx, engine.RunRequest{AgentConfig: cfg, SessionID: sessionID}).AgentResult
 	}), nil
 }
 
@@ -937,8 +947,14 @@ func (a *App) RunPromptWithSession(ctx context.Context, sessionID, prompt, workD
 	if sessionID == "" {
 		sessionID = "main"
 	}
+	ctx, unbindTriggers, err := a.bindSessionTriggers(ctx, sessionID, workDir)
+	if err != nil {
+		return agent.AgentResult{}, err
+	}
+	defer unbindTriggers()
 	if a.Sessions == nil {
-		return a.RunPrompt(ctx, prompt, workDir, maxTurns)
+		result, err := a.runPrompt(ctx, sessionID, prompt, workDir, maxTurns)
+		return result, err
 	}
 	current, newSession, err := a.Sessions.LoadOrCreateWithStatus(ctx, session.SessionID(sessionID), workDir, a.Config.Model)
 	if err != nil {
@@ -3525,11 +3541,8 @@ func registerBuiltins(registry *tool.Registry, lspManager *lsp.Manager, sandboxP
 		tool.NewGlobTool(),
 		tool.NewGrepTool(),
 		tool.NewLsTool(),
-		tool.NewPatchTool(),
 		tool.NewTodoWriteTool(),
-		tool.NewViewImageTool(),
 		tool.NewViewTool(),
-		tool.NewWaitTool(),
 		tool.NewWebSearchTool(),
 		tool.NewWriteTool(),
 	}

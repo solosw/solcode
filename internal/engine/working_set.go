@@ -443,7 +443,7 @@ func observeWorkingSet(ws *WorkingSet, toolName string, input []byte, uctx *tool
 			observeWorkingFilePath(ws, uctx, path, false)
 		}
 		// View uses "path"; PathsForCheckpoint("Edit") reads the same key.
-	case tool.EditToolName, tool.WriteToolName, tool.MultiEditToolName, tool.MultiWriteToolName, tool.PatchToolName:
+	case tool.EditToolName, tool.WriteToolName, tool.MultiEditToolName, tool.MultiWriteToolName:
 		for _, path := range tool.PathsForCheckpoint(toolName, input) {
 			if result.IsError {
 				// Partial writes may have happened; their exact state is unknown.
@@ -489,7 +489,7 @@ func observeBatchWorkingSet(ws *WorkingSet, input []byte, uctx *tool.UseContext,
 			for _, path := range tool.PathsForCheckpoint(tool.EditToolName, op.Input) {
 				observeWorkingFilePath(ws, uctx, path, false)
 			}
-		case tool.EditToolName, tool.WriteToolName, tool.MultiEditToolName, tool.MultiWriteToolName, tool.PatchToolName:
+		case tool.EditToolName, tool.WriteToolName, tool.MultiEditToolName, tool.MultiWriteToolName:
 			for _, path := range tool.PathsForCheckpoint(op.Tool, op.Input) {
 				if status == "success" {
 					observeWorkingFilePath(ws, uctx, path, true)

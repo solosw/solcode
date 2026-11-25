@@ -126,7 +126,7 @@ func isImageToolName(name string) bool {
 	switch strings.ToLower(strings.TrimSpace(name)) {
 	case strings.ToLower(tool.ImageGenerateToolName),
 		strings.ToLower(tool.ImageEditToolName),
-		strings.ToLower(tool.ViewImageToolName):
+		strings.ToLower(tool.ViewToolName):
 		return true
 	default:
 		return false
