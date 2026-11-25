@@ -542,7 +542,7 @@ Notable session behavior:
 | Cancel | `session/cancel` cancels the in-flight prompt (`stopReason=cancelled`) |
 | Configuration | `session/new` / `session/load` advertise `configOptions`; `session/set_config_option` selects a model, agent mode, or thinking level and returns the complete updated configuration |
 | Modes | `session/set_mode` remains supported; both APIs synchronize `current_mode_update` and `config_option_update` |
-| History | `session/list` discovers saved sessions (metadata only, with optional `cwd` filtering and pagination); `session/load` replays saved user/assistant turns |
+| History | `session/list` discovers saved main conversations with history (metadata only, with optional `cwd` filtering and pagination); `session/load` replays saved user/assistant turns |
 | Core instructions | `systemPrompt` on `session/new` / `session/load` supports append and core-only override, preserving tool guidance and workspace context; see [ACP customizations](docs/acp-customizations.md) |
 | Skills | Enabled skills appear as v1 slash commands; invocation loads their instructions and bundled resource paths. Skill toggles refresh the command list |
 | Cross-session memory | `session/new` enables cross-session memory by default and schedules first-prompt recall when memory is enabled. `session/load` preserves the saved choice; `/new-session` still offers an explicit yes/no choice. |

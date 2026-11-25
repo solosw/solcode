@@ -385,7 +385,18 @@ func (s *Server) handleSessionList(ctx context.Context, msg jsonrpcMessage) erro
 			continue
 		}
 		seenDirs[dir] = true
-		entries, err := session.NewFileStore(dir).List(ctx)
+		entries, err := session.NewFileStore(dir).ListMatching(ctx, func(saved *session.Session) bool {
+			if len(saved.Subagent) != 0 || !filepath.IsAbs(saved.Metadata.WorkDir) ||
+				(params.Cwd != "" && filepath.Clean(saved.Metadata.WorkDir) != filepath.Clean(params.Cwd)) {
+				return false
+			}
+			if len(saved.Messages) != 0 {
+				return true
+			}
+			// An accepted ACP v2 prompt can be replayable before the first transcript checkpoint.
+			prompts, _ := readV2Prompts(dir, string(saved.Metadata.ID))
+			return len(prompts) != 0
+		})
 		if err != nil {
 			return s.conn.ReplyError(msg.ID, JSONRPCInternalError, err.Error())
 		}
@@ -400,9 +411,6 @@ func (s *Server) handleSessionList(ctx context.Context, msg jsonrpcMessage) erro
 	}
 	sessions := make([]listedSession, 0, len(metas))
 	for _, meta := range metas {
-		if !filepath.IsAbs(meta.WorkDir) || (params.Cwd != "" && filepath.Clean(meta.WorkDir) != filepath.Clean(params.Cwd)) {
-			continue
-		}
 		sessions = append(sessions, listedSession{meta.ID, meta.WorkDir, meta.Title, meta.UpdatedAt})
 	}
 	offset := 0

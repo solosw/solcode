@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -62,6 +63,14 @@ func TestACPSubagentReplayAfterRestart(t *testing.T) {
 	if err := store.Save(t.Context(), interrupted); err != nil {
 		t.Fatal(err)
 	}
+	// Verify that child metadata excludes the record even in a scanned directory.
+	child, err := session.NewFileStore(filepath.Join(sessionDir, "subagents")).Load(t.Context(), "interrupted")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := session.NewFileStore(sessionDir).Save(t.Context(), child); err != nil {
+		t.Fatal(err)
+	}
 	ids := map[string]string{}
 	for attempt := 0; attempt < 2; attempt++ {
 		t.Run(fmt.Sprint(attempt), func(t *testing.T) {
@@ -80,7 +89,16 @@ func TestACPSubagentReplayAfterRestart(t *testing.T) {
 				return agent.AgentResult{}, nil
 			})
 			mustCall(t, client, MethodInitialize, map[string]any{"protocolVersion": 1, "clientCapabilities": map[string]any{"subagents": map[string]any{}}})
-			mustCall(t, client, MethodSessionLoad, map[string]any{"sessionId": "loaded", "cwd": workDir})
+			var listed struct {
+				Sessions []struct {
+					ID string `json:"sessionId"`
+				} `json:"sessions"`
+			}
+			raw := mustCall(t, client, MethodSessionList, map[string]string{"cwd": workDir})
+			if err := json.Unmarshal(raw, &listed); err != nil || len(listed.Sessions) != 1 || listed.Sessions[0].ID != "loaded" {
+				t.Fatalf("session/list = %s (%v), want only the main session", raw, err)
+			}
+			mustCall(t, client, MethodSessionLoad, SessionLoadParams{SessionID: listed.Sessions[0].ID, Cwd: workDir})
 			updates := client.snapshot()
 			announced := map[string]bool{"loaded": true}
 			childText := 0

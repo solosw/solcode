@@ -157,6 +157,11 @@ func (s *FileStore) Save(ctx context.Context, session *Session) error {
 }
 
 func (s *FileStore) List(ctx context.Context) ([]Metadata, error) {
+	return s.ListMatching(ctx, nil)
+}
+
+// ListMatching filters the loaded sessions before returning their metadata.
+func (s *FileStore) ListMatching(ctx context.Context, match func(*Session) bool) ([]Metadata, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -174,7 +179,7 @@ func (s *FileStore) List(ctx context.Context) ([]Metadata, error) {
 		}
 		id := SessionID(strings.TrimSuffix(entry.Name(), ".json"))
 		session, err := s.Load(ctx, id)
-		if err != nil {
+		if err != nil || (match != nil && !match(session)) {
 			continue
 		}
 		metas = append(metas, session.Metadata)

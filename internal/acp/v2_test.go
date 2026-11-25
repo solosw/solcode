@@ -257,14 +257,9 @@ func TestACPV2CloseCancelsAndResumeEmptySession(t *testing.T) {
 	initializeV2Test(t, client, false)
 	created := createV2TestSession(t, client, cwd)
 	params := SessionCancelParams{SessionID: created.SessionID}
-	var listed struct {
-		Sessions []struct {
-			ID string `json:"sessionId"`
-		} `json:"sessions"`
-	}
-	raw := mustCall(t, client, "session/list", map[string]string{"cwd": cwd})
-	if err := json.Unmarshal(raw, &listed); err != nil || len(listed.Sessions) != 1 || listed.Sessions[0].ID != created.SessionID {
-		t.Fatalf("session/list = %s (%v)", raw, err)
+	listParams := map[string]string{"cwd": cwd}
+	if raw := mustCall(t, client, MethodSessionList, listParams); string(raw) != `{"sessions":[]}` {
+		t.Fatalf("session/list exposed an empty session: %s", raw)
 	}
 	option := created.ConfigOptions[0]
 	if raw := mustCall(t, client, MethodSessionSetConfigOption, SessionSetConfigOptionParams{
@@ -281,6 +276,16 @@ func TestACPV2CloseCancelsAndResumeEmptySession(t *testing.T) {
 	}
 	v2TestPrompt(t, client, map[string]any{"sessionId": created.SessionID, "prompt": []ContentBlock{{Type: "text", Text: "hello"}}})
 	<-started
+	// This runner never writes a transcript; the durable accepted prompt is replayable.
+	var listed struct {
+		Sessions []struct {
+			ID string `json:"sessionId"`
+		} `json:"sessions"`
+	}
+	raw := mustCall(t, client, MethodSessionList, listParams)
+	if err := json.Unmarshal(raw, &listed); err != nil || len(listed.Sessions) != 1 || listed.Sessions[0].ID != created.SessionID {
+		t.Fatalf("session/list = %s (%v), want the session with a saved prompt", raw, err)
+	}
 	mustCall(t, client, "session/close", params)
 	updates = client.v2Snapshot()
 	if last := updates[len(updates)-1].Update; last.State != "idle" || last.StopReason != StopReasonCancelled {

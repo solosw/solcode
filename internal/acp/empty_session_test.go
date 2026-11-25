@@ -52,6 +52,9 @@ func TestACPEmptySessionLoadsAfterRestart(t *testing.T) {
 				return agent.AgentResult{Output: "ok"}, nil
 			})
 			mustCall(t, second, MethodInitialize, map[string]any{"protocolVersion": 1})
+			if raw := mustCall(t, second, MethodSessionList, map[string]string{"cwd": workDir}); string(raw) != `{"sessions":[]}` {
+				t.Fatalf("session/list exposed an empty session after restart: %s", raw)
+			}
 			var loaded SessionLoadResult
 			if err := json.Unmarshal(mustCall(t, second, MethodSessionLoad, SessionLoadParams{SessionID: created.SessionID, Cwd: workDir}), &loaded); err != nil {
 				t.Fatal(err)

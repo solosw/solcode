@@ -134,7 +134,7 @@ func (s *Server) prepareV2Prompt(ctx context.Context, msg jsonrpcMessage) (func(
 
 func (sess *acpSession) saveV2PromptsLocked(records []v2PromptRecord) error {
 	if sess.application.Sessions != nil {
-		if err := config.SaveLocalOverrides(sess.v2PromptPath(), map[string]any{"prompts": records}); err != nil {
+		if err := config.SaveLocalOverrides(v2PromptPath(sess.cfg.Session.Dir, sess.id), map[string]any{"prompts": records}); err != nil {
 			return err
 		}
 	}
@@ -159,27 +159,35 @@ func (sess *acpSession) linkV2Prompt(recordIndex, transcriptIndex int, userMessa
 	return nil
 }
 
-func (sess *acpSession) v2PromptPath() string {
-	hash := sha256.Sum256([]byte(sess.id))
-	return filepath.Join(sess.cfg.Session.Dir, "acp-prompts", fmt.Sprintf("%x.json", hash))
+func v2PromptPath(dir, id string) string {
+	hash := sha256.Sum256([]byte(id))
+	return filepath.Join(dir, "acp-prompts", fmt.Sprintf("%x.json", hash))
 }
 
 func (sess *acpSession) loadV2Prompts() error {
-	body, err := os.ReadFile(sess.v2PromptPath())
+	prompts, err := readV2Prompts(sess.cfg.Session.Dir, sess.id)
+	if err != nil {
+		return err
+	}
+	sess.v2Prompts = prompts
+	return nil
+}
+
+func readV2Prompts(dir, id string) ([]v2PromptRecord, error) {
+	body, err := os.ReadFile(v2PromptPath(dir, id))
 	if os.IsNotExist(err) {
-		return nil
+		return nil, nil
 	}
 	if err != nil {
-		return fmt.Errorf("read ACP prompt history: %w", err)
+		return nil, fmt.Errorf("read ACP prompt history: %w", err)
 	}
 	var data struct {
 		Prompts []v2PromptRecord `json:"prompts"`
 	}
 	if err := json.Unmarshal(body, &data); err != nil {
-		return fmt.Errorf("decode ACP prompt history: %w", err)
+		return nil, fmt.Errorf("decode ACP prompt history: %w", err)
 	}
-	sess.v2Prompts = data.Prompts
-	return nil
+	return data.Prompts, nil
 }
 
 func v2Fingerprint(msg sdk.MessageParam) string {
