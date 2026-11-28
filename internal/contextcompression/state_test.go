@@ -82,7 +82,6 @@ func TestRejectsInvalidRangesWithoutMutation(t *testing.T) {
 	for _, req := range []Request{
 		{Start: "m4", End: "m4", Summary: "split tool call"},
 		{Start: "m5", End: "m6", Summary: "split tool result"},
-		{Start: "m1", End: "m7", Summary: "current request removed"},
 		{Start: "m2", End: "m5", Summary: "stale", Revision: &rev},
 		{Start: "missing", End: "m5", Summary: "unknown"},
 		{Start: "m2", End: "m5"},
@@ -98,6 +97,35 @@ func TestRejectsInvalidRangesWithoutMutation(t *testing.T) {
 		}
 	}
 }
+func TestLatestUserRequestCanBeCompressed(t *testing.T) {
+	messages := []sdk.MessageParam{
+		sdk.NewAssistantMessage(sdk.NewTextBlock(strings.Repeat("completed earlier work ", 100))),
+		sdk.NewUserMessage(sdk.NewTextBlock(strings.Repeat("current request detail ", 100))),
+		sdk.NewAssistantMessage(sdk.NewToolUseBlock("compress", map[string]any{}, "compress")),
+	}
+	s := New()
+	if err := s.Sync(messages); err != nil {
+		t.Fatal(err)
+	}
+	o := s.Overview(100_000, 0)
+	found := false
+	for _, r := range o.CompressibleRanges {
+		if r.Start == "m1" && r.End == "m2" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("latest user request not advertised as compressible: %+v", o)
+	}
+	if _, err := s.Compress(Request{Start: "m1", End: "m2", Summary: "Completed work and current request requirements."}); err != nil {
+		t.Fatal(err)
+	}
+	folded, err := s.Messages()
+	if err != nil || len(folded) != 2 {
+		t.Fatalf("latest request was not folded: %d messages, %v", len(folded), err)
+	}
+}
+
 func TestForkCarriesOnlyReachableEvidence(t *testing.T) {
 	s := New()
 	_ = s.Sync(history())

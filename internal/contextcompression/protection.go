@@ -6,16 +6,12 @@ import (
 	"strings"
 )
 
-// Keep the latest runtime overlays verbatim. Otherwise folding an old mode or
-// role overlay could hide the still-current policy while the host deduplicates it.
+// Keep the latest assistant action and runtime overlays verbatim. User requests
+// are compressible once they leave the active assistant/tool exchange.
 func protectedIndexes(messages []sdk.MessageParam) map[int]bool {
 	keep := map[int]bool{}
-	latestUser := -1
 	overlays := map[string]int{}
 	for i, m := range messages {
-		if protected(m) {
-			latestUser = i
-		}
 		for _, b := range m.Content {
 			if b.OfText == nil {
 				continue
@@ -28,16 +24,11 @@ func protectedIndexes(messages []sdk.MessageParam) map[int]bool {
 			}
 		}
 	}
-	if latestUser >= 0 {
-		keep[latestUser] = true
-	}
 	for _, i := range overlays {
 		keep[i] = true
 	}
-	for i := len(messages) - 2; i < len(messages); i++ {
-		if i >= 0 {
-			keep[i] = true
-		}
+	if len(messages) > 0 {
+		keep[len(messages)-1] = true
 	}
 	return keep
 }

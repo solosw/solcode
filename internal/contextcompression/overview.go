@@ -1,7 +1,7 @@
 package contextcompression
 
 // ContextRange endpoints are inclusive visible references. Compressible ranges
-// contain whole tool exchanges and never intersect a protected message.
+// contain whole tool exchanges and never intersect a protected runtime message.
 type ContextRange struct {
 	Start            string `json:"start"`
 	End              string `json:"end"`

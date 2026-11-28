@@ -16,7 +16,7 @@ func TestOverviewRangesCanBeCompressedDirectly(t *testing.T) {
 		t.Fatalf("%+v", overview)
 	}
 	r := overview.CompressibleRanges[0]
-	if r.Start != "m1" || r.End != "m6" {
+	if r.Start != "m1" || r.End != "m7" {
 		t.Fatalf("%+v", r)
 	}
 	if _, err := s.Compress(Request{Start: r.Start, End: r.End, Summary: "Completed old investigation.", Revision: &overview.Revision}); err != nil {

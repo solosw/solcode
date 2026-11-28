@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
-	contextmessage "github.com/solosw/solcode/internal/message"
 	"github.com/solosw/solcode/internal/tokenest"
 )
 
@@ -165,20 +164,6 @@ func (s *State) Sync(messages []sdk.MessageParam) error {
 func Tokens(messages []sdk.MessageParam) int {
 	return tokenest.Messages(messages)
 }
-func protected(m sdk.MessageParam) bool {
-	if string(m.Role) != "user" || contextmessage.IsDynamicContext(m) || contextmessage.IsBackgroundToolNotification(m) {
-		return false
-	}
-	for _, b := range m.Content {
-		if b.OfToolResult != nil {
-			return false
-		}
-		if b.OfText != nil && (strings.HasPrefix(b.OfText.Text, Header) || strings.HasPrefix(b.OfText.Text, "Compacted session summary:") || strings.HasPrefix(b.OfText.Text, "Compacted project knowledge:")) {
-			return false
-		}
-	}
-	return true
-}
 func boundaries(messages []sdk.MessageParam) []bool {
 	safe := make([]bool, len(messages)+1)
 	safe[0] = true
@@ -241,7 +226,7 @@ func (s *State) Compress(req Request) (string, error) {
 	keep := protectedIndexes(messages)
 	for i := a; i < b; i++ {
 		if keep[i] {
-			return "", fmt.Errorf("range covers a protected user request, current runtime overlay, handoff or recent message")
+			return "", fmt.Errorf("range covers the active assistant/tool exchange, current runtime overlay, or handoff")
 		}
 	}
 	for _, m := range messages[a:b] {
